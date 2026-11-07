@@ -203,7 +203,11 @@ func soraniRecordList(payload any) ([]any, bool) {
 }
 
 func (d *Downloader) soraniRequest(ctx context.Context, route string, query url.Values, limit int64) (any, error) {
-	return d.soraniClient().get(ctx, route, query, limit)
+	client := d.soraniClient()
+	if soraniPlayRoute(route) {
+		return client.soraniPlay(ctx, route, query, limit)
+	}
+	return client.get(ctx, route, query, limit)
 }
 
 // fetchSoraniCategories 返回固定三分类，无需远端探测。
