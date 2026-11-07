@@ -7,12 +7,13 @@ import shutil
 import threading
 import time
 
-from PyQt5.QtCore import QEvent, QRect, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPen,
-                         QTextLayout, QTextOption)
+from PyQt5.QtCore import (QEvent, QPointF, QRect, QRectF, QSize, Qt, QTimer,
+                          pyqtSignal)
+from PyQt5.QtGui import (QColor, QFont, QFontMetrics, QPainter, QPainterPath,
+                         QPen)
 from PyQt5.QtWidgets import (QAbstractItemView, QCheckBox, QDialog, QFileDialog, QHBoxLayout,
                              QLabel, QLineEdit, QListWidget, QListWidgetItem,
-                             QMessageBox, QProgressBar, QPushButton, QSplitter,
+                             QMessageBox, QProgressBar, QPushButton, QScrollArea, QSplitter,
                              QStyle, QStyleOptionViewItem, QStyledItemDelegate, QTabWidget, QVBoxLayout, QWidget, QComboBox)
 
 from . import decrypt, library, media, tools
@@ -38,26 +39,60 @@ def state_colour(state):
 # ------------------------------------------------------------ 下载队列卡片
 # 一集一张卡片，宽度按列固定、中间留给进度条；这些常量 paint 和点击命中
 # (_row_buttons) 共用，改一处两边一起变。
-ROW_HEIGHT = 46
-CARD_RADIUS = 8
-COL_EPISODE = 84
-COL_STATE = 76
-COL_QUALITY = 122
-COL_SPEED = 86
-COL_SIZE = 140
-COL_ETA = 84
-PERCENT_WIDTH = 48
-BTN_WIDTH = 56
-BTN_HEIGHT = 26
-BTN_GAP = 6
+ROW_HEIGHT = 48
+CARD_RADIUS = 10
+COL_STATE = 72          # 状态胶囊宽
+META_WIDTH = 172        # 右侧两行元信息（速度 / 大小·剩余）
+PERCENT_WIDTH = 46      # 进度条右端百分数
+NAME_COLUMN = 210       # 名称区固定列宽（剧名+集数+站源），胶囊/进度条各行对齐
+ICON_SIZE = 26          # 行尾图标按钮（正方形）
+ICON_GAP = 6
+ICON_EDGE = 12          # 图标区距卡片右缘
 
 ROW_ACTIONS = {
     "downloading": ("pause", "remove"),
     "queued": ("pause", "remove"),
     "paused": ("resume", "remove"),
-    "completed": ("play", "remove"),
+    "completed": ("play", "folder", "remove"),
+    "failed": ("retry", "remove"),
 }
-ACTION_TEXT = {"pause": "暂停", "resume": "继续", "play": "▶ 播放", "remove": "删除"}
+ACTION_TEXT = {"pause": "暂停", "resume": "继续", "play": "播放",
+               "retry": "重试", "folder": "打开目录", "remove": "删除"}
+# 失败行的「重试」常驻提亮（D1d）；其余图标默认淡化、悬停行才提亮。
+ALWAYS_ON_ICONS = {"failed": ("retry",)}
+
+# 站源 slug → 展示名；查不到就原样显示 slug（只写观察到的，别杜撰）。
+SOURCE_LABELS = {"hongguo": "红果"}
+
+
+def _source_label(source):
+    slug = str(source or "").strip()
+    if not slug:
+        return ""
+    return SOURCE_LABELS.get(slug, slug)
+
+
+def _episode_sort_key(name):
+    """归档行按集数排：第N集 / E01 / 结尾数字；解不出的排最后。"""
+    m = re.search(r"第\s*([0-9]{1,4})\s*集", name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"[Ee]([0-9]{1,4})", name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"([0-9]{1,4})\s*$", name)
+    if m:
+        return int(m.group(1))
+    return 10 ** 9
+
+
+def _archive_drama_key(filename):
+    """合并成品文件名 → 剧名分组 key：剥掉集数范围/SxxExx/结尾数字，再去季号。"""
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    stem = re.sub(r"\s*全\s*[0-9]+\s*-\s*[0-9]+\s*集.*$", "", stem)
+    stem = re.sub(r"\s*[Ss][0-9]{1,2}[Ee][0-9]{1,4}.*$", "", stem)
+    stem = re.sub(r"\s+[0-9]{1,4}$", "", stem)
+    return strip_season(stem.strip()) or stem.strip() or "合集"
 
 # 列表项数据（只在本模块用，和 widgets.py 的角色不冲突）
 ROLE_JOB_STATE = Qt.UserRole + 1
@@ -67,6 +102,7 @@ ROLE_JOB_BYTES = Qt.UserRole + 4
 ROLE_JOB_ID = Qt.UserRole + 5
 ROLE_JOB_QUALITY = Qt.UserRole + 6
 ROLE_JOB_ETA = Qt.UserRole + 7
+ROLE_JOB_DRAMA = Qt.UserRole + 8   # (剧名, 站源展示名)，行首名称区用
 
 
 def _duration_text(seconds):
@@ -115,19 +151,95 @@ def job_quality_text(job):
     return "%dP · %s" % (quality, rate) if rate else "%dP" % quality
 
 
+def _icon_zone_width(state):
+    """行尾图标区（含右边距）占掉的总宽；paint 与布局共用。"""
+    keys = ROW_ACTIONS.get(state, ())
+    if not keys:
+        return 0
+    return len(keys) * ICON_SIZE + (len(keys) - 1) * ICON_GAP + ICON_EDGE
+
+
 def _row_buttons(card, state):
-    """这一行的按钮 [(key, rect)]，从右往左排。
+    """这一行的图标按钮 [(key, rect)]，从右往左排。
 
     画和点击判定共用同一份几何：写两遍迟早会错位。
     """
     keys = ROW_ACTIONS.get(state, ("remove",))
     items = []
-    right = card.right() - 10
+    right = card.right() - ICON_EDGE
     for key in reversed(keys):
-        items.append((key, QRect(right - BTN_WIDTH, card.center().y() - BTN_HEIGHT // 2,
-                                 BTN_WIDTH, BTN_HEIGHT)))
-        right -= BTN_WIDTH + BTN_GAP
+        items.append((key, QRect(right - ICON_SIZE, card.center().y() - ICON_SIZE // 2,
+                                 ICON_SIZE, ICON_SIZE)))
+        right -= ICON_SIZE + ICON_GAP
     return items
+
+
+def _draw_action_icon(painter, rect, key, colour):
+    """在 26×26 按钮中心画一个约 14px 的线性图标。
+
+    全部自绘（不引图标库）：形状都是两三笔线条/实心块，缩放不糊，也不破坏
+    「不新增依赖」的约束。
+    """
+    cx = rect.center().x()
+    cy = rect.center().y()
+    painter.save()
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    if key in ("play", "resume"):
+        path = QPainterPath()
+        path.moveTo(cx - 4, cy - 6)
+        path.lineTo(cx - 4, cy + 6)
+        path.lineTo(cx + 6, cy)
+        path.closeSubpath()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(colour)
+        painter.drawPath(path)
+    elif key == "pause":
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(colour)
+        painter.drawRoundedRect(QRectF(cx - 5, cy - 6, 3.2, 12), 1.6, 1.6)
+        painter.drawRoundedRect(QRectF(cx + 1.8, cy - 6, 3.2, 12), 1.6, 1.6)
+    elif key == "retry":
+        pen = QPen(colour, 1.7)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawArc(QRectF(cx - 5.5, cy - 5.5, 11, 11), 70 * 16, 260 * 16)
+        head = QPainterPath()
+        head.moveTo(cx + 0.5, cy - 7.5)
+        head.lineTo(cx + 6.5, cy - 6.0)
+        head.lineTo(cx + 2.5, cy - 1.5)
+        head.closeSubpath()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(colour)
+        painter.drawPath(head)
+    elif key == "folder":
+        pen = QPen(colour, 1.6)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        path = QPainterPath()
+        path.moveTo(cx - 7, cy + 5)
+        path.lineTo(cx - 7, cy - 5)
+        path.lineTo(cx - 2.5, cy - 5)
+        path.lineTo(cx - 1, cy - 3)
+        path.lineTo(cx + 7, cy - 3)
+        path.lineTo(cx + 7, cy + 5)
+        path.closeSubpath()
+        painter.drawPath(path)
+    elif key == "remove":
+        pen = QPen(colour, 1.6)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.NoBrush)
+        painter.drawLine(QPointF(cx - 6, cy - 5), QPointF(cx + 6, cy - 5))
+        painter.drawLine(QPointF(cx - 1.5, cy - 7), QPointF(cx + 1.5, cy - 7))
+        painter.drawLine(QPointF(cx - 4.5, cy - 5), QPointF(cx - 3.6, cy + 6))
+        painter.drawLine(QPointF(cx + 4.5, cy - 5), QPointF(cx + 3.6, cy + 6))
+        painter.drawLine(QPointF(cx - 3.6, cy + 6), QPointF(cx + 3.6, cy + 6))
+        painter.drawLine(QPointF(cx - 1.5, cy - 2), QPointF(cx - 1.4, cy + 3))
+        painter.drawLine(QPointF(cx + 1.5, cy - 2), QPointF(cx + 1.4, cy + 3))
+    painter.restore()
 
 # Merging is the whole point of this panel, so the season-merge button is the
 # only loud, colour-filled control in the window and it lives above the table.
@@ -347,96 +459,138 @@ class _JobDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         if selected:
-            fill, border = QColor(DESIGN["accent_soft"]), QColor(DESIGN["accent"])
+            fill, border = QColor(DESIGN["guo_accent_soft"]), QColor(DESIGN["guo_accent"])
         elif hovered:
-            fill, border = QColor(DESIGN["chip_hover"]), QColor(DESIGN["border"])
+            fill, border = QColor(DESIGN["guo_chip_hover"]), QColor(DESIGN["guo_border"])
         else:
-            fill, border = QColor(DESIGN["chip"]), QColor(DESIGN["border"])
+            fill, border = QColor(DESIGN["guo_chip_bg"]), QColor(DESIGN["guo_border"])
         painter.setPen(QPen(border, 1))
         painter.setBrush(fill)
         painter.drawRoundedRect(card.adjusted(0, 0, -1, -1), CARD_RADIUS, CARD_RADIUS)
 
         colour = QColor(state_colour(state))
-        middle = card.center().y()
-        left = card.left() + 14
-
-        # 集数
-        font = QFont(option.font)
-        font.setPixelSize(13)
-        font.setBold(True)
-        painter.setFont(font)
-        painter.setPen(QColor(DESIGN["text"]))
-        painter.drawText(QRect(left, card.top(), COL_EPISODE, card.height()),
-                         Qt.AlignLeft | Qt.AlignVCenter, str(index.data(Qt.DisplayRole) or ""))
-        left += COL_EPISODE
-
-        # 状态胶囊
-        pill = QRect(left, middle - 13, COL_STATE, 26)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(_tint(colour))
-        painter.drawRoundedRect(pill, 13, 13)
-        painter.setPen(colour)
-        font.setBold(False)
-        painter.setFont(font)
-        painter.drawText(pill, Qt.AlignCenter, STATE_TEXT.get(state, state))
-        left += COL_STATE + 14
-
-        # 画质：档位一开始就有，码率下载完才有。列宽固定，没数据也占位，
-        # 免得进度条在码率回填的瞬间左右跳一下。
-        quality = index.data(ROLE_JOB_QUALITY) or ""
-        if quality:
-            painter.setPen(QColor(DESIGN["muted"]))
-            painter.drawText(QRect(left, card.top(), COL_QUALITY, card.height()),
-                             Qt.AlignLeft | Qt.AlignVCenter, quality)
-        left += COL_QUALITY
-
-        # 右边这几块宽度固定，从右往左排，中间剩下的都给进度条
         buttons = _row_buttons(card, state)
-        right_edge = min((rect.left() for _key, rect in buttons), default=card.right()) - 12
-        size_rect = QRect(right_edge - COL_SIZE, card.top(), COL_SIZE, card.height())
-        eta_rect = QRect(size_rect.left() - COL_ETA, card.top(), COL_ETA, card.height())
-        speed_rect = QRect(eta_rect.left() - COL_SPEED, card.top(), COL_SPEED, card.height())
-        bar_right = speed_rect.left() - 14
+        icons_w = _icon_zone_width(state)
+        meta_right = card.right() - icons_w - 2
+        meta_rect = QRect(meta_right - META_WIDTH, card.top(), META_WIDTH, card.height())
 
+        # 名称区：剧名(粗) · 第N集(常规) · 站源(淡化)。固定列宽，状态胶囊对齐。
+        left = card.left() + 14
+        label = str(index.data(Qt.DisplayRole) or "")
+        drama_title, source = index.data(ROLE_JOB_DRAMA) or ("", "")
+        font_bold = QFont(option.font)
+        font_bold.setPixelSize(13)
+        font_bold.setBold(True)
+        font_plain = QFont(option.font)
+        font_plain.setPixelSize(12)
+        font_small = QFont(option.font)
+        font_small.setPixelSize(11)
+        fm_bold = QFontMetrics(font_bold)
+        fm_plain = QFontMetrics(font_plain)
+        fm_small = QFontMetrics(font_small)
+        suffix = " · " + label
+        tail = (" · " + source) if source else ""
+        suffix_w = fm_plain.width(suffix)
+        tail_w = fm_small.width(tail) if tail else 0
+        name_area = max(40, NAME_COLUMN - suffix_w - tail_w)
+        shown_drama = fm_bold.elidedText(drama_title or label, Qt.ElideMiddle, name_area)
+        painter.setFont(font_bold)
+        painter.setPen(QColor(DESIGN["guo_text"]))
+        painter.drawText(QRect(left, card.top(), name_area, card.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, shown_drama)
+        cursor = left + min(fm_bold.width(shown_drama), name_area)
+        painter.setFont(font_plain)
+        painter.setPen(QColor(DESIGN["muted"]))
+        painter.drawText(QRect(cursor, card.top(), suffix_w + 4, card.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, suffix)
+        cursor += suffix_w
+        if tail:
+            painter.setFont(font_small)
+            painter.setPen(QColor(DESIGN["muted2"]))
+            painter.drawText(QRect(cursor, card.top(), tail_w + 4, card.height()),
+                             Qt.AlignLeft | Qt.AlignVCenter, tail)
+            cursor += tail_w
+
+        # 状态胶囊：固定列，各行对齐；进度条从胶囊后开始。
+        middle = card.center().y()
+        pill = QRect(left + NAME_COLUMN + 10, middle - 11, COL_STATE, 22)
+        if pill.right() + 60 > meta_rect.left():
+            # 极窄窗口：胶囊退回文字后，保进度条可用宽度
+            pill = QRect(cursor + 8, middle - 11, COL_STATE, 22)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(_tint(colour, 56))
+        painter.drawRoundedRect(pill, 11, 11)
+        painter.setPen(colour)
+        font_pill = QFont(option.font)
+        font_pill.setPixelSize(12)
+        painter.setFont(font_pill)
+        painter.drawText(pill, Qt.AlignCenter, STATE_TEXT.get(state, state))
+
+        # 右侧两行元信息：线1 速度（下载中）或画质；线2 大小 · 剩余
+        speed = float(index.data(ROLE_JOB_SPEED) or 0.0)
+        eta = int(index.data(ROLE_JOB_ETA) or 0)
+        done, total = index.data(ROLE_JOB_BYTES) or (0, 0)
+        quality = index.data(ROLE_JOB_QUALITY) or ""
+        line1 = line2 = ""
+        if state == "downloading":
+            line1 = _speed_text(speed) if speed > 0 else ""
+        elif state in ("completed", "failed", "paused", "queued"):
+            line1 = quality
+        if total:
+            line2 = "%s/%s" % (human_size(done).replace(" ", ""),
+                               human_size(total).replace(" ", ""))
+            if state == "downloading" and eta > 0:
+                line2 += " · " + _eta_text(eta)
+        painter.setPen(QColor(DESIGN["guo_text"]))
+        font_meta1 = QFont(option.font)
+        font_meta1.setPixelSize(12)
+        painter.setFont(font_meta1)
+        painter.drawText(QRect(meta_rect.left(), middle - 22, meta_rect.width(), 20),
+                         Qt.AlignRight | Qt.AlignVCenter, line1)
+        font_meta2 = QFont(option.font)
+        font_meta2.setPixelSize(11)
+        painter.setFont(font_meta2)
+        painter.setPen(QColor(DESIGN["muted"]))
+        painter.drawText(QRect(meta_rect.left(), middle + 1, meta_rect.width(), 19),
+                         Qt.AlignRight | Qt.AlignVCenter, line2)
+
+        # 中间剩下的都给细进度条 + 百分数
+        bar_left = pill.right() + 14
+        bar_area_right = meta_rect.left() - 10
         percent = index.data(ROLE_JOB_PROGRESS)
         percent = 0.0 if percent is None else max(0.0, min(1.0, float(percent)))
-        bar_width = max(0, bar_right - left - PERCENT_WIDTH)
+        bar_width = bar_area_right - bar_left - PERCENT_WIDTH
         if bar_width >= 40:
-            track = QRect(left, middle - 4, bar_width, 8)
+            track = QRect(bar_left, middle - 2, bar_width, 5)
             painter.setPen(Qt.NoPen)
-            painter.setBrush(QColor(DESIGN["border"]))
-            painter.drawRoundedRect(track, 4, 4)
+            painter.setBrush(QColor(DESIGN["guo_border"]))
+            painter.drawRoundedRect(track, 2.5, 2.5)
             filled = int(bar_width * percent)
             if filled > 0:
                 painter.setBrush(colour)
-                painter.drawRoundedRect(QRect(track.left(), track.top(), max(4, filled), 8), 4, 4)
+                painter.drawRoundedRect(QRect(track.left(), track.top(), max(3, filled), 5),
+                                        2.5, 2.5)
+            font_pct = QFont(option.font)
+            font_pct.setPixelSize(11)
+            painter.setFont(font_pct)
             painter.setPen(QColor(DESIGN["muted"]))
-            painter.drawText(QRect(track.right() + 10, card.top(), PERCENT_WIDTH - 10, card.height()),
+            painter.drawText(QRect(track.right() + 8, card.top(), PERCENT_WIDTH - 6, card.height()),
                              Qt.AlignLeft | Qt.AlignVCenter, "%.0f%%" % (percent * 100))
 
-        painter.setPen(QColor(DESIGN["muted"]))
-        speed = float(index.data(ROLE_JOB_SPEED) or 0.0)
-        painter.drawText(speed_rect, Qt.AlignRight | Qt.AlignVCenter,
-                         _speed_text(speed) if state == "downloading" and speed > 0 else "-")
-        eta = int(index.data(ROLE_JOB_ETA) or 0)
-        if state == "downloading" and eta > 0:
-            painter.drawText(eta_rect, Qt.AlignRight | Qt.AlignVCenter, _eta_text(eta))
-        done, total = index.data(ROLE_JOB_BYTES) or (0, 0)
-        painter.drawText(size_rect, Qt.AlignRight | Qt.AlignVCenter,
-                         "%s / %s" % (human_size(done), human_size(total)))
-
+        # 行尾图标按钮：默认淡化，悬停行提亮，悬停单按钮加圆底；失败行重试常驻。
         for key, rect in buttons:
-            danger = key == "remove"
-            base = QColor(DESIGN["danger"] if danger else DESIGN["accent"])
+            base = QColor(DESIGN["danger"] if key == "remove" else DESIGN["guo_accent"])
+            force = key in ALWAYS_ON_ICONS.get(state, ())
             if hover_button == key:
-                painter.setPen(QPen(base, 1))
-                painter.setBrush(_tint(base, 40))
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(_tint(base, 60))
+                painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), 8, 8)
+                ink = base
+            elif hovered or force:
+                ink = QColor(DESIGN["danger"] if key == "remove" else DESIGN["guo_text"])
             else:
-                painter.setPen(QPen(QColor(DESIGN["border"]), 1))
-                painter.setBrush(Qt.NoBrush)
-            painter.drawRoundedRect(rect.adjusted(0, 0, -1, -1), 6, 6)
-            painter.setPen(base if (danger or hover_button == key) else QColor(DESIGN["text"]))
-            painter.drawText(rect, Qt.AlignCenter, ACTION_TEXT[key])
+                ink = QColor(DESIGN["muted2"])
+            _draw_action_icon(painter, rect, key, ink)
 
         painter.restore()
 
@@ -450,23 +604,324 @@ class _JobDelegate(QStyledItemDelegate):
         return False
 
 
-class _MergedRow(QWidget):
-    """One merged-output row: clicks play the file, the delete button is real.
+def _make_chip(text, strong=False):
+    """小胶囊标签（集数/占用/整集合并）。颜色只从 DESIGN 取。"""
+    label = QLabel(text)
+    label.setProperty("guoRole", "chip")
+    label.setStyleSheet(
+        "QLabel{background:%s;border:1px solid %s;border-radius:6px;"
+        "padding:1px 7px;color:%s;font-size:11px;}"
+        % (DESIGN["guo_chip_bg"], DESIGN["guo_border"],
+           DESIGN["guo_accent"] if strong else DESIGN["guo_muted"]))
+    return label
 
-    The row turns every left click (label included - it is mouse-transparent)
-    into `clicked`; the delete button keeps its own events.
+
+class _ArchiveFileRow(QWidget):
+    """归档组内的一行成品：名称 + 徽标 + 大小 + 播放/删除。
+
+    整行单击即播放（与旧「合并成品」行为一致，防误点靠面板级去抖），
+    按钮吃掉自己的事件，不会连带触发行点击。
     """
 
-    clicked = pyqtSignal()
+    playRequested = pyqtSignal(str)
+    deleteRequested = pyqtSignal(str)
+
+    def __init__(self, path, name, size_text, badge="", mark="", parent=None):
+        super().__init__(parent)
+        self._path = path
+        self._hover = False
+        self.setFixedHeight(30)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(path)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(30, 0, 8, 0)
+        lay.setSpacing(8)
+        title = ElidedLabel(name, self)
+        font = QFont(title.font())
+        font.setPixelSize(12)
+        title.setFont(font)
+        lay.addWidget(title, 1)
+        if badge:
+            lay.addWidget(_make_chip(badge, strong=True))
+        if mark:
+            mark_label = QLabel(mark)
+            mark_label.setStyleSheet("color:%s;font-size:11px;" % DESIGN["muted2"])
+            lay.addWidget(mark_label)
+        size_label = QLabel(size_text)
+        size_label.setFixedWidth(74)
+        size_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        size_label.setStyleSheet("color:%s;font-size:11px;" % DESIGN["muted"])
+        lay.addWidget(size_label)
+        play_btn = QPushButton("播放")
+        play_btn.setProperty("guoRole", "ctrlBtn")
+        play_btn.setFixedSize(48, 22)
+        play_btn.clicked.connect(
+            lambda checked=False, target=path: self.playRequested.emit(target))
+        lay.addWidget(play_btn)
+        del_btn = QPushButton("删除")
+        del_btn.setProperty("guoRole", "ctrlBtn")
+        del_btn.setFixedSize(48, 22)
+        del_btn.setToolTip("删除该文件（加密缓存保留，可重新解密）")
+        del_btn.clicked.connect(
+            lambda checked=False, target=path: self.deleteRequested.emit(target))
+        lay.addWidget(del_btn)
+
+    def enterEvent(self, event):
+        if not self._hover:
+            self._hover = True
+            self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hover:
+            self._hover = False
+            self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        if self._hover:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(DESIGN["guo_chip_hover"]))
+            painter.drawRoundedRect(self.rect().adjusted(2, 0, -2, 0), 6, 6)
+            painter.end()
+        super().paintEvent(event)
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit()
+            self.playRequested.emit(self._path)
         super().mousePressEvent(event)
 
-    def mouseDoubleClickEvent(self, event):
-        self.clicked.emit()
-        super().mouseDoubleClickEvent(event)
+
+class _ArchiveGroupHeader(QWidget):
+    """组头：折叠箭头 + 剧名 + 集数/占用 chip + 打开目录。点任意空白处折叠。"""
+
+    toggled = pyqtSignal(bool)         # 参数是新状态：是否折叠
+    openFolder = pyqtSignal(str)
+
+    def __init__(self, title, folder, chips, collapsed=False, parent=None):
+        super().__init__(parent)
+        self._collapsed = collapsed
+        self.setFixedHeight(36)
+        self.setCursor(Qt.PointingHandCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(10, 0, 8, 0)
+        lay.setSpacing(8)
+        self._chevron = QLabel("▸" if collapsed else "▾")
+        self._chevron.setFixedWidth(16)
+        self._chevron.setAlignment(Qt.AlignCenter)
+        self._chevron.setStyleSheet("color:%s;" % DESIGN["guo_muted"])
+        lay.addWidget(self._chevron)
+        name = ElidedLabel(title, self)
+        font = QFont(name.font())
+        font.setPixelSize(13)
+        font.setBold(True)
+        name.setFont(font)
+        name.setStyleSheet("color:%s;" % DESIGN["guo_text"])
+        self._title = name
+        lay.addWidget(name, 1)
+        for text, strong in chips:
+            lay.addWidget(_make_chip(text, strong=strong))
+        btn = QPushButton("打开")
+        btn.setProperty("guoRole", "ctrlBtn")
+        btn.setFixedSize(52, 24)
+        btn.clicked.connect(lambda checked=False: self.openFolder.emit(folder))
+        lay.addWidget(btn)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._collapsed = not self._collapsed
+            self._chevron.setText("▸" if self._collapsed else "▾")
+            self.toggled.emit(self._collapsed)
+        super().mousePressEvent(event)
+
+
+class _ArchiveGroup(QWidget):
+    """一个剧的归档组：组头 + 可折叠的文件行列表。"""
+
+    playRequested = pyqtSignal(str)
+    deleteRequested = pyqtSignal(str)
+    openFolderRequested = pyqtSignal(str)
+
+    def __init__(self, title, folder, chips, entries, collapsed=False, parent=None):
+        super().__init__(parent)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(1)
+        self.header = _ArchiveGroupHeader(title, folder, chips, collapsed, self)
+        self.header.openFolder.connect(self.openFolderRequested.emit)
+        lay.addWidget(self.header)
+        self.body = QWidget(self)
+        body_lay = QVBoxLayout(self.body)
+        body_lay.setContentsMargins(0, 0, 0, 4)
+        body_lay.setSpacing(0)
+        for path, name, size_text, badge, mark in entries:
+            row = _ArchiveFileRow(path, name, size_text, badge, mark, self.body)
+            row.playRequested.connect(self.playRequested.emit)
+            row.deleteRequested.connect(self.deleteRequested.emit)
+            body_lay.addWidget(row)
+        self.body.setVisible(not collapsed)
+        self.header.toggled.connect(self.body.setVisible)
+        lay.addWidget(self.body)
+
+
+class _ArchiveView(QWidget):
+    """已完成归档（D1a）：分集成品按剧名分组，组头带集数/占用，可折叠。
+
+    取代旧的「合并成品」平铺列表：guoapp 的归档形态是「下载目录/剧名/第N集.mp4」，
+    合并产物只是同剧名下的额外一条，所以按剧归组，而不是按目录。
+    """
+
+    playRequested = pyqtSignal(str)
+    deleteRequested = pyqtSignal(str)
+    openFolderRequested = pyqtSignal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.entry_count = 0
+        self.collapsed_titles = set()
+        self.scroll = QScrollArea(self)
+        self.scroll.setProperty("guoRole", "bare")
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._host = QWidget()
+        # 归档页在 QTabWidget 的裸 QWidget 页里，全局 QSS 不铺背景；
+        # 自带一层 surface 底色，组头/行文字才有对比度。
+        self._host.setObjectName("archiveHost")
+        self.scroll.viewport().setObjectName("archiveViewport")
+        self.scroll.setStyleSheet(
+            "QScrollArea{border:none;background:%s;}"
+            "QWidget#archiveViewport,QWidget#archiveHost{background:%s;}"
+            % (DESIGN["surface"], DESIGN["surface"]))
+        self._lay = QVBoxLayout(self._host)
+        self._lay.setContentsMargins(2, 4, 8, 6)
+        self._lay.setSpacing(3)
+        self._placeholder = QLabel("还没有成品：解密后的分集与合并成品会按剧名归档到这里。")
+        self._placeholder.setStyleSheet("color:%s;padding:12px;" % DESIGN["muted"])
+        self._lay.addWidget(self._placeholder)
+        self._lay.addStretch(1)
+        self.scroll.setWidget(self._host)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(self.scroll)
+
+    def _clear(self):
+        while self._lay.count():
+            item = self._lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None and widget is not self._placeholder:
+                widget.deleteLater()
+        if self._placeholder.parentWidget() is not None:
+            self._placeholder.setParent(None)
+
+    def set_groups(self, groups):
+        """groups: [(title, folder, [(text, strong)], entries)]；
+        entries: [(path, name, size_text, badge, mark)]，组内已排好序。"""
+        self._clear()
+        self.entry_count = sum(len(entries) for _t, _f, _c, entries in groups)
+        if not groups:
+            self._lay.addWidget(self._placeholder)
+            self._placeholder.show()
+        for title, folder, chips, entries in groups:
+            collapsed = title in self.collapsed_titles
+            group = _ArchiveGroup(title, folder, chips, entries, collapsed, self._host)
+            group.playRequested.connect(self.playRequested.emit)
+            group.deleteRequested.connect(self.deleteRequested.emit)
+            group.openFolderRequested.connect(self.openFolderRequested.emit)
+            # 折叠状态记在视图上：signature 变化重建后仍然保持。
+            group.header.toggled.connect(
+                lambda is_collapsed, key=title:
+                self.collapsed_titles.add(key) if is_collapsed
+                else self.collapsed_titles.discard(key))
+            self._lay.addWidget(group)
+        self._lay.addStretch(1)
+
+
+class _StatBar(QWidget):
+    """顶部统计条（D1 目标3）：状态计数 chip，点击即筛选下载队列；右侧站源筛选。"""
+
+    filterChanged = pyqtSignal(str)     # "" / active / paused / completed / failed
+    sourceChanged = pyqtSignal(str)     # "" / slug
+
+    GROUPS = (
+        ("", "全部", ("queued", "downloading", "paused", "completed", "failed")),
+        ("active", "进行中", ("queued", "downloading")),
+        ("paused", "已暂停", ("paused",)),
+        ("completed", "已完成", ("completed",)),
+        ("failed", "失败", ("failed",)),
+    )
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._key = ""
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(2, 0, 2, 0)
+        lay.setSpacing(6)
+        self._buttons = {}
+        for key, text, _states in self.GROUPS:
+            btn = QPushButton(text)
+            btn.setProperty("guoRole", "groupTab")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda checked=False, k=key: self._choose(k))
+            lay.addWidget(btn)
+            self._buttons[key] = btn
+        lay.addStretch(1)
+        tip = QLabel("站源")
+        tip.setStyleSheet("color:%s;" % DESIGN["guo_muted"])
+        lay.addWidget(tip)
+        self.source_combo = QComboBox(self)
+        self.source_combo.setMinimumWidth(112)
+        self.source_combo.currentIndexChanged.connect(self._source_changed)
+        lay.addWidget(self.source_combo)
+        self._sync_buttons()
+
+    def _choose(self, key):
+        # 再点一次已选中的筛选项 = 取消筛选（回到「全部」）。
+        self._key = "" if key == "" or key == self._key else key
+        self._sync_buttons()
+        self.filterChanged.emit(self._key)
+
+    def _sync_buttons(self):
+        for k, btn in self._buttons.items():
+            btn.setChecked(k == self._key)
+
+    def update_counts(self, jobs):
+        counts = {key: 0 for key, _text, _states in self.GROUPS}
+        for job in jobs:
+            state = job.get("state") or ""
+            for key, _text, states in self.GROUPS:
+                if state in states:
+                    counts[key] += 1
+        for key, text, _states in self.GROUPS:
+            self._buttons[key].setText("%s %d" % (text, counts.get(key, 0)))
+
+    def set_sources(self, slugs):
+        """按任务里出现过的站源刷新下拉；保留当前选择（若仍存在）。"""
+        kept = self.source_combo.currentData()
+        self.source_combo.blockSignals(True)
+        self.source_combo.clear()
+        self.source_combo.addItem("全部站源", "")
+        for slug in slugs:
+            self.source_combo.addItem(_source_label(slug) or slug, slug)
+        index = 0
+        for i in range(self.source_combo.count()):
+            if (self.source_combo.itemData(i) or "") == (kept or ""):
+                index = i
+                break
+        self.source_combo.setCurrentIndex(index)
+        self.source_combo.blockSignals(False)
+
+    def current_source(self):
+        return self.source_combo.currentData() or ""
+
+    def _source_changed(self, _index):
+        self.sourceChanged.emit(self.current_source())
+
+
+# 状态筛选表：_StatBar chip key → 任务状态集合（"" 不筛选）。
+_STATE_FILTER = {key: states for key, _text, states in _StatBar.GROUPS if key}
 
 
 class _DramaDelegate(QStyledItemDelegate):
@@ -523,94 +978,6 @@ def _wrapped_height(text, width, font):
     return total
 
 
-class _WrappedTitle(QLabel):
-    """Title that wraps to however many lines the column actually needs.
-
-    以前固定两行、超出补省略号；合并成品名字里带「全001-1000集」，集数一多
-    名字必然超过两行，就被截成「…」。现在按实际宽度算行数，行高跟着长，
-    名字完整显示（极端长名仍有 tooltip 兜底）。
-    """
-
-    REFERENCE_WIDTH = 170
-
-    def __init__(self, text="", max_lines=None, wrap_width=202, parent=None):
-        super().__init__(parent)
-        self._full = text or ""
-        self._max_lines = max_lines
-        # 布局前 QLabel.width() 还是默认值，行数必须按列宽算，否则 sizeHint
-        # 只报一行、后面的行会被裁掉。_fit_merge_rows 会跟着列宽同步。
-        self._wrap_width = max(40, int(wrap_width))
-        self.setToolTip(self._full)
-        self.setWordWrap(False)
-        self.setMinimumWidth(60)
-
-    def set_wrap_width(self, width):
-        width = max(40, int(width))
-        if width == self._wrap_width:
-            return
-        self._wrap_width = width
-        self.updateGeometry()
-        self.update()
-
-    def setText(self, text):
-        self._full = text or ""
-        self.setToolTip(self._full)
-        self.update()
-
-    def text(self):
-        return self._full
-
-    def _lines(self, width):
-        lines = []
-        for paragraph in self._full.split("\n"):
-            layout = QTextLayout(paragraph, self.font())
-            option = QTextOption()
-            # 按词边界换行：中文照样能断，但 "全001-1000集.mkv" 不会只剩一个
-            # "v" 掉到下一行。
-            option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
-            layout.setTextOption(option)
-            layout.beginLayout()
-            while True:
-                line = layout.createLine()
-                if not line.isValid():
-                    break
-                line.setLineWidth(max(20, width))
-                start = line.textStart()
-                lines.append(paragraph[start:start + line.textLength()])
-            layout.endLayout()
-        return lines or [""]
-
-    def _display_lines(self, width):
-        lines = self._lines(width)
-        if self._max_lines is None or len(lines) <= self._max_lines:
-            return lines
-        metrics = QFontMetrics(self.font())
-        lines = lines[:self._max_lines]
-        last = lines[-1]
-        while last and metrics.horizontalAdvance(last + "…") > width:
-            last = last[:-1]
-        lines[-1] = last + "…"
-        return lines
-
-    def sizeHint(self):
-        metrics = QFontMetrics(self.font())
-        return QSize(140, metrics.height() * max(1, len(self._lines(self._wrap_width))))
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        metrics = QFontMetrics(self.font())
-        width = max(40, self.width())
-        # Never paint more lines than the allocated height can hold.
-        line_height = max(1, metrics.height())
-        max_lines = max(1, self.height() // line_height)
-        if self._max_lines is not None:
-            max_lines = min(self._max_lines, max_lines)
-        painter.setPen(self.palette().color(self.foregroundRole()))
-        y = 0
-        for line in self._display_lines(width)[:max_lines]:
-            painter.drawText(QRect(0, y, width, line_height),
-                             Qt.AlignLeft | Qt.AlignVCenter, line)
-            y += line_height
 
 
 class DownloadPanel(QWidget):
@@ -673,6 +1040,10 @@ class DownloadPanel(QWidget):
         # 合并队列页签的数据源：本批次每一部的状态/进度/成品。
         self._merge_entries = []
         self._fitting_merge_queue = False
+        # 统计条/站源筛选（D1）："" 表示不筛选。
+        self._state_filter = ""
+        self._source_filter = ""
+        self._source_sig = None
         self._merge_files_sig = None
         self._last_merged_play = (None, 0.0)
         self._auto_resumed = False
@@ -752,13 +1123,11 @@ class DownloadPanel(QWidget):
         drama_title.setProperty("role", "section")
         drama_title.setToolTip("选择一部剧即可只看它的分集，并一键合并整季")
 
-        self.merge_files = _FitList()
-        self.merge_files.setProperty("role", "merges")
-        self.merge_files.setMinimumWidth(200)
-        self.merge_files.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.merge_files.itemClicked.connect(self._play_merged)
-        self.merge_files.itemDoubleClicked.connect(self._play_merged)
-        self.merge_files.resized.connect(self._fit_merge_rows)
+        # 已完成归档（D1a）：分集成品按剧名分组，取代旧的「合并成品」平铺列表。
+        self.archive = _ArchiveView()
+        self.archive.playRequested.connect(self._play_merged_path)
+        self.archive.deleteRequested.connect(self._delete_archive_file)
+        self.archive.openFolderRequested.connect(self._open_path)
         # 左栏下半：合并队列（本批次每部的状态/进度）和合并成品共用一块，
         # 排队和结果不用在两个地方找。
         self.merge_queue = _FitList()
@@ -775,14 +1144,18 @@ class DownloadPanel(QWidget):
         queue_layout.addWidget(self.merge_queue)
 
         files_page = QWidget()
+        # tab 页是裸 QWidget，全局 QSS 不铺背景；补一层 surface 免得露出浅色底。
+        files_page.setObjectName("guoTabPage")
+        files_page.setAttribute(Qt.WA_StyledBackground, True)
+        files_page.setStyleSheet("QWidget#guoTabPage{background:%s;}" % DESIGN["surface"])
         files_layout = QVBoxLayout(files_page)
         files_layout.setContentsMargins(4, 6, 4, 4)
-        files_layout.addWidget(self.merge_files)
+        files_layout.addWidget(self.archive)
 
         self.merge_tabs = QTabWidget()
         self.merge_tabs.setProperty("role", "compact")
         self.merge_tabs.addTab(queue_page, "合并队列")
-        self.merge_tabs.addTab(files_page, "合并成品")
+        self.merge_tabs.addTab(files_page, "已完成归档")
         self.merge_tabs.setCurrentIndex(0)
 
         left_column = QVBoxLayout()
@@ -901,7 +1274,20 @@ class DownloadPanel(QWidget):
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(8)
         right.addWidget(self.current_card)
-        self.merge_tabs.insertTab(0, self.queue, "下载队列")
+        # 顶部统计条（D1 目标3）：状态计数 chip，点击即筛选；右侧站源筛选（D1c）。
+        self.stat_bar = _StatBar()
+        self.stat_bar.filterChanged.connect(self._on_stat_filter)
+        self.stat_bar.sourceChanged.connect(self._on_source_filter)
+        queue_tab = QWidget()
+        queue_tab.setObjectName("guoTabPage")
+        queue_tab.setAttribute(Qt.WA_StyledBackground, True)
+        queue_tab.setStyleSheet("QWidget#guoTabPage{background:%s;}" % DESIGN["surface"])
+        queue_tab_layout = QVBoxLayout(queue_tab)
+        queue_tab_layout.setContentsMargins(4, 6, 4, 4)
+        queue_tab_layout.setSpacing(6)
+        queue_tab_layout.addWidget(self.stat_bar)
+        queue_tab_layout.addWidget(self.queue, 1)
+        self.merge_tabs.insertTab(0, queue_tab, "下载队列")
         self.merge_tabs.setCurrentIndex(0)
         right.addWidget(self.merge_tabs, 1)
         right.addLayout(status)
@@ -1092,12 +1478,8 @@ class DownloadPanel(QWidget):
         pending = sum(1 for entry in self._merge_entries
                       if entry["state"] in ("queued", "merging"))
         tabs.setTabText(1, "合并队列 (%d)" % pending if pending else "合并队列")
-        total = self.merge_files.count()
-        if total == 1:
-            only = self.merge_files.item(0)
-            if only is not None and not only.data(Qt.UserRole):
-                total = 0
-        tabs.setTabText(2, "合并成品 (%d)" % total if total else "合并成品")
+        total = getattr(self.archive, "entry_count", 0)
+        tabs.setTabText(2, "已完成归档 (%d)" % total if total else "已完成归档")
 
     def _finish_merge_entry(self, state, detail="", output=""):
         for entry in self._merge_entries:
@@ -1115,91 +1497,136 @@ class DownloadPanel(QWidget):
         if isinstance(entry, dict) and entry.get("state") == "done" and entry.get("output"):
             self._play_merged_path(entry["output"])
 
-    # ----------------------------------------------------- merged file list
+    # ----------------------------------------------------- archived outputs
     def _refresh_merge_files(self):
-        """Mirror 下载/合并/ into the merged-outputs list (signature-guarded).
+        """扫描成品目录，按剧名分组刷「已完成归档」页（signature 守卫）。
 
-        Rows show a shortened name so the 删除 button always stays inside the
-        visible 230px column; the full name travels in the item's tooltip and
-        UserRole (the play path).
+        两类来源：
+        1) 下载根目录下的剧名子目录里的分集 mp4 —— guoapp 归档形态
+           「下载/剧名/第N集.mp4」；
+        2) 「合并」目录里的整集成品 —— 按文件名解析剧名归回同一组。
+        旧位置的文件同样列出（标盘符/旧位置），与旧「合并成品」列表语义一致。
         """
-        current = tools.merge_dir()
-        entries = []
-        for folder in tools.merge_dirs():
-            if not os.path.isdir(folder):
+        current_root = tools.download_dir()
+        current_merge = tools.merge_dir()
+        try:
+            roots = list(tools.download_dirs()) or [current_root]
+        except Exception:
+            roots = [current_root]
+        try:
+            merge_folders = list(tools.merge_dirs())
+        except Exception:
+            merge_folders = []
+        # 当前根排最前：组文件夹优先指向还在用的位置，「打开目录」才不会跳旧盘。
+        roots.sort(key=lambda r: os.path.normpath(r) != os.path.normpath(current_root))
+        merge_folders.sort(key=lambda r: os.path.normpath(r) != os.path.normpath(current_merge))
+
+        def elsewhere_mark(base_dir):
+            norm = os.path.normpath(base_dir)
+            if norm in (os.path.normpath(current_root), os.path.normpath(current_merge)):
+                return ""
+            drive = os.path.splitdrive(norm)[0]
+            cur_drive = os.path.splitdrive(current_root)[0]
+            return drive if drive and drive != cur_drive else "旧位置"
+
+        groups = {}
+
+        def bucket(key):
+            return groups.setdefault(key, {"folder": "", "episodes": [], "merged": []})
+
+        def folder_for(key, path, mark):
+            entry = bucket(key)
+            if not entry["folder"]:
+                entry["folder"] = path
+            return entry
+
+        for root in roots:
+            if not os.path.isdir(root):
                 continue
-            for name in os.listdir(folder):
-                path = os.path.join(folder, name)
-                if os.path.isfile(path) and name.lower().endswith((".mkv", ".mp4")):
+            mark = elsewhere_mark(root)
+            try:
+                names = sorted(os.listdir(root))
+            except OSError:
+                continue
+            for name in names:
+                sub = os.path.join(root, name)
+                if not os.path.isdir(sub) or name == "合并":
+                    continue
+                try:
+                    files = sorted(os.listdir(sub))
+                except OSError:
+                    continue
+                for fname in files:
+                    fpath = os.path.join(sub, fname)
+                    if not fname.lower().endswith(".mp4") or not os.path.isfile(fpath):
+                        continue
                     try:
-                        # 旧位置的成品也列出来——换下载位置时文件按设计没搬走，
-                        # 只扫当前根的话它们在界面上就凭空消失了
-                        entries.append((os.path.getmtime(path), name, os.path.getsize(path),
-                                        path, folder != current))
+                        size = os.path.getsize(fpath)
+                        mtime = os.path.getmtime(fpath)
                     except OSError:
                         continue
-        entries.sort(reverse=True)
-        signature = tuple((name, size, elsewhere)
-                          for _mtime, name, size, _path, elsewhere in entries)
+                    key = strip_season(name) or name
+                    entry = folder_for(key, sub, mark)
+                    entry["episodes"].append((fpath, fname, size, mtime, mark))
+
+        for folder in merge_folders:
+            if not os.path.isdir(folder):
+                continue
+            mark = elsewhere_mark(folder)
+            try:
+                names = sorted(os.listdir(folder))
+            except OSError:
+                continue
+            for fname in names:
+                fpath = os.path.join(folder, fname)
+                if not fname.lower().endswith((".mkv", ".mp4")) or not os.path.isfile(fpath):
+                    continue
+                try:
+                    size = os.path.getsize(fpath)
+                    mtime = os.path.getmtime(fpath)
+                except OSError:
+                    continue
+                key = _archive_drama_key(fname)
+                entry = folder_for(key, folder, mark)
+                entry["merged"].append((fpath, fname, size, mtime, mark))
+
+        sig_rows = []
+        for key, data in groups.items():
+            for kind in ("episodes", "merged"):
+                for _p, fname, size, _m, mark in data[kind]:
+                    sig_rows.append((key, fname, size, mark))
+        signature = tuple(sorted(sig_rows))
         if signature == self._merge_files_sig:
             return
         self._merge_files_sig = signature
-        # clear() 会把滚动条打回顶部：删最下面一条时视图会直接跳到第一集。
-        # 记下位置，重建完再放回去（内容变短时 Qt 会自动夹到新的最大值）。
-        scroll = self.merge_files.verticalScrollBar().value()
-        self.merge_files.clear()
-        for _mtime, name, size, path, elsewhere in entries:
-            # No item text: the row widget paints it.  Text on the item would
-            # show through the transparent widget and double up.
-            item = QListWidgetItem()
-            item.setData(Qt.UserRole, path)
-            # 旧位置的标一下：异盘就写盘符（D:），同盘写「旧位置」——同盘时
-            # 盘符两边一样，标了等于没标
-            marker = ""
-            if elsewhere:
-                drive = os.path.splitdrive(path)[0]
-                marker = drive if drive and drive != os.path.splitdrive(current)[0] else "旧位置"
-            item.setToolTip("%s\n%s%s · 点一下播放" % (
-                name, (marker + " · ") if marker else "", human_size(size)))
-            if elsewhere:
-                item.setToolTip(item.toolTip() + "\n在旧位置：%s" % os.path.dirname(path))
-            row = _MergedRow()
-            row.clicked.connect(lambda checked=False, target=path: self._play_merged_path(target))
-            row_layout = QVBoxLayout(row)
-            row_layout.setContentsMargins(8, 4, 6, 4)
-            row_layout.setSpacing(2)
-            # 名字独占一行、最多两行（超出省略号）：尺寸和删除按钮放到第二行，
-            # 否则 236px 的窄列里只够显示七八个字。
-            label = _WrappedTitle(name)
-            row.title = label
-            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            amount = QLabel("%s · %s" % (marker, human_size(size)) if marker else human_size(size))
-            amount.setProperty("role", "hint")
-            amount.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            button = self._mini("删除", lambda checked=False, target=path:
-                                self._delete_merged_file(target))
-            bottom = QHBoxLayout()
-            bottom.setContentsMargins(0, 0, 0, 0)
-            bottom.setSpacing(6)
-            bottom.addWidget(amount, 0)
-            bottom.addStretch(1)
-            bottom.addWidget(button)
-            row_layout.addWidget(label)
-            row_layout.addLayout(bottom)
-            row.adjustSize()
-            height = max(70, row.sizeHint().height())
-            self.merge_files.addItem(item)
-            self.merge_files.setItemWidget(item, row)
-            item.setSizeHint(QSize(216, height))
-        if not entries:
-            self.merge_files.addItem(QListWidgetItem("还没有合并成品"))
-        self._fit_merge_rows()
-        self.merge_files.doItemsLayout()
-        self.merge_files.verticalScrollBar().setValue(scroll)
-        self._update_merge_tabs()
 
-    def _play_merged(self, item):
-        self._play_merged_path(item.data(Qt.UserRole))
+        # clear 会把滚动条打回顶部：删最下面一条时视图会跳到第一组。
+        # 记下位置，重建完再放回去（内容变短时 Qt 会自动夹到新的最大值）。
+        scroll = self.archive.scroll.verticalScrollBar().value()
+        built = []
+        for key in sorted(groups):
+            data = groups[key]
+            episodes = sorted(data["episodes"],
+                              key=lambda e: (_episode_sort_key(e[1]), -e[3], e[1]))
+            merged = sorted(data["merged"], key=lambda e: e[1])
+            entries = []
+            for path, fname, size, _mtime, mark in merged:
+                entries.append((path, fname, human_size(size), "整集合并", mark))
+            for path, fname, size, _mtime, mark in episodes:
+                entries.append((path, fname, human_size(size), "", mark))
+            total = (sum(e[2] for e in data["episodes"])
+                     + sum(e[2] for e in data["merged"]))
+            chips = []
+            if data["episodes"]:
+                chips.append(("%d 集" % len(data["episodes"]), False))
+            if total:
+                chips.append((human_size(total), False))
+            if data["merged"]:
+                chips.append(("含整集合并", True))
+            built.append((key, data["folder"], chips, entries))
+        self.archive.set_groups(built)
+        self.archive.scroll.verticalScrollBar().setValue(scroll)
+        self._update_merge_tabs()
 
     def _play_merged_path(self, path):
         now = time.time()
@@ -1346,10 +1773,33 @@ class DownloadPanel(QWidget):
         return [groups[key] for key in order]
 
     def _visible_jobs(self):
-        if self._filter_drama is None:
-            return list(self._jobs)
-        return [job for job in self._jobs
-                if (job.get("drama") or {}).get("id") == self._filter_drama]
+        jobs = list(self._jobs)
+        if self._filter_drama is not None:
+            jobs = [job for job in jobs
+                    if (job.get("drama") or {}).get("id") == self._filter_drama]
+        if self._source_filter:
+            jobs = [job for job in jobs
+                    if str((job.get("drama") or {}).get("source") or "") == self._source_filter]
+        if self._state_filter:
+            wanted = _STATE_FILTER.get(self._state_filter, ())
+            jobs = [job for job in jobs if job.get("state") in wanted]
+        return jobs
+
+    def _on_stat_filter(self, key):
+        if key == self._state_filter:
+            return
+        self._state_filter = key
+        self._row_sig.clear()
+        self.queue.clear()
+        self._render()
+
+    def _on_source_filter(self, slug):
+        if slug == self._source_filter:
+            return
+        self._source_filter = slug
+        self._row_sig.clear()
+        self.queue.clear()
+        self._render()
 
     def _render_dramas(self):
         groups = self._drama_groups()
@@ -1452,28 +1902,6 @@ class DownloadPanel(QWidget):
         finally:
             self._fitting_dramas = False
 
-    def _fit_merge_rows(self):
-        """Keep merged rows exactly as wide as the (draggable) column."""
-        if getattr(self, "_fitting_merges", False):
-            return
-        self._fitting_merges = True
-        try:
-            width = max(180, self.merge_files.viewport().width() - 8)
-            for index in range(self.merge_files.count()):
-                item = self.merge_files.item(index)
-                if item.data(Qt.UserRole):      # real file, not the placeholder
-                    widget = self.merge_files.itemWidget(item)
-                    # Re-measure every time: the row must follow the font
-                    # size, not just the column width.
-                    title = getattr(widget, "title", None)
-                    if title is not None:
-                        title.set_wrap_width(width - 14)
-                    height = max(70, widget.sizeHint().height()) if widget else 70
-                    hint = item.sizeHint()
-                    if hint.width() != width or hint.height() != height:
-                        item.setSizeHint(QSize(width, height))
-        finally:
-            self._fitting_merges = False
 
     def _select_drama_row(self):
         row = 0
@@ -1564,6 +1992,12 @@ class DownloadPanel(QWidget):
     # ---------------------------------------------------------------- render
     def _render(self):
         self._render_dramas()
+        self.stat_bar.update_counts(self._jobs)
+        source_sig = tuple(sorted({str((job.get("drama") or {}).get("source") or "")
+                                   for job in self._jobs if (job.get("drama") or {}).get("source")}))
+        if source_sig != self._source_sig:
+            self._source_sig = source_sig
+            self.stat_bar.set_sources(source_sig)
         self.merge_tabs.setTabText(0, "下载队列 (%d)" % len(self._visible_jobs()))
         self._render_current()
         jobs = self._visible_jobs()
@@ -1612,8 +2046,11 @@ class DownloadPanel(QWidget):
             if state == "downloading" and total > done and speed > 0:
                 eta = int((total - done) / speed + 0.5)
             quality = job_quality_text(job)
+            drama = job.get("drama") or {}
+            drama_title = drama.get("title") or ""
+            source_label = _source_label(drama.get("source"))
             signature = (job.get("id"), state, round(progress, 4), done, total,
-                         round(speed, 1), label, quality)
+                         round(speed, 1), label, quality, drama_title, source_label)
             if self._row_sig.get(row) != signature:
                 self._row_sig[row] = signature
                 item = queue.item(row)
@@ -1625,6 +2062,7 @@ class DownloadPanel(QWidget):
                 item.setData(ROLE_JOB_ETA, eta)
                 item.setData(ROLE_JOB_ID, job.get("id"))
                 item.setData(ROLE_JOB_QUALITY, quality)
+                item.setData(ROLE_JOB_DRAMA, (drama_title, source_label))
                 item.setToolTip(self._job_tooltip(job, label, done, total, speed))
         current_ids = {str(job.get("id") or "") for job in jobs}
         for key in [k for k in self._speed_hist if k not in current_ids]:
@@ -1645,6 +2083,9 @@ class DownloadPanel(QWidget):
         quality = job_quality_text(job)
         if quality:
             lines.append("画质：%s" % quality.replace(" · ", "，码率 "))
+        source = _source_label((job.get("drama") or {}).get("source"))
+        if source:
+            lines.append("站源：%s" % source)
         if job.get("state") == "downloading" and speed > 0 and total > done:
             lines.append("预计剩余：%s" % _duration_text((total - done) / speed))
         error = (job.get("error") or "").strip()
@@ -1727,13 +2168,19 @@ class DownloadPanel(QWidget):
 
     # ------------------------------------------------------------ 行内操作
     def job_action(self, row, key):
-        """队列卡片上的按钮：暂停 / 继续 / 播放 / 删除。"""
+        """队列卡片行尾图标：暂停 / 继续 / 播放 / 重试 / 打开目录 / 删除。"""
         jobs = self._visible_jobs()
         if not 0 <= row < len(jobs):
             return
         job = jobs[row]
         if key == "play":
             self._play_job(job)
+        elif key == "folder":
+            self._open_job_folder(job)
+        elif key == "retry":
+            # 核心没有独立的 retry 命令，resume 就是「重新拉起这条任务」；
+            # 真正的 retry 语义留给 V1 回归时确认核心是否支持。
+            self._control(job, "resume")
         else:
             self._control(job, key)
 
@@ -1743,13 +2190,6 @@ class DownloadPanel(QWidget):
         jobs = self._visible_jobs()
         if 0 <= row < len(jobs) and jobs[row].get("state") == "completed":
             self._play_job(jobs[row])
-
-    def _mini(self, label, handler):
-        button = QPushButton(label)
-        button.setProperty("role", "ghost")
-        button.setFixedWidth(52)
-        button.clicked.connect(lambda: handler())
-        return button
 
     # -------------------------------------------------------------- controls
     def _control(self, job, command):
@@ -1798,9 +2238,57 @@ class DownloadPanel(QWidget):
 
     def _open_folder(self):
         # Open the user-facing library, not the core's internal cache.
-        path = tools.download_dir()
-        os.makedirs(path, exist_ok=True)
+        self._open_path(tools.download_dir())
+
+    def _open_job_folder(self, job):
+        """打开这一集成品所在目录（D1b）：优先 publisher 已发布路径，
+        未发布时按「下载根目录/剧名」推导。"""
+        try:
+            published = self.publisher.path_for(job)
+        except Exception:
+            published = None
+        if published:
+            self._open_path(os.path.dirname(published))
+            return
+        title = (job.get("drama") or {}).get("title") or ""
+        if title:
+            self._open_path(os.path.join(tools.download_dir(), decrypt.series_folder(title)))
+
+    def _open_path(self, path):
+        if not path:
+            return
+        try:
+            os.makedirs(path, exist_ok=True)
+        except OSError as exc:
+            self.statusMessage.emit("打开目录失败：%s" % exc)
+            return
         os.startfile(path) if os.name == "nt" else None
+        self.statusMessage.emit("已打开目录：%s" % path)
+
+    def _delete_archive_file(self, path):
+        """归档行删除：合并成品沿用旧确认文案；分集文件删掉后核心索引
+        自愈（known() 判文件不存在，需要时自动重新解密落盘）。"""
+        merge_folders = set()
+        try:
+            merge_folders.add(os.path.normpath(tools.merge_dir()))
+            merge_folders.update(os.path.normpath(f) for f in tools.merge_dirs())
+        except Exception:
+            pass
+        if os.path.normpath(os.path.dirname(path)) in merge_folders:
+            self._delete_merged_file(path)
+            return
+        if not _confirm(self, "删除分集",
+                        "确定删除「%s」吗？\n加密缓存保留，需要时可自动重新解密。"
+                        % os.path.basename(path), yes="删除"):
+            return
+        try:
+            os.remove(path)
+        except OSError as exc:
+            self.statusMessage.emit("删除失败：%s" % exc)
+            return
+        self._merge_files_sig = None
+        self._refresh_merge_files()
+        self.statusMessage.emit("已删除分集：%s" % os.path.basename(path))
 
     def _choose_location(self):
         """Point the library somewhere else, keeping what is already there.
