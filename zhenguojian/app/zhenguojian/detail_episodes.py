@@ -81,6 +81,7 @@ class DetailEpisodeList(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._chapters = []
+        self._drama_vip = False            # 剧目级 VIP 标志（红果逐集不带 vip 字段）
         self._by_number = {}               # 集数 -> position(0 基)
         self._episodes = []                # EpisodeGrid payload
         self._downloaded = set()           # 集数集合
@@ -178,10 +179,11 @@ class DetailEpisodeList(QWidget):
     def set_scroll_area(self, area):
         self._scroll_area = area
 
-    def set_chapters(self, chapters):
+    def set_chapters(self, chapters, drama_vip=False):
         self._release_preloads()           # 旧剧预热会话先归还
         self._warm_token += 1
         self._chapters = list(chapters or [])
+        self._drama_vip = bool(drama_vip)
         self._by_number = {}
         for position, chapter in enumerate(self._chapters):
             self._by_number.setdefault(_episode_number(chapter, position), position)
@@ -233,10 +235,11 @@ class DetailEpisodeList(QWidget):
             # 当前集落位：延一拍，等分组/尺寸就位（EpisodeGrid 会先切回所在组）
             QTimer.singleShot(0, self.grid.scroll_to_current)
 
-    @staticmethod
-    def _chapter_vip(chapter):
-        # 红果 chapters 不带逐集 VIP 标志（数据层假设，见 Notes）；兼容几种
-        # 常见字段写法，都没有就 False。
+    def _chapter_vip(self, chapter):
+        # 实测红果 chapters 无逐集 VIP 字段，vip 挂在 drama 上：整剧标志优先，
+        # 再兼容几种常见逐集写法，都没有就 False。
+        if self._drama_vip:
+            return True
         if chapter.get("vip"):
             return True
         if str(chapter.get("type") or "").lower() == "vip":

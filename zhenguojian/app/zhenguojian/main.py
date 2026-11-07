@@ -50,16 +50,16 @@ PRELOAD_LIMIT = 2
 DEFAULT_SOURCE = "hongguo"
 FALLBACK_SOURCES = (
     ("hongguo", "红果", True),
-    ("hanxiaoquan", "韩小圈", False),
-    ("guipian", "鬼片", False),
+    ("hanxiaoquan", "韩小圈", True),
+    ("guipian", "鬼片", True),
     ("sorani", "青空", True),
     ("huangdou", "黄豆", True),
     ("huangju", "剧果", True),
     ("yeguo", "野果", True),
     ("dsd", "帝果", True),
-    ("jinguoduanju", "禁果短剧", False),
-    ("jinguo", "禁果", False),
-    ("heitao", "黑桃", False),
+    ("jinguoduanju", "禁果短剧", True),
+    ("jinguo", "禁果", True),
+    ("heitao", "黑桃", True),
     ("huangguo-video", "黄果·视频", True),
     ("huangguoai", "黄果·AI", True),
     ("cloudfront", "黄果·旧版", True),
@@ -540,7 +540,7 @@ class DetailPage(QWidget):
         self.poster.cover.setToolTip(poster_tooltip(drama))
         self._render_meta(drama)
         self.loading.setVisible(False)
-        self.episodes.set_chapters(chapters)
+        self.episodes.set_chapters(chapters, bool(drama.get("vip")))
         self.refresh_marks()
         self._probe_quality(drama, chapters)
 
