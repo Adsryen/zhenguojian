@@ -9,7 +9,7 @@ from PyQt5.QtGui import QColor, QFont, QFontMetrics, QPainter, QPainterPath, QPi
 from PyQt5.QtWidgets import (QAbstractButton, QApplication, QComboBox, QHBoxLayout, QLabel,
                              QPushButton, QScrollArea, QVBoxLayout, QWidget)
 from .ui import DESIGN
-from .poster_wall import PosterWall
+from .widgets_guo import PosterCard
 from .scroll_loader import ScrollLoader
 from .tasks import TaskRunner
 from .widgets import CoverLoader
@@ -191,6 +191,101 @@ class CastStrip(QWidget):
             card.image_failed()
 
 
+class _WorksGrid(QScrollArea):
+    """作者作品墙：guo- PosterCard 网格（W1d 换代，替代 poster_wall.PosterWall）。
+
+    对 CreatorPage 保留原墙的最小接口：set_items / append_items / count /
+    set_pixmap(id,pixmap) / doItemsLayout（ScrollLoader 需要）/
+    verticalScrollBar+viewport（QScrollArea 自带）；ranked=True 时按序挂
+    热度榜角标（旧双徽标里的热度位）。
+    """
+
+    dramaActivated = pyqtSignal(object)
+
+    def __init__(self, covers=None, request_cb=None, parent=None):
+        super().__init__(parent)
+        self._covers = covers
+        self._request_cb = request_cb
+        self._cards = {}
+        self._titles = {}
+        self._ids = []
+        self._ranked = False
+        self.setProperty("guoRole", "bare")
+        self.setWidgetResizable(True)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._host = QWidget()
+        self._flow = FlowLayout(self._host, spacing=18)
+        self.setWidget(self._host)
+
+    def set_ranked(self, ranked):
+        ranked = bool(ranked)
+        if ranked != self._ranked:
+            self._ranked = ranked
+            self._restripe()
+
+    def count(self):
+        return len(self._ids)
+
+    def doItemsLayout(self):
+        self._flow.invalidate()
+
+    def set_items(self, items):
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._cards = {}
+        self._ids = []
+        for drama in items:
+            self._add(drama)
+        self._restripe()
+
+    def append_items(self, items):
+        for drama in items:
+            self._add(drama)
+        self._restripe()
+
+    def set_pixmap(self, identifier, pixmap):
+        card = self._cards.get(identifier)
+        if card is None:
+            return
+        index = self._ids.index(identifier) + 1
+        card.set_data(self._titles.get(identifier, "短剧"), cover=pixmap,
+                      badge_rank=index if self._ranked else None)
+
+    def _add(self, drama):
+        identifier = drama.get("id")
+        if not identifier or identifier in self._cards:
+            return
+        card = PosterCard(self._host, cover_size=(110, 164))
+        card.clicked.connect(lambda checked=False, value=drama: self.dramaActivated.emit(value))
+        cached = self._covers.cached(identifier) if self._covers is not None else None
+        title = (drama.get("title") or "短剧").strip()
+        card.set_data(title, cover=cached)
+        card.setToolTip(poster_tooltip(drama))
+        if cached is None and self._request_cb is not None \
+                and not str(identifier).startswith("local:"):
+            self._request_cb([drama])
+        self._cards[identifier] = card
+        self._titles[identifier] = title
+        self._ids.append(identifier)
+        self._flow.addWidget(card)
+
+    def _restripe(self):
+        for index, identifier in enumerate(self._ids):
+            card = self._cards.get(identifier)
+            if card is not None:
+                card.set_data(self._titles.get(identifier, "短剧"),
+                              cover=self._covers.cached(identifier) if self._covers is not None else None,
+                              badge_rank=index + 1 if self._ranked else None)
+
+    def reload_theme(self):
+        for card in self._cards.values():
+            card.update()
+
+
 class CreatorPage(QWidget):
     backRequested = pyqtSignal()
     dramaActivated = pyqtSignal(object)
@@ -218,8 +313,8 @@ class CreatorPage(QWidget):
         self.status = QLabel(); self.status.setProperty("role", "hint")
         self.retry = QPushButton("重试加载"); self.retry.setProperty("role", "ghost"); self.retry.clicked.connect(self._retry_load)
         controls = QHBoxLayout(); controls.addWidget(self.count); controls.addWidget(self.tab_box); controls.addStretch(1); controls.addWidget(self.sort_box)
-        self.wall = PosterWall(covers=self._covers); self.wall.setProperty("role", "newPosterWall"); self.wall.set_dual_badges(True)
-        self.wall.set_cover_loader(self._covers, self._request_covers); self.wall.dramaActivated.connect(self.dramaActivated.emit)
+        self.wall = _WorksGrid(covers=self._covers, request_cb=self._request_covers)
+        self.wall.dramaActivated.connect(self.dramaActivated.emit)
         self._scroll = ScrollLoader(self.wall, self._load_more)
         footer = QHBoxLayout(); footer.addWidget(self.status, 1); footer.addWidget(self.retry)
         layout = QVBoxLayout(self); layout.setContentsMargins(10, 10, 10, 10); layout.setSpacing(10)
@@ -271,7 +366,9 @@ class CreatorPage(QWidget):
         self._render_items()
         bar.setValue(position)
     def _render_items(self):
-        items = sorted(self._items, key=_heat_value, reverse=True) if self.sort_box.currentData() == "hot_desc" else self._items
+        hot = self.sort_box.currentData() == "hot_desc"
+        items = sorted(self._items, key=_heat_value, reverse=True) if hot else self._items
+        self.wall.set_ranked(hot)
         self.wall.set_items(items)
     def _copy_id(self): QApplication.clipboard().setText(str(self._creator.get("userId") or ""))
     def _avatar_loaded(self, identifier, pixmap):

@@ -32,6 +32,20 @@ WEEK_NAMES = ("周日", "周一", "周二", "周三", "周四", "周五", "周�
 CHIP_GENDERS = (("2", "全部"), ("1", "男频"), ("0", "女频"))
 
 
+def _guo_radius(token, fallback):
+    try:
+        return int(str(DESIGN.get(token, "")).replace("px", ""))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _guo_radius(token, fallback):
+    try:
+        return int(str(DESIGN.get(token, "")).replace("px", ""))
+    except (TypeError, ValueError):
+        return fallback
+
+
 def _today():
     return time.strftime("%Y%m%d")
 
@@ -119,8 +133,9 @@ class _CoverThumb(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         rect = QRectF(0, 0, self.width(), self.height())
+        radius = _guo_radius("guo_radius_lg", 12)
         path = QPainterPath()
-        path.addRoundedRect(rect, 9, 9)
+        path.addRoundedRect(rect, radius, radius)
         painter.save()
         painter.setClipPath(path)
         painter.fillRect(rect, QColor(DESIGN["cover_bg"]))
@@ -131,7 +146,7 @@ class _CoverThumb(QWidget):
             top = max(0, (scaled.height() - self.height()) // 2)
             painter.drawPixmap(-left, -top, scaled)
         painter.restore()
-        painter.setPen(QPen(QColor(DESIGN["border"]), 1))
+        painter.setPen(QPen(QColor(DESIGN["guo_border"]), 1))
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(path)
         painter.end()
@@ -200,15 +215,18 @@ class _DateChip(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
         rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        radius = _guo_radius("guo_radius", 6)
         if self._selected:
-            background, border, color = DESIGN["accent"], DESIGN["accent"], DESIGN["on_accent"]
+            background, border, color = (DESIGN["guo_accent"], DESIGN["guo_accent"],
+                                         DESIGN["on_accent"])
         else:
-            background = DESIGN["button_hover"] if self._hover else DESIGN["button_bg"]
-            border = DESIGN["button_border"]
-            color = DESIGN["muted2"] if self._past else DESIGN["text"]
+            background = (DESIGN["guo_chip_hover"] if self._hover
+                          else DESIGN["guo_chip_bg"])
+            border = DESIGN["guo_border"]
+            color = DESIGN["guo_muted"] if self._past else DESIGN["guo_text"]
         painter.setPen(QPen(QColor(border), 1))
         painter.setBrush(QColor(background))
-        painter.drawRoundedRect(rect, 10, 10)
+        painter.drawRoundedRect(rect, radius, radius)
         week_font = QFont(self.font())
         week_font.setPixelSize(12)
         day_font = QFont(self.font())
@@ -276,12 +294,16 @@ class _CalendarRow(QFrame):
         super().__init__(parent)
         self.drama = drama
         self.setProperty("role", "calendarRow")
+        # guo- 卡片感：guoRole=posterCard 走全局 QSS（圆角 12、guo_card_bg、
+        # 悬停描边强调色），guo 块在 role 规则之后，同属性以 guo 为准。
+        self.setProperty("guoRole", "posterCard")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumHeight(124)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(14)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(16)
 
         self.cover = _CoverThumb()
         self.cover.setToolTip(poster_tooltip(drama))
@@ -298,6 +320,8 @@ class _CalendarRow(QFrame):
         meta.setSpacing(10)
         state = QLabel("已上线" if drama.get("online") else (drama.get("hint") or "即将上线"))
         state.setProperty("role", "calendarOnline" if drama.get("online") else "calendarPending")
+        self._state_label = state
+        self._meta_labels = []
         meta.addWidget(state)
         episode_text = ("共%d集" % drama["episodes"]) if drama.get("online") and drama.get("episodes") else ""
         for text in (drama.get("category"), drama.get("note"), episode_text):
@@ -305,6 +329,7 @@ class _CalendarRow(QFrame):
                 continue
             label = QLabel(str(text))
             label.setProperty("role", "calendarMeta")
+            self._meta_labels.append(label)
             meta.addWidget(label)
         meta.addStretch(1)
         main.addLayout(meta)
@@ -319,6 +344,7 @@ class _CalendarRow(QFrame):
         desc.setWordWrap(True)
         desc.setMaximumHeight(34)
         desc.setProperty("role", "calendarMeta")
+        self._meta_labels.append(desc)
         main.addWidget(desc)
         main.addStretch(1)
         layout.addLayout(main, 1)
@@ -340,6 +366,18 @@ class _CalendarRow(QFrame):
         if drama.get("badge"):
             self._badge = _Badge(drama["badge"], self.cover)
             self._badge.move(4, 4)
+        self._apply_state_colors()
+
+    def _apply_state_colors(self):
+        """状态/副行文字换 guo- 语义色：已上线绿、未上线黄，副行 muted。
+
+        只动 color（字体族仍走全局 QSS 的 role 规则）；主题切换时由
+        CalendarPanel.reload_theme 重新取值再刷一遍。
+        """
+        self._state_label.setStyleSheet(
+            "color: %s;" % DESIGN["guo_success" if self.drama.get("online") else "guo_warning"])
+        for label in self._meta_labels:
+            label.setStyleSheet("color: %s;" % DESIGN["guo_muted"])
 
     def set_pixmap(self, pixmap):
         self.cover.set_pixmap(pixmap)
@@ -859,6 +897,7 @@ class CalendarPanel(QWidget):
             chip.update()
         for row in self._rows:
             row.cover.update()
+            row._apply_state_colors()
             row.update()
         self.date_area.viewport().update()
         self.rows_area.viewport().update()
