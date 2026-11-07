@@ -8,7 +8,7 @@ import threading
 import time
 import traceback
 
-from PyQt5.QtCore import QLockFile, Qt, QTimer, QTranslator, QLibraryInfo, pyqtSignal
+from PyQt5.QtCore import QEvent, QLockFile, QSettings, Qt, QTimer, QTranslator, QLibraryInfo, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PyQt5.QtWidgets import (QAbstractSpinBox, QAction, QApplication, QCheckBox, QComboBox, QFileDialog,
                              QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
@@ -35,12 +35,86 @@ from .ui import build_stylesheet
 from .watch import WatchPanel
 from .watchstore import WatchStore, season_number
 from .widgets import CoverGrid, CoverLoader, EpisodeList, SummaryView
+from .widgets_guo import SourceSwitchPopup
 
 APP_NAME = "真果鉴"
 GENRES = [("", "全部"), ("short_play", "真人剧"), ("comic_series", "漫剧"), ("ai_series", "AI剧")]
 # 下一集预热最多留两份（核心每集上限 4MB，纯内存，不写磁盘）；
 # 停止播放、换剧、过期或退出应用时都会释放对应会话。
 PRELOAD_LIMIT = 2
+
+# ---------------------------------------------------------------- M1 站源上下文
+# 站源清单优先走 core_client.list_sources()（F1 并行新增）；拿不到时回退下面这张
+# 12 展示源（14 个内部 id，黄果三变体拆开列）硬编码表，implemented 标记见
+# research/source-map.md ①：韩小圈/鬼片/禁果短剧/禁果/黑桃 本地无 provider。
+DEFAULT_SOURCE = "hongguo"
+FALLBACK_SOURCES = (
+    ("hongguo", "红果", True),
+    ("hanxiaoquan", "韩小圈", False),
+    ("guipian", "鬼片", False),
+    ("sorani", "青空", True),
+    ("huangdou", "黄豆", True),
+    ("huangju", "剧果", True),
+    ("yeguo", "野果", True),
+    ("dsd", "帝果", True),
+    ("jinguoduanju", "禁果短剧", False),
+    ("jinguo", "禁果", False),
+    ("heitao", "黑桃", False),
+    ("huangguo-video", "黄果·视频", True),
+    ("huangguoai", "黄果·AI", True),
+    ("cloudfront", "黄果·旧版", True),
+)
+
+# org/app 与 player.py 的 QSettings 约定保持一致，站源开关(S1)等键互通。
+SETTINGS_ORG = "zhenguojian"
+SETTINGS_APP = "zhenguojian"
+RECENT_KEY = "search/recent"            # JSON: {slug: [关键词, ...]}，每源最多 RECENT_LIMIT 条
+SOURCE_CURRENT_KEY = "source/current"   # 上次使用的站源，读不到时回 DEFAULT_SOURCE
+RECENT_LIMIT = 10
+
+# P1c：侧栏 quality_box 的四个位置 ↔ PlayerPane 的清晰度 slug（顺序与
+# ["自动","1080P","720P","540P"] 一致，数值映射由 player.quality_level 提供）。
+QUALITY_INDEX_SLUGS = ("auto", "1080p", "720p", "540p")
+
+
+def _app_settings():
+    return QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+
+def _recent_map():
+    """M1c：读取 {slug: [关键词]}；QSettings 可能直接回 dict 或 JSON 串，坏数据当空。"""
+    raw = _app_settings().value(RECENT_KEY, "") or ""
+    if isinstance(raw, dict):
+        data = raw
+    else:
+        try:
+            data = json.loads(str(raw))
+        except (ValueError, TypeError):
+            return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for slug, words in data.items():
+        if isinstance(words, list):
+            cleaned = [str(w).strip() for w in words if str(w).strip()]
+            if cleaned:
+                out[str(slug)] = cleaned[:RECENT_LIMIT]
+    return out
+
+
+def _record_recent(slug, keyword):
+    """M1c：关键词去重后置顶写入当前站源，只保留最近 RECENT_LIMIT 条。"""
+    keyword = str(keyword or "").strip()
+    if not keyword or not slug:
+        return
+    data = _recent_map()
+    words = [w for w in data.get(slug, []) if w != keyword]
+    words.insert(0, keyword)
+    data[slug] = words[:RECENT_LIMIT]
+    try:
+        _app_settings().setValue(RECENT_KEY, json.dumps(data, ensure_ascii=False))
+    except Exception:
+        pass  # 最近搜索是锦上添花，写失败不能影响搜索本身
 
 
 class Poster(QFrame):
@@ -552,6 +626,13 @@ class MainWindow(QMainWindow):
         self._next_season_prompted = set()
         self._search_pending = ""
         self._suggest_token = 0
+        # M1：current_source 是搜索与目录请求的唯一站源。剧卡自带的 source
+        # （打开详情、查季列表用）不受它影响，这里只管"主动检索"的范围。
+        self.current_source = self._restore_current_source()
+        self._sources = self._fallback_sources()
+        # M1e：设置页懒加载状态（S1 的 settings_panel 并行开发中）
+        self._settings_panel = None
+        self._settings_tried = False
 
         self.setWindowTitle("%s · 红果短剧下载器" % APP_NAME)
         self.resize(1180, 780)
@@ -573,7 +654,15 @@ class MainWindow(QMainWindow):
         self.downloads_page = self._build_downloads()
         self.tabs.addTab(self.downloads_page, "下载与合并")
         self.tabs.addTab(self._build_calendar(), "新剧预约")
+        self.settings_page = QWidget()  # M1e：首次进入才挂 SettingsPanel，失败留占位
+        self.tabs.addTab(self.settings_page, "设置")
         self.tabs.blockSignals(False)
+        # 视觉壳微调（只动 main.py 侧，不改 ui.py）：10 个页签不再平铺拉宽，
+        # 放不下时出滚动箭头；guoRole 留给后续 ui.py 主题迭代做样式钩子。
+        self.tabs.setProperty("guoRole", "mainTabs")
+        self.tabs.tabBar().setExpanding(False)
+        self.tabs.tabBar().setUsesScrollButtons(True)
+        self.tabs.tabBar().setCursor(Qt.PointingHandCursor)
         self.setCentralWidget(self.tabs)
         # 建页签时信号是屏蔽的，currentChanged 一次都没发：剧库页在首屏，
         # 榜单得自己起一次加载，否则左边整列是空的。
@@ -796,12 +885,169 @@ class MainWindow(QMainWindow):
         self.browse_panel.searchRequested.connect(self._search_from_browse)
         self.browse_panel.statusMessage.connect(
             lambda text: self.statusBar().showMessage(text, 6000))
-        return self.browse_panel
+        # M1：站源切换入口。browse_panel.py 归 C1 所有，这里只在外层加一条
+        # 顶部薄条放 SourceSwitchPopup，不改动面板本身。
+        page = QWidget()
+        page.setProperty("guoRole", "browseShell")
+        strip = QHBoxLayout()
+        strip.setContentsMargins(14, 8, 14, 0)
+        hint = QLabel("切换站源决定找剧与搜索的检索范围")
+        hint.setProperty("role", "hint")
+        self.source_switch = SourceSwitchPopup()
+        self.source_switch.source_selected.connect(self._on_source_selected)
+        self.source_switch.source_toggled.connect(self._on_source_toggled)
+        strip.addWidget(hint)
+        strip.addStretch(1)
+        strip.addWidget(self.source_switch)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addLayout(strip)
+        layout.addWidget(self.browse_panel, 1)
+        self._apply_sources_to_switch()
+        return page
 
     def _search_from_browse(self, query):
         self.tabs.setCurrentWidget(self.search_page)
         self.search_edit.setText(query)
         self._run_search()
+
+    # ------------------------------------------------------------ M1 站源上下文
+    def _fallback_sources(self):
+        return [{"slug": slug, "name": name, "implemented": ok}
+                for slug, name, ok in FALLBACK_SOURCES]
+
+    def _restore_current_source(self):
+        """M1：上次选择的站源要落得下来；只认已接入的源，坏值一律回默认。"""
+        stored = str(_app_settings().value(SOURCE_CURRENT_KEY, "") or "")
+        known = {slug for slug, _name, ok in FALLBACK_SOURCES if ok}
+        return stored if stored in known else DEFAULT_SOURCE
+
+    def _apply_sources_to_switch(self):
+        """把当前清单灌进弹层；F1 的 list_sources 到位后异步替换硬编码表。"""
+        self.source_switch.set_sources(self._sources)
+        self.source_switch.set_current(self.current_source)
+        if not hasattr(self._core, "list_sources"):
+            return  # F1 尚未提供：回退 12 源展示表已经够用
+        def work():
+            return self._core.list_sources()
+
+        def done(result):
+            entries = self._normalise_source_list(result)
+            if not entries:
+                return
+            self._sources = entries
+            self.source_switch.set_sources(entries)
+            self.source_switch.set_current(self.current_source)
+        # 拉取失败保持静默：回退表可用，不该每次启动都打扰用户
+        self._runner.run(work, on_success=done)
+
+    @staticmethod
+    def _normalise_source_list(payload):
+        """兼容 F1 list_sources 可能的几种形状：list 或 {"sources"/"items":[...]}，
+        字段名 slug/Slug/id、name/displayName/…；给了 enabled 才在弹层出复选框。"""
+        if isinstance(payload, dict):
+            payload = payload.get("sources") or payload.get("items") or []
+        if not isinstance(payload, list):
+            return []
+        names = {slug: name for slug, name, _ok in FALLBACK_SOURCES}
+        entries = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or item.get("Slug") or item.get("id") or "").strip()
+            if not slug:
+                continue
+            name = str(item.get("name") or item.get("displayName") or item.get("DisplayName")
+                       or item.get("label") or names.get(slug) or slug)
+            entry = {"slug": slug, "name": name, "implemented": True}
+            for key in ("enabled", "Enabled"):
+                if isinstance(item.get(key), bool):
+                    entry["enabled"] = item[key]
+                    break
+            entries.append(entry)
+        return entries
+
+    def _source_implemented(self, slug):
+        for entry in self._sources:
+            if entry.get("slug") == slug:
+                return bool(entry.get("implemented", True))
+        return False
+
+    def _source_name(self, slug):
+        if hasattr(self, "source_switch"):
+            return self.source_switch.name_of(slug)
+        return slug
+
+    def _on_source_selected(self, slug):
+        if not slug or slug == self.current_source:
+            return
+        if not self._source_implemented(slug):
+            # 本地无 provider（Q1–Q4 移植进行中）：拒绝切换，把按钮拉回当前源。
+            self.statusBar().showMessage(
+                "「%s」尚未接入，暂不可切换" % self._source_name(slug), 5000)
+            self.source_switch.set_current(self.current_source)
+            return
+        self.current_source = slug
+        try:
+            _app_settings().setValue(SOURCE_CURRENT_KEY, slug)
+        except Exception:
+            pass
+        self.source_switch.set_current(slug)
+        self._apply_source_to_search_bar()
+        # C1 并行提供 browse_panel.set_source(slug)：有就让它自己刷新找剧页；
+        # 还没有时只有搜索范围生效，不算失败。
+        setter = getattr(self.browse_panel, "set_source", None)
+        if callable(setter):
+            try:
+                setter(slug)
+            except Exception as exc:
+                self.statusBar().showMessage("找剧页刷新失败：%s" % exc, 6000)
+        self.statusBar().showMessage(
+            "当前站源：%s（搜索范围已同步）" % self._source_name(slug), 4000)
+
+    def _on_source_toggled(self, slug, enabled):
+        setter = getattr(self._core, "set_source_enabled", None)
+        if not callable(setter):
+            self.statusBar().showMessage(
+                "本地核心尚未提供站源开关，待 F1 基座落地后可用", 6000)
+            return
+        def work():
+            return setter(slug, bool(enabled))
+        self._runner.run(work, on_error=lambda msg: self.statusBar().showMessage(
+            "站源开关失败：%s" % msg, 6000))
+
+    def _apply_source_to_search_bar(self):
+        name = self._source_name(self.current_source)
+        if hasattr(self, "search_edit"):
+            self.search_edit.setPlaceholderText(
+                "输入剧名、演员或题材（仅搜索 %s），回车开始搜索" % name)
+
+    # ---------------------------------------------------------------- M1e 设置页
+    def _ensure_settings_panel(self):
+        """M1e：首次进入「设置」才 import S1 的 settings_panel，失败留占位不崩。"""
+        if self._settings_panel is not None or self._settings_tried:
+            return
+        self._settings_tried = True
+        widget = None
+        try:
+            from .settings_panel import SettingsPanel
+            try:
+                widget = SettingsPanel()
+            except TypeError:
+                widget = SettingsPanel(self._core)  # S1 若要求传 core 的兜底
+        except Exception:
+            widget = None
+        if widget is None or not isinstance(widget, QWidget):
+            widget = QLabel("设置面板开发中")
+            widget.setAlignment(Qt.AlignCenter)
+            widget.setProperty("role", "hint")
+        self._settings_panel = widget
+        layout = self.settings_page.layout()
+        if layout is None:
+            layout = QVBoxLayout(self.settings_page)
+            layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(widget)
 
     # ---------------------------------------------------------------- library
     def _build_library(self):
@@ -996,7 +1242,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         bar = QHBoxLayout()
         self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText("输入剧名、演员或题材，回车开始搜索")
+        self._apply_source_to_search_bar()
         self.search_edit.returnPressed.connect(lambda: self._run_search())
         self.search_button = QPushButton("搜索")
         self.search_button.setProperty("role", "accent")
@@ -1024,14 +1270,55 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.search_grid, 1)
 
         self.search_edit.textEdited.connect(self._on_search_typed)
+        # M1c：聚焦空搜索框时展示当前站源的最近搜索
+        self.search_edit.installEventFilter(self)
         return page
+
+    def eventFilter(self, obj, event):
+        if (event.type() == QEvent.FocusIn
+                and obj is getattr(self, "search_edit", None)
+                and not self.search_edit.text().strip()):
+            self._show_recent_searches("")
+        return super().eventFilter(obj, event)
+
+    def _show_recent_searches(self, filter_text=""):
+        """M1c：最近搜索下拉。空输入展示全量（带分组头），输入中只按前缀/子串过滤。"""
+        words = self._recent_for_current()
+        if filter_text:
+            lowered = filter_text.lower()
+            words = [w for w in words if lowered != w.lower() and lowered in w.lower()]
+        self.suggest_box.clear()
+        if not words:
+            self.suggest_box.setVisible(False)
+            return
+        if not filter_text:
+            header = QListWidgetItem("最近搜索")
+            header.setFlags(Qt.NoItemFlags)
+            self.suggest_box.addItem(header)
+        for word in words:
+            entry = QListWidgetItem(word)
+            entry.setData(Qt.UserRole, word)
+            self.suggest_box.addItem(entry)
+        self.suggest_box.setVisible(True)
+
+    def _recent_for_current(self):
+        try:
+            return list(_recent_map().get(self.current_source) or [])
+        except Exception:
+            return []
 
     def _on_search_typed(self, text):
         text = text.strip()
-        if len(text) < 1:
-            self.suggest_box.setVisible(False)
+        if not text:
+            # 清空输入：作废在途联想，回到最近搜索全量列表
+            self._suggest_token += 1
+            self._show_recent_searches("")
             return
         self._suggest_token += 1
+        if self.current_source != "hongguo":
+            # 联想词只有红果有（source-map ①）；其它站源输入时退化为过滤最近搜索。
+            self._show_recent_searches(text)
+            return
         token = self._suggest_token
 
         def work():
@@ -1051,16 +1338,22 @@ class MainWindow(QMainWindow):
                     entry = QListWidgetItem("%s    %s" % (label, kind) if kind else label)
                     entry.setData(Qt.UserRole, label)
                     self.suggest_box.addItem(entry)
-            self.suggest_box.setVisible(bool(items))
+            if items:
+                self.suggest_box.setVisible(True)
+            else:
+                # 联想词空/核心没起来时，退化成最近搜索，下拉不至于死寂
+                self._show_recent_searches(text)
 
         def error(_):
             if token == self._suggest_token:
-                self.suggest_box.setVisible(False)
+                self._show_recent_searches(text)
 
         self._runner.run(work, on_success=done, on_error=error)
 
     def _on_suggestion(self, item):
         label = item.data(Qt.UserRole) or item.text()
+        if not label or not (item.flags() & Qt.ItemIsEnabled):
+            return  # 「最近搜索」分组头不可点，防御一层
         self.search_edit.setText(label)
         self.suggest_box.setVisible(False)
         self._run_search()
@@ -1087,13 +1380,16 @@ class MainWindow(QMainWindow):
         self._search_token += 1
         token = self._search_token
         self._search_pending = query
+        # M1b/M1c：搜索永远限定在当前站源；发起即记入该源的最近搜索。
+        source = self.current_source
+        _record_recent(source, query)
         self.suggest_box.setVisible(False)
         self.tabs.setCurrentWidget(self.search_page)
         self.search_grid.set_loading("正在搜索…")
         self.search_grid.set_interactive(False)
 
         def work():
-            return self._core.catalog(query=query, page=1, lane="search")
+            return self._core.catalog(query=query, page=1, source=source, lane="search")
 
         def done(result):
             if token != self._search_token:
@@ -1302,6 +1598,12 @@ class MainWindow(QMainWindow):
         self.player.nextRequested.connect(lambda: self._play_neighbour(1))
         self.player.danmakuToggled.connect(self._on_danmaku_toggled)
         self.player.danmakuOpacityChanged.connect(self._on_danmaku_opacity)
+        # P1 接线：停靠栏选集/清晰度弹层/预热钩子（player.py 新 API，旧信号不动）。
+        self.player.episodeClicked.connect(self._on_episode_row)
+        self.player.qualityChanged.connect(self._on_player_quality)
+        hook = getattr(self.player, "set_preload_hook", None)
+        if callable(hook):
+            hook(self._on_player_preload_next)
 
         side = QVBoxLayout()
         # 侧栏自己的边距归零：外层页面已经有 10px 了，再留一层会让选集网格
@@ -1316,6 +1618,10 @@ class MainWindow(QMainWindow):
         self.quality_box = QComboBox()
         self.quality_box.addItems(["自动", "1080P", "720P", "540P"])
         self.quality_box.setMaximumWidth(120)
+        # P1c：覆盖层弹层和这个下拉是同一状态。起屏先对齐 PlayerPane 恢复的偏好，
+        # 对齐完了再接信号，免得建页时把默认值当成用户改动写回设置。
+        self._sync_quality_box_from_player()
+        self.quality_box.currentIndexChanged.connect(self._on_quality_box_changed)
         self.hwdec_box = QCheckBox("硬件解码")
         self.hwdec_box.setToolTip("用显卡解码，降低 1080P 的 CPU 占用；花屏或黑屏时请关闭（下一集生效）")
         self.hwdec_box.setChecked(tools.hwdec_enabled())
@@ -1393,6 +1699,51 @@ class MainWindow(QMainWindow):
         tools.set_hwdec_enabled(on)
         self.statusBar().showMessage(
             "硬件解码已%s，下一集生效" % ("开启" if on else "关闭"), 5000)
+
+    # -------------------------------------------------------------- P1 播放器接线
+    def _quality_index_for_slug(self, slug):
+        return QUALITY_INDEX_SLUGS.index(slug) if slug in QUALITY_INDEX_SLUGS else 0
+
+    def _sync_quality_box_from_player(self):
+        slug = self.player.quality_slug() if hasattr(self.player, "quality_slug") else "auto"
+        index = self._quality_index_for_slug(slug)
+        if self.quality_box.currentIndex() != index:
+            self.quality_box.blockSignals(True)
+            self.quality_box.setCurrentIndex(index)
+            self.quality_box.blockSignals(False)
+
+    def _on_player_quality(self, slug):
+        """P1c：覆盖层弹层改了清晰度 → 同步侧栏下拉，并把当前会话的记录画质改掉，
+        这样随后的预热/下一集都按新清晰度走（实际换源在下一集生效，与旧下拉框一致）。"""
+        level = int(PlayerPane.quality_level(slug))
+        if getattr(self, "_playback", None):
+            self._playback["quality"] = level
+        index = self._quality_index_for_slug(slug)
+        if self.quality_box.currentIndex() != index:
+            self.quality_box.blockSignals(True)
+            self.quality_box.setCurrentIndex(index)
+            self.quality_box.blockSignals(False)
+
+    def _on_quality_box_changed(self, index):
+        """侧栏下拉 → PlayerPane 的同一状态；set_quality_slug 只在真变化时发信号。"""
+        slug = QUALITY_INDEX_SLUGS[index] if 0 <= index < len(QUALITY_INDEX_SLUGS) else "auto"
+        setter = getattr(self.player, "set_quality_slug", None)
+        if callable(setter):
+            setter(slug)
+
+    def _on_player_preload_next(self, next_index):
+        """P1e：停靠栏要求预热第 next_index（1-based）集。只接受「当前播放集的下一集」，
+        其余情况交给 play_episode 自己的 _schedule_preload，避免切集途中预热错目标。"""
+        playback = getattr(self, "_playback", None)
+        if not playback or playback.get("local_path"):
+            return
+        try:
+            position = int(playback.get("position", 0) or 0)
+        except (TypeError, ValueError):
+            return
+        if int(next_index) != position + 2:
+            return
+        self._preload_next(self._play_request)
 
     # ----------------------------------------------------------------- danmaku
     def _toggle_danmaku_by_keys(self):
@@ -1747,6 +2098,12 @@ class MainWindow(QMainWindow):
         request = self._play_request
         self._playback = {"drama": drama, "position": position, "routes": 0, "session": None,
                           "chapters": chapters, "resume": float(resume or 0.0)}
+        # 画质先定下来：P1 停靠栏 set_current_episode 会在播放中立刻钩预热，
+        # 晚于这里就只能按「自动」算 key，和 _take_preload 对不上。
+        if quality is None:
+            index = self.quality_box.currentIndex()
+            quality = {0: 0, 1: 1080, 2: 720, 3: 540}.get(index, 0)
+        self._playback["quality"] = int(quality or 0)
         self._watch_last_save = time.time()
         # 同一部剧的选集只铺一次；换集只是挪一下「正在播放」的高亮
         fingerprint = (drama.get("id"), len(chapters))
@@ -1755,17 +2112,20 @@ class MainWindow(QMainWindow):
             self.episode_list.set_chapters(chapters)
             self.episode_list.set_downloaded(library.downloaded_episodes(drama.get("id")))
             self.episode_list.set_watched(position, 0.0)
+            # P1a：同一份分集喂播放页停靠栏（chapters 是 dict，带 index，可直接吃）
+            dock_setter = getattr(self.player, "set_episodes", None)
+            if callable(dock_setter):
+                dock_setter(list(chapters))
         self.episode_list.set_current(position)
+        cur_setter = getattr(self.player, "set_current_episode", None)
+        if callable(cur_setter):
+            cur_setter(position)
         self.player.set_neighbours(position > 0, position + 1 < len(chapters))
         # 这里马上要开新的一集：清掉「切走时替用户按的暂停」，免得回到播放页时
         # 去继续那个正在被替换掉的旧会话
         self._auto_paused = False
         self.tabs.setCurrentWidget(self.player_page)
         self.play_title.setText("正在解析 %s 第 %d 集…" % (drama.get("title", ""), position + 1))
-        if quality is None:
-            index = self.quality_box.currentIndex()
-            quality = {0: 0, 1: 1080, 2: 720, 3: 540}.get(index, 0)
-        self._playback["quality"] = int(quality or 0)
 
         # 这一集如果已经预热过，直接播它：省掉解析往返和首段下载等待。
         warmed = self._take_preload(drama, position, quality)
@@ -2159,6 +2519,9 @@ class MainWindow(QMainWindow):
         # look like the previous drama's chapters are still selectable.
         self._player_episodes_for = None
         self.episode_list.set_chapters([])
+        dock_setter = getattr(self.player, "set_episodes", None)
+        if callable(dock_setter):
+            dock_setter([])   # P1a：本地文件没有分集概念，停靠栏跟着清空
         self.player.set_neighbours(False, False)
         self.play_title.setText("本地播放 %s" % os.path.basename(path))
         self.player.play(path, headers={}, decryption_key=decryption_key or "",
@@ -2285,6 +2648,8 @@ class MainWindow(QMainWindow):
             self.follow_panel.refresh()      # 页签可见了才去拉海报
         elif current is self.history_panel:
             self.history_panel.refresh()
+        elif current is self.settings_page:
+            self._ensure_settings_panel()
 
     def _pause_in_background(self):
         """切到别的页签就暂停，不用用户先手动暂停再走。"""
@@ -2349,6 +2714,13 @@ class MainWindow(QMainWindow):
         self.detail.shutdown()
         self.grid.shutdown()
         self.browse_panel.shutdown()
+        # S1 的面板可能自带线程/加载器；约定同名 shutdown，没有就算了。
+        panel = getattr(self, "_settings_panel", None)
+        if panel is not None and hasattr(panel, "shutdown"):
+            try:
+                panel.shutdown()
+            except Exception:
+                pass
         self._covers.stop()
         if self._tray is not None:
             self._tray.hide()
