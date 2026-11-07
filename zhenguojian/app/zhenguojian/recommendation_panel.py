@@ -37,6 +37,8 @@ class RecommendationPanel(QWidget):
         self.list.set_dual_badges(True)
         self.list.set_cover_loader(covers, request_covers)
         self.list.dramaActivated.connect(self.dramaActivated.emit)
+        self.list.set_refresh_enabled(True)
+        self.list.refreshRequested.connect(self._refresh_top)
         self._scroll_loader = ScrollLoader(self.list, self._load_more, self._request_metadata)
         self.status = QLabel("等待加载")
         self.status.setProperty("role", "hint")
@@ -45,10 +47,13 @@ class RecommendationPanel(QWidget):
         self.retry_button.clicked.connect(self._retry)
         self.retry_button.hide()
         footer = QHBoxLayout()
+        footer.setContentsMargins(4, 0, 4, 0)
+        footer.setSpacing(8)
         footer.addWidget(self.status, 1)
         footer.addWidget(self.retry_button)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(8)
         layout.addWidget(self.list, 1)
         layout.addLayout(footer)
 
@@ -159,6 +164,10 @@ class RecommendationPanel(QWidget):
         if self._retry_request:
             category, force, more, replace = self._retry_request
             self.load(category, force=force, more=more, replace=replace)
+
+    def _refresh_top(self):
+        """墙顶钉住刷新按钮：强制重刷当前分类（不改变任何既有加载路径）。"""
+        self.load(self._category or "", force=True)
 
     def _sync_status(self):
         tail = "下滑继续浏览" if self.has_more() else "已全部加载"
