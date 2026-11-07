@@ -590,7 +590,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao || source == providerSlugGuipian || source == providerSlugHanxiaoquan) {
+	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao || source == providerSlugGuipian || source == providerSlugHanxiaoquan || source == sourceHuangguoAI) {
 		var items []Drama
 		var more bool
 		var err error
@@ -607,6 +607,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			items, more, err = d.searchGuipian(ctx, page, query)
 		case providerSlugHanxiaoquan:
 			items, more, err = d.searchHanxiaoquan(ctx, page, query)
+		case sourceHuangguoAI:
+			items, more, err = d.searchHuangguoAI(ctx, page, query)
 		default:
 			items, more, err = d.fetchJinguoCatalogPage(ctx, page, "", query)
 		}

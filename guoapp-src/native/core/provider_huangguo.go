@@ -35,9 +35,10 @@ const (
 )
 
 var (
-	huangguoAIBaseURL     = "https://huangguoai.com"
-	huangguoAIBaseMirrors = []string{"https://huangguoai.com", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc", "https://thu.agdkczeyx.cc"}
-	huangguoVideoBaseURL  = "https://huangguo.video"
+	huangguoAIBaseURL       = "https://huangguoai.com"
+	huangguoAIBaseMirrors   = []string{"https://huangguoai.com", "https://thu.lbvrhyir.cc", "https://pku.xxbgwypx.cc", "https://ttvoij.ediayikma.cc", "https://thu.ediayikma.cc", "https://pku.ediayikma.cc", "https://fdu.ediayikma.cc", "https://thu.agdkczeyx.cc", "https://26d.gitiecgad.cc"}
+	huangguoAIMirrorDomains = []string{"lbvrhyir.cc", "xxbgwypx.cc", "ediayikma.cc", "agdkczeyx.cc"}
+	huangguoVideoBaseURL    = "https://huangguo.video"
 
 	huangguoAISlugs     = []string{"recommend", "newest", "ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai", "ranks/hot"}
 	huangguoAITypeNames = map[string]string{"recommend": "精选推荐", "newest": "最近上新", "ai-duanju": "AI成人短剧", "ai-manju": "AI成人漫剧", "ai-huanlian": "AI换脸", "ai-mogai": "AI魔改", "ranks/hot": "排行榜"}
@@ -231,6 +232,13 @@ func (d *Downloader) fetchHuangguoAIDetail(ctx context.Context, sourceID string)
 	if sourceID == "" {
 		return Drama{}, nil, fmt.Errorf("empty huangguoai sourceID")
 	}
+	// 对齐参照实现：详情优先走 edge/request JSON（/api/videos/{id}）；上下文取消直接返回，
+	// 其余失败（业务拒绝/整池失败，整池失败已置冷却）回退 HTML 抓取旧语义。
+	if drama, chapters, err := d.fetchHuangguoAIDetailJSON(ctx, sourceID); err == nil {
+		return drama, chapters, nil
+	} else if ctx.Err() != nil {
+		return Drama{}, nil, err
+	}
 	detailURL := strings.TrimRight(huangguoAIBaseURL, "/") + "/detail/" + url.PathEscape(sourceID) + "/"
 	body, err := d.fetchProviderText(ctx, detailURL, huangguoAIBaseURL+"/")
 	if err != nil {
@@ -324,6 +332,12 @@ func (d *Downloader) fetchHuangguoVideoDetail(ctx context.Context, sourceID stri
 }
 
 func (d *Downloader) fetchProviderText(ctx context.Context, rawURL, referer string) (string, error) {
+	// 黄果AI 对齐：/api/* GET 优先改走 edge/request 信封（见 provider_huangguoai_api.go）；
+	// 信封失败（非 ctx 取消）时回落到原 GET 直连语义（等同对齐前行为），整池失败会进入冷却。
+	// 其它来源与 HTML 路径行为不变。
+	if body, handled, err := d.huangguoAIAutoEnvelope(ctx, rawURL); handled && (err == nil || ctx.Err() != nil) {
+		return body, err
+	}
 	retries := d.cfg.Retries
 	if retries <= 0 {
 		retries = 3
@@ -480,7 +494,7 @@ func generatedHuangguoAIMirrors(seed string, n int) []string {
 			continue
 		}
 		seen[sub] = true
-		out = append(out, "https://"+sub+".ediayikma.cc")
+		out = append(out, "https://"+sub+"."+huangguoAIMirrorDomains[len(out)%len(huangguoAIMirrorDomains)])
 	}
 	return out
 }
@@ -1300,7 +1314,7 @@ func isProviderHTTPMediaURL(raw string) bool {
 func init() {
 	registerProviderSource(ProviderDef{
 		Slug: sourceHuangguoAI, DisplayName: "黄果 AI", SearchKind: providerSearchOnline,
-		CatalogKinds: []string{"ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai"},
+		CatalogKinds:     []string{"ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai"},
 		EnabledByDefault: true, Domains: []string{"huangguo", "huangguoai.com"}, Implemented: true,
 	})
 	registerProviderSource(ProviderDef{

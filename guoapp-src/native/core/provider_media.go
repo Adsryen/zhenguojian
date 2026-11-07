@@ -71,7 +71,8 @@ func providerSourceForURL(raw string) string {
 	}
 	host := strings.ToLower(parsed.Hostname())
 	switch {
-	case host == "huangguoai.com" || strings.HasSuffix(host, ".ediayikma.cc") || strings.HasSuffix(host, ".agdkczeyx.cc"):
+	case host == "huangguoai.com" || strings.HasSuffix(host, ".ediayikma.cc") || strings.HasSuffix(host, ".agdkczeyx.cc") ||
+		strings.HasSuffix(host, ".lbvrhyir.cc") || strings.HasSuffix(host, ".xxbgwypx.cc") || strings.HasSuffix(host, ".gitiecgad.cc"):
 		return sourceHuangguoAI
 	case host == "huangguo.video":
 		return sourceHuangguoVideo
@@ -207,7 +208,11 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 			pageURL = actual.(string)
 		}
 		if chapter.Source == sourceHuangguoAI {
-			media.URL = parseAIVideoURL(body, pageURL)
+			if resolved, ok := d.huangguoAIPlayURLAligned(ctx, task, chapter); ok {
+				media.URL = resolved
+			} else {
+				media.URL = parseAIVideoURL(body, pageURL)
+			}
 		} else {
 			media.URL = parseDataHLS(body, pageURL)
 		}
