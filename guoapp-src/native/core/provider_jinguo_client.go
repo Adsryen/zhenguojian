@@ -25,8 +25,8 @@ import (
 // provider_legacy family (shared encryptParam/decryptResponse/apiEnvelope are
 // reused unmodified); the AES protocol constants below are public site
 // protocol parameters lifted verbatim from the guoapp reference
-// (reference/guoapp/native/core/provider_jinguo_client.go:22-29) per the Q4
-// PRD (.trellis/tasks/11-07-q4-jinguo/prd.md), not runtime secrets.
+// (reference/guoapp/native/core/provider_jinguo_client.go:22-29); they are
+// public protocol parameters, not runtime secrets.
 
 const (
 	jinguoSessionFile = "jinguo-session.json"

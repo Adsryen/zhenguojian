@@ -15,7 +15,7 @@ package core
 // 会话文件 sorani-session.json 落在 cfg.dataDir，与 huangguo-session.json
 // （provider_legacy_session.go:114）同目录约定，凭据不进仓库。
 //
-// 所有权边界：本文件是 Q5 唯一可写模块，provider_sorani.go /
+// 所有权边界：本文件独立承载账号会话逻辑，provider_sorani.go /
 // provider_sorani_client.go 均未改动。因此：
 //   - 鉴权请求由 soraniAuthCall 自行构造（与 client.go 的 get 同一套安全约束）；
 //   - 会话状态不落 soraniAPIClient 字段，改为「磁盘文件即状态」，
