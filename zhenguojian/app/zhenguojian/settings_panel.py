@@ -7,7 +7,8 @@
     bind_core(client)                          # 可选：启动后显式注入 CoreClient
 
 core 解析顺序：构造参数 core → 模块级 bind_core → 沿 parent 链探测
-属性 ``_core`` / ``core``（需具备 list_sources 或 set_source_enabled）。
+属性 ``_core`` / ``core``（需具备 list_sources / set_source_enabled /
+sorani_account 任一；T1 站源账号行只依赖 sorani_account）。
 全部环节 hasattr/try 保护，F1（core_client.py 并行新增
 list_sources/set_source_enabled）未就绪时自动走内置回退，不抛错。
 
@@ -26,12 +27,14 @@ list_sources/set_source_enabled）未就绪时自动走内置回退，不抛错�
 import json
 import os
 
-from PyQt5.QtCore import QEvent, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import tools, ui
+from .sorani_login import SoraniAccountDialog
+from .tasks import TaskRunner
 
 # ---------------------------------------------------------------- 播放器约定
 # player.py 由 P1 并行开发：这里只消费常量与键名，绝不改动它。import 失败
@@ -295,6 +298,85 @@ class _SourceRow(QWidget):
         self.toggled.emit(self.slug, bool(checked))
 
 
+class _SoraniAccountRow(QWidget):
+    """站源账号行（T1）：青空登录态 + 登录/退出入口。
+
+    沿用 _SourceRow 的行结构（sourceRow hover + chip 状态色）；登录态由
+    面板异步查询后喂入 set_status，读取失败显示「未知」而非空白。"""
+
+    loginRequested = pyqtSignal()
+    logoutRequested = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setProperty("guoRole", "sourceRow")
+        self.setObjectName("s1_sorani_account")
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 8, 3)
+        lay.setSpacing(8)
+
+        self.name = QLabel("青空账号")
+        self.name.setProperty("guoRole", "sourceName")
+        lay.addWidget(self.name)
+        lay.addStretch(1)
+
+        self.chip = QLabel("未知")
+        self.chip.setProperty("guoRole", "chip")
+        self.chip.setProperty("guoStatus", "dev")
+        self.chip.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.chip)
+        lay.addSpacing(6)
+
+        self.login_btn = QPushButton("登录")
+        self.login_btn.setProperty("role", "primary")
+        self.login_btn.setCursor(Qt.PointingHandCursor)
+        self.login_btn.clicked.connect(lambda checked=False: self.loginRequested.emit())
+        lay.addWidget(self.login_btn)
+
+        self.logout_btn = QPushButton("退出登录")
+        self.logout_btn.setProperty("role", "danger")
+        self.logout_btn.setCursor(Qt.PointingHandCursor)
+        self.logout_btn.clicked.connect(lambda checked=False: self.logoutRequested.emit())
+        self.logout_btn.hide()
+        lay.addWidget(self.logout_btn)
+
+        self.setToolTip("青空次元剧集需登录播放；此处即「站源账号」入口。")
+
+    def enterEvent(self, event):
+        self._set_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._set_hover(False)
+        super().leaveEvent(event)
+
+    def _set_hover(self, on):
+        self.setProperty("hover", "true" if on else None)
+        _repolish(self)
+
+    def set_status(self, status, error=""):
+        """status = soraniAccount 返回 dict | None（None=未知）。"""
+        logged_in = False
+        if isinstance(status, dict) and status.get("loggedIn"):
+            account = str(status.get("name") or "").strip()
+            self.chip.setText("已登录：" + account if account else "已登录")
+            self.chip.setProperty("guoStatus", "ok")
+            logged_in = True
+        elif isinstance(status, dict):
+            self.chip.setText("未登录")
+            self.chip.setProperty("guoStatus", "unavailable")
+        else:
+            self.chip.setText("未知")
+            self.chip.setProperty("guoStatus", "dev")
+        _repolish(self.chip)
+        self.logout_btn.setVisible(logged_in)
+        tip = "青空次元剧集需登录播放；此处即「站源账号」入口。"
+        if error:
+            tip = "%s（%s）" % (tip, error)
+        self.setToolTip(tip)
+
+
 # ------------------------------------------------------------------ 设置面板
 class SettingsPanel(QWidget):
     sourceToggled = pyqtSignal(str, bool)
@@ -316,6 +398,10 @@ class SettingsPanel(QWidget):
         self._sources_mode = "staged"      # core | staged
         self._rows = {}                    # slug -> _SourceRow
         self._qss_sig = None
+        self._sorani_row = None            # 站源账号行（T1）
+        self._sorani_status = None         # 缓存登录态 dict | None=未知
+        self._sorani_queried = False       # 懒查只做一次
+        self._sorani_runner = TaskRunner(self)
         self._build_ui()
         self._populate_sources()
         self._load_playback()
@@ -436,7 +522,8 @@ class SettingsPanel(QWidget):
     def _resolve_core(self):
         def usable(c):
             return c is not None and (callable(getattr(c, "list_sources", None))
-                                      or callable(getattr(c, "set_source_enabled", None)))
+                                      or callable(getattr(c, "set_source_enabled", None))
+                                      or callable(getattr(c, "sorani_account", None)))
         for c in (self._explicit_core, _BOUND_CORE):
             if usable(c):
                 return c
@@ -551,6 +638,71 @@ class SettingsPanel(QWidget):
                 failure +
                 "数据来源：内置源表回退（本地核心 list_sources 未就绪，F1 开发中）；"
                 "切换暂存本地 QSettings " + SOURCES_STAGED_KEY + "。")
+
+        self._mount_sorani_row()
+
+    # ------------------------------------------------------- 站源账号（T1）
+    def _mount_sorani_row(self):
+        """在站源区尾部追加「青空账号」行，并安排一次性懒查登录态。
+
+        行清理由 _populate_sources 头部的统一循环负责（含上一轮的spacer与
+        本行），这里只负责追加。"""
+        self._sorani_row = _SoraniAccountRow()
+        self._sorani_row.loginRequested.connect(self._open_sorani_dialog)
+        self._sorani_row.logoutRequested.connect(self._sorani_logout)
+        self._sources_body.addSpacing(8)
+        self._sources_body.addWidget(self._sorani_row)
+        self._sorani_row.set_status(self._sorani_status)
+        self._schedule_sorani_status()
+
+    def _sorani_core(self):
+        core = self._core if callable(getattr(self._core, "sorani_account", None)) \
+            else self._resolve_core()
+        return core if callable(getattr(core, "sorani_account", None)) else None
+
+    def _schedule_sorani_status(self):
+        if self._sorani_queried:
+            return
+        self._sorani_queried = True
+        QTimer.singleShot(0, self._refresh_sorani_status)
+
+    def _refresh_sorani_status(self):
+        core = self._sorani_core()
+        if core is None:
+            self._on_sorani_status(None, "本地核心未就绪")
+            return
+        self._sorani_runner.run(
+            lambda: core.sorani_account(""),
+            on_success=lambda data: self._on_sorani_status(
+                data if isinstance(data, dict) else None),
+            on_error=lambda msg: self._on_sorani_status(None, "读取登录状态失败：%s" % msg))
+
+    def _on_sorani_status(self, status, error=""):
+        self._sorani_status = status if isinstance(status, dict) else None
+        if self._sorani_row is not None:
+            self._sorani_row.set_status(self._sorani_status, error)
+
+    def _sorani_logout(self):
+        core = self._sorani_core()
+        if core is None:
+            if self._sorani_row is not None:
+                self._sorani_row.set_status(self._sorani_status, "本地核心未就绪")
+            return
+        self._sorani_runner.run(
+            lambda: core.sorani_account("logout"),
+            on_success=lambda data: self._on_sorani_status(
+                data if isinstance(data, dict) else None),
+            on_error=lambda msg: self._on_sorani_status(
+                self._sorani_status, "退出登录失败：%s" % msg))
+
+    def make_sorani_dialog(self):
+        """构造登录对话框（不 exec，供测试与复用）；状态回传本行。"""
+        dlg = SoraniAccountDialog(self._sorani_core(), self)
+        dlg.status_changed.connect(self._on_sorani_status)
+        return dlg
+
+    def _open_sorani_dialog(self):
+        self.make_sorani_dialog().exec_()
 
     def _on_source_toggled(self, slug, checked):
         synced = False

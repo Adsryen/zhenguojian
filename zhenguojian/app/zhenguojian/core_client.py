@@ -376,6 +376,29 @@ class CoreClient:
         """开关某个站源；核心写入 data 目录 source_prefs.json 后立即生效。"""
         return self.call("setSourceEnabled", slug=slug, enabled=bool(enabled), timeout=15.0)
 
+    def sorani_account(self, command="", identifier="", password="", captcha_id="", track=None):
+        """青空次元账号（T1，行协议 soraniAccount / provider_sorani_account.go）。
+
+        command：""＝查询登录态 {"loggedIn","name"}；"captcha"＝取滑块验证
+        码；"login"＝提交登录（须带 identifier/password/captcha_id/track）；
+        "logout"＝清会话。
+
+        注意：登录入参必须嵌套在 ``account`` 键下——app_runtime.go 的
+        nativeInput 只读 ``input.Account``（tag ``json:"account"``），顶层
+        平铺会被静默丢掉、永远报「请输入用户名或邮箱」。
+        track 为 sorani_login.SliderCaptcha.solved 上报的 dict，字段名即
+        provider_sorani_account.go 的 json tag（x/y/type/t + 尺寸 + 起止毫秒），
+        原样走 json，不做任何加工。"""
+        payload = {"command": command or ""}
+        if (command or "") == "login":
+            payload["account"] = {
+                "identifier": identifier or "",
+                "password": password or "",
+                "captchaId": captcha_id or "",
+                "track": track or {},
+            }
+        return self.call("soraniAccount", timeout=60.0, **payload)
+
     def creator_profile(self, creator):
         return self.call("creatorProfile", creator=creator, timeout=45.0)
 
