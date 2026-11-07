@@ -77,6 +77,33 @@ DARK = {
     "rank1": "#ff7a45",        # 排行榜前三的名次色
     "rank2": "#ffc04d",
     "rank3": "#5ec2ff",
+    # ---- F2 guoapp 风格派生 token（guo_ 前缀，只增不改；两套主题必须同键）----
+    "guo_radius": "6px",          # guoapp 基础圆角
+    "guo_radius_lg": "12px",      # 海报卡 / 浮层大圆角
+    "guo_surface3": "#1c2130",    # guoapp 深一档悬停层（不动现有 surface3）
+    "guo_border": "#262c3a",      # guoapp 边框
+    "guo_accent": "#4a83ff",      # guoapp 蓝：选中 / 焦点 / 高亮
+    "guo_accent_hover": "#5f92ff",
+    "guo_accent_pressed": "#3b6ecf",
+    "guo_accent_soft": "#264a83ff",   # 15% accent（#AARRGGBB，QColor 不认 rgba()）
+    "guo_success": "#2ea043",
+    "guo_danger": "#e06c75",
+    "guo_warning": "#d29922",
+    "guo_text": "#d7dce5",
+    "guo_muted": "#8d97a8",
+    "guo_card_bg": "#141821",     # 海报卡本体底色
+    "guo_badge_bg": "#b3000000",  # 角标小 chip 的黑底（70% 黑）
+    "guo_scrim_top": "#00000000",    # 海报底部渐变：起（全透明）
+    "guo_scrim_bottom": "#cc0f1117", # 海报底部渐变：止（80% 深底）
+    "guo_blur_scrim": "#99000000",   # 模糊背景上的 60% 黑遮罩
+    "guo_player_scrim": "#cc0f1117", # 控制条浮层底（80% 深色）
+    "guo_vip_bg": "#3d3222",      # VIP chip 底
+    "guo_vip_fg": "#e6c07b",      # VIP chip 字
+    "guo_chip_bg": "#1c2130",     # 通用胶囊 chip（分组条 / 集按钮 / 站源按钮）
+    "guo_chip_hover": "#232a3b",
+    "guo_chip_pressed": "#1a2438",
+    "guo_shadow": "#66000000",    # 悬停上浮阴影色（40% 黑）
+    "guo_shadow_blur": 28,        # 悬停上浮阴影半径 px（几何值，非颜色）
 }
 
 LIGHT = {
@@ -141,6 +168,33 @@ LIGHT = {
     "rank1": "#ff7a45",
     "rank2": "#ffc04d",
     "rank3": "#5ec2ff",
+    # ---- F2 guoapp 风格派生 token（浅色对应值，与 DARK 同键）----
+    "guo_radius": "6px",
+    "guo_radius_lg": "12px",
+    "guo_surface3": "#e9edf5",
+    "guo_border": "#d3dae6",
+    "guo_accent": "#3a6fd8",
+    "guo_accent_hover": "#2f5fc0",
+    "guo_accent_pressed": "#274f9e",
+    "guo_accent_soft": "#263a6fd8",
+    "guo_success": "#1a7f37",
+    "guo_danger": "#d0565f",
+    "guo_warning": "#bf8700",
+    "guo_text": "#23283a",
+    "guo_muted": "#5f6878",
+    "guo_card_bg": "#ffffff",
+    "guo_badge_bg": "#b3ffffff",
+    "guo_scrim_top": "#00000000",
+    "guo_scrim_bottom": "#ccf5f5f8",
+    "guo_blur_scrim": "#99ffffff",
+    "guo_player_scrim": "#cc101114",  # 视频浮层两种主题都保持深色
+    "guo_vip_bg": "#f3e3c0",
+    "guo_vip_fg": "#8a6112",
+    "guo_chip_bg": "#eef1f7",
+    "guo_chip_hover": "#e4e8f2",
+    "guo_chip_pressed": "#d8deeb",
+    "guo_shadow": "#3320242e",
+    "guo_shadow_blur": 24,
 }
 
 PALETTES = {"dark": DARK, "light": LIGHT}
@@ -404,6 +458,93 @@ def build_stylesheet():
         " color: %(muted)s; border-color: %(button_border)s; }"
         "QPushButton[role=\"calendarReserve\"][reserved=\"true\"]:hover {"
         " color: %(danger)s; border-color: %(danger)s; background: %(danger_hover_bg)s; }"
+        # ==================== F2 guo- 公共控件样式（全新 guoRole 选择器，不影响既有页面） ====================
+        # 海报卡：normal / hover（边框高亮）/ pressed / selected（已看）/ disabled
+        "QWidget[guoRole=\"posterCard\"] { background: %(guo_card_bg)s; border: 1px solid %(guo_border)s;"
+        "  border-radius: %(guo_radius_lg)s; }"
+        "QWidget[guoRole=\"posterCard\"][hover=\"true\"] { border-color: %(guo_accent)s; }"
+        "QWidget[guoRole=\"posterCard\"][pressed=\"true\"] { border-color: %(guo_accent_pressed)s;"
+        "  background: %(guo_surface3)s; }"
+        "QWidget[guoRole=\"posterCard\"][selected=\"true\"] { border-color: %(guo_accent)s; }"
+        "QWidget[guoRole=\"posterCard\"]:disabled { border-color: %(border)s; background: %(surface2)s; }"
+        # 名次角标（榜单 1-10；前三走 rank1/2/3）/ 更新到 N 集 chip / VIP chip / 小黄点 / 通用 chip
+        "QLabel[guoRole=\"rankBadge\"] { background: %(guo_accent)s; color: %(on_accent)s;"
+        "  border-radius: %(guo_radius)s; font-size: 11px; font-weight: bold; padding: 1px 5px; }"
+        "QLabel[guoRole=\"rankBadge\"][rank=\"1\"] { background: %(rank1)s; }"
+        "QLabel[guoRole=\"rankBadge\"][rank=\"2\"] { background: %(rank2)s; }"
+        "QLabel[guoRole=\"rankBadge\"][rank=\"3\"] { background: %(rank3)s; }"
+        "QLabel[guoRole=\"updateBadge\"] { background: %(guo_badge_bg)s; color: %(guo_accent)s;"
+        "  border-radius: 9px; padding: 1px 7px; font-size: 11px; }"
+        "QLabel[guoRole=\"vipBadge\"] { background: %(guo_vip_bg)s; color: %(guo_vip_fg)s;"
+        "  border-radius: %(guo_radius)s; padding: 1px 5px; font-size: 11px; font-weight: bold; }"
+        "QLabel[guoRole=\"vipDot\"] { background: %(score)s; border: none; border-radius: 3px; }"
+        "QLabel[guoRole=\"chip\"] { background: %(guo_chip_bg)s; border: 1px solid %(guo_border)s;"
+        "  color: %(guo_muted)s; border-radius: 10px; padding: 2px 10px; font-size: 12px; }"
+        # 30 集分组条
+        "QPushButton[guoRole=\"groupTab\"] { background: %(guo_chip_bg)s; color: %(guo_muted)s;"
+        "  border: 1px solid %(guo_border)s; border-radius: 13px; padding: 3px 14px; font-size: 12px; }"
+        "QPushButton[guoRole=\"groupTab\"]:hover { background: %(guo_chip_hover)s; color: %(guo_text)s;"
+        "  border-color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"groupTab\"][hover=\"true\"] { background: %(guo_chip_hover)s; color: %(guo_text)s;"
+        "  border-color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"groupTab\"]:pressed { background: %(guo_chip_pressed)s; }"
+        "QPushButton[guoRole=\"groupTab\"][pressed=\"true\"] { background: %(guo_chip_pressed)s; }"
+        "QPushButton[guoRole=\"groupTab\"]:checked { background: %(guo_accent_soft)s; color: %(guo_accent)s;"
+        "  border-color: %(guo_accent)s; font-weight: bold; }"
+        "QPushButton[guoRole=\"groupTab\"]:disabled { background: %(surface2)s; color: %(disabled_text)s;"
+        "  border-color: %(border)s; }"
+        # 集按钮：current accent 高亮 / watched 置浅 / VIP 用上方小黄点；四态齐
+        "QPushButton[guoRole=\"episode\"] { background: %(guo_chip_bg)s; color: %(guo_text)s;"
+        "  border: 1px solid %(guo_border)s; border-radius: %(guo_radius)s; font-size: 12px; }"
+        "QPushButton[guoRole=\"episode\"]:hover { background: %(guo_chip_hover)s; border-color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"episode\"][hover=\"true\"] { background: %(guo_chip_hover)s; border-color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"episode\"]:pressed { background: %(guo_chip_pressed)s;"
+        "  border-color: %(guo_accent_pressed)s; }"
+        "QPushButton[guoRole=\"episode\"][pressed=\"true\"] { background: %(guo_chip_pressed)s;"
+        "  border-color: %(guo_accent_pressed)s; }"
+        "QPushButton[guoRole=\"episode\"][watched=\"true\"] { background: %(surface)s; color: %(guo_muted)s; }"
+        "QPushButton[guoRole=\"episode\"][current=\"true\"] { background: %(guo_accent)s; color: %(on_accent)s;"
+        "  border-color: %(guo_accent)s; font-weight: bold; }"
+        "QPushButton[guoRole=\"episode\"][current=\"true\"]:hover { background: %(guo_accent_hover)s; }"
+        "QPushButton[guoRole=\"episode\"][current=\"true\"]:pressed { background: %(guo_accent_pressed)s; }"
+        "QPushButton[guoRole=\"episode\"]:disabled { background: %(surface2)s; color: %(disabled_text)s;"
+        "  border-color: %(border)s; }"
+        # 分段记录头（分组列表小标题，muted）
+        "QLabel[guoRole=\"sectionHeader\"] { background: transparent; color: %(guo_muted)s;"
+        "  font-size: 12px; font-weight: bold; padding: 10px 2px 2px 2px; }"
+        # 站源切换下拉：按钮 + 深底菜单 + 行（hover 高亮，当前项 accent）
+        "QPushButton[guoRole=\"sourceSwitch\"] { background: %(guo_chip_bg)s; color: %(guo_text)s;"
+        "  border: 1px solid %(guo_border)s; border-radius: %(guo_radius)s; padding: 4px 10px; text-align: left; }"
+        "QPushButton[guoRole=\"sourceSwitch\"]:hover { border-color: %(guo_accent)s; background: %(guo_chip_hover)s; }"
+        "QPushButton[guoRole=\"sourceSwitch\"][hover=\"true\"] { border-color: %(guo_accent)s; background: %(guo_chip_hover)s; }"
+        "QPushButton[guoRole=\"sourceSwitch\"]:pressed { border-color: %(guo_accent)s; background: %(guo_chip_pressed)s; }"
+        "QPushButton[guoRole=\"sourceSwitch\"][pressed=\"true\"] { border-color: %(guo_accent)s; background: %(guo_chip_pressed)s; }"
+        "QPushButton[guoRole=\"sourceSwitch\"]:checked { border-color: %(guo_accent)s; background: %(guo_chip_pressed)s; }"
+        "QPushButton[guoRole=\"sourceSwitch\"]:disabled { background: %(surface2)s; color: %(disabled_text)s;"
+        "  border-color: %(border)s; }"
+        "QMenu[guoRole=\"sourceMenu\"] { background: %(guo_surface3)s; border: 1px solid %(guo_border)s;"
+        "  border-radius: %(guo_radius)s; padding: 4px; }"
+        "QMenu[guoRole=\"sourceMenu\"]::item { padding: 0; margin: 0; border-radius: %(guo_radius)s;"
+        "  background: transparent; }"
+        "QMenu[guoRole=\"sourceMenu\"]::item:hover, QMenu[guoRole=\"sourceMenu\"]::item:selected {"
+        "  background: transparent; }"
+        "QWidget[guoRole=\"sourceRow\"] { background: transparent; border-radius: %(guo_radius)s; }"
+        "QWidget[guoRole=\"sourceRow\"][hover=\"true\"] { background: %(guo_accent_soft)s; }"
+        "QLabel[guoRole=\"sourceName\"] { background: transparent; color: %(guo_text)s; padding: 6px 8px; }"
+        "QLabel[guoRole=\"sourceName\"][current=\"true\"] { color: %(guo_accent)s; font-weight: bold; }"
+        # 控制条浮层（压在画面区上的半透明圆角条）
+        "QWidget[guoRole=\"controlOverlay\"] { background: %(guo_player_scrim)s;"
+        "  border: 1px solid %(guo_border)s; border-radius: %(guo_radius_lg)s; }"
+        "QPushButton[guoRole=\"ctrlBtn\"] { background: transparent; border: 1px solid %(guo_border)s;"
+        "  color: %(guo_text)s; border-radius: %(guo_radius)s; padding: 4px 12px; }"
+        "QPushButton[guoRole=\"ctrlBtn\"]:hover { border-color: %(guo_accent)s; color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"ctrlBtn\"][hover=\"true\"] { border-color: %(guo_accent)s; color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"ctrlBtn\"]:pressed { background: %(guo_accent_soft)s; color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"ctrlBtn\"][pressed=\"true\"] { background: %(guo_accent_soft)s; color: %(guo_accent)s; }"
+        "QPushButton[guoRole=\"ctrlBtn\"]:disabled { color: %(disabled_text)s; border-color: %(border)s; }"
+        # 控件自建滚动区：透明容器，滚动条沿用全局段
+        "QScrollArea[guoRole=\"bare\"] { border: 0; background: transparent; }"
+        "QScrollArea[guoRole=\"bare\"] > QWidget > QWidget { background: transparent; }"
         # -------------------------------------------------------- tooltip
         "QToolTip { background: %(surface3)s; color: %(text)s; border: 1px solid %(button_border)s;"
         "  border-radius: %(radius)s; padding: 6px 8px; font-size: 12px; }"
