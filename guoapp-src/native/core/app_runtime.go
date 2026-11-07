@@ -590,14 +590,17 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && (source == sourceYeguo || source == sourceDSD) {
+	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo) {
 		var items []Drama
 		var more bool
 		var err error
-		if source == sourceYeguo {
+		switch source {
+		case sourceYeguo:
 			items, more, err = d.fetchYeguoCatalogPage(ctx, page, "", query)
-		} else {
+		case sourceDSD:
 			items, more, err = d.fetchDSDCatalogPage(ctx, page, "", query)
+		default:
+			items, more, err = d.fetchJinguoCatalogPage(ctx, page, "", query)
 		}
 		if err != nil {
 			return result, err
@@ -682,6 +685,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchDSDCatalogPage(ctx, page, category, "")
 	case sourceSorani:
 		items, result.HasMore, err = d.fetchSoraniCatalogPage(ctx, page, category, "")
+	case sourceJinguo:
+		items, result.HasMore, err = d.fetchJinguoCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -741,6 +746,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchDSDDetail(ctx, sourceID)
 	case sourceSorani:
 		raw, chapters, err = engine.downloader.fetchSoraniDetail(ctx, sourceID)
+	case sourceJinguo:
+		raw, chapters, err = engine.downloader.fetchJinguoDetail(ctx, sourceID)
 	default:
 		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
 	}

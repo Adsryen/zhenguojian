@@ -48,6 +48,8 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = d.cfg.DSDURL, dsdBaseURL
 	case sourceSorani:
 		configured, fallback = d.cfg.SoraniURL, soraniSiteBaseURL
+	case sourceJinguo:
+		configured, fallback = "", jinguoAPIHosts[0]
 	default:
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -131,6 +133,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	if chapter.Source == sourceSorani {
 		return d.resolveSoraniMedia(ctx, task)
+	}
+	if chapter.Source == sourceJinguo {
+		return d.resolveJinguoMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)

@@ -65,6 +65,8 @@ func validNativeCategory(source, category string) bool {
 		return webProviderNumericID.MatchString(category)
 	case sourceSorani:
 		return validSoraniCategory(category)
+	case sourceJinguo:
+		return validJinguoCategory(category)
 	}
 	return false
 }
@@ -127,6 +129,12 @@ func (engine *nativeEngine) nativeCategories(ctx context.Context, source string,
 		}
 	case sourceSorani:
 		all = append(all, d.fetchSoraniCategories()...)
+	case sourceJinguo:
+		var categories []nativeCategory
+		categories, err = d.fetchJinguoCategories(ctx)
+		if err == nil {
+			all = append(all, categories...)
+		}
 	default:
 		return nil, errors.New("请选择有效站源")
 	}
