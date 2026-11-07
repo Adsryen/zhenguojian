@@ -70,6 +70,10 @@ func nativeAuthorizeInput(input nativeInput) error {
 		if err := nativeSourceGateError(board.Source); err != nil {
 			return err
 		}
+	case "soraniAccount":
+		if err := nativeSourceGateError(sourceSorani); err != nil {
+			return err
+		}
 	case "catalog", "cached", "categories", "sourceStatus", "sourceJob", "cancelSourceJob":
 		if err := nativeSourceGateError(input.Source); err != nil {
 			return err
