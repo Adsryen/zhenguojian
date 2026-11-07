@@ -10,12 +10,15 @@ import threading
 import time
 from collections import deque
 
-from PyQt5.QtCore import QPoint, QRectF, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QCursor, QPainter, QPalette, QPen, QPixmap
-from PyQt5.QtWidgets import (QApplication, QFrame, QGridLayout, QHBoxLayout, QLabel,
-                             QPushButton, QSizePolicy, QSlider, QVBoxLayout, QWidget)
+from PyQt5.QtCore import QEvent, QPoint, QRectF, QSettings, Qt, QTimer, pyqtSignal
+from PyQt5.QtGui import QColor, QCursor, QKeySequence, QPainter, QPalette, QPen, QPixmap
+from PyQt5.QtWidgets import (QAbstractSlider, QAbstractSpinBox, QApplication, QComboBox,
+                             QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+                             QPlainTextEdit, QPushButton, QShortcut, QSizePolicy, QSlider,
+                             QTextEdit, QVBoxLayout, QWidget)
 
 from . import tools, ui
+from .widgets_guo import EpisodeGrid
 
 try:
     import pywintypes
@@ -28,6 +31,62 @@ except Exception:  # pragma: no cover - non-Windows fallback
 
 # 全屏下鼠标不动这么久，就把控制条收起来让画面干净
 CONTROLS_HIDE_DELAY = 5000
+
+# P1b：鼠标离开画面、也不在悬停控制条上这么久，控制条自动收起
+OVERLAY_HIDE_DELAY = 2000
+
+# P1a：右侧选集停靠栏的展开宽度 / 折叠后细条宽度
+DOCK_WIDTH = 300
+DOCK_RAIL_WIDTH = 36
+
+# P1d：QSettings 组织/应用名与键名（S1 设置面板消费同一批键，勿改名）
+SETTINGS_ORG = "zhenguojian"
+SETTINGS_APP = "zhenguojian"
+SPEED_KEY = "player/speed"             # float
+QUALITY_KEY = "player/quality"         # str slug
+DANMAKU_KEY = "player/danmaku_enabled" # bool
+
+# P1b/P1d：清晰度 slug → main 侧 resolve 用的 level（顺序与 quality_box 的
+# 自动/1080P/720P/540P 一致），V1 接线时直接查这张表。
+QUALITY_CHOICES = (("auto", "自动"), ("1080p", "1080P"),
+                   ("720p", "720P"), ("540p", "540P"))
+QUALITY_LABELS = dict(QUALITY_CHOICES)
+QUALITY_LEVELS = {"auto": 0, "1080p": 1080, "720p": 720, "540p": 540}
+
+# P1b：倍速常用档（参照 guoapp playback_preferences）
+SPEED_CHOICES = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0)
+
+
+def player_settings():
+    """P1d 的持久层句柄；测试里可整体改到临时 IniFormat 路径，代码不变。"""
+    return QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+
+def _as_bool(value, default=False):
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def load_player_prefs():
+    """读三枚播放偏好；键缺失时用现值播种（danmaku 取 tools 的配置）。"""
+    settings = player_settings()
+    try:
+        speed = float(settings.value(SPEED_KEY, 1.0))
+    except (TypeError, ValueError):
+        speed = 1.0
+    quality = str(settings.value(QUALITY_KEY, "auto") or "auto")
+    if quality not in QUALITY_LEVELS:
+        quality = "auto"
+    raw = settings.value(DANMAKU_KEY, None)
+    if raw is None:
+        danmaku = bool(tools.danmaku_enabled())
+        settings.setValue(DANMAKU_KEY, danmaku)
+    else:
+        danmaku = _as_bool(raw, True)
+    return {"speed": speed, "quality": quality, "danmaku_enabled": danmaku}
 
 
 # mpv.exe 静态链接了 Vulkan 加载器（libplacebo 的依赖），机器上没有这个 DLL 时
@@ -69,10 +128,17 @@ class VideoSurface(QWidget):
 
     def _notify(self):
         # 画面被放进叠加容器后，直接父级不再是播放器；向上找到真正的宿主。
+        # 宿主可以同时挂 activity（全屏控制条，旧行为）和 hover_activity
+        # （P1b 悬停控制条），两个都喂一次。
         widget = self.parent()
         while widget is not None:
-            if hasattr(widget, "activity"):
-                widget.activity()
+            activity = getattr(widget, "activity", None)
+            hover = getattr(widget, "hover_activity", None)
+            if callable(activity) or callable(hover):
+                if callable(activity):
+                    activity()
+                if callable(hover):
+                    hover()
                 return
             widget = widget.parent()
 
@@ -701,6 +767,181 @@ class MpvSession:
             shutdown()
         else:
             threading.Thread(target=shutdown, daemon=True).start()
+class ControlOverlay(QWidget):
+    """P1b：浮在画面底部的悬停控制条（清晰度 / 倍速 / 静音 / 音量）。
+
+    样式全部走 ui.py 已有的 guoRole 段（controlOverlay 半透明底、ctrlBtn
+    四态、全局 QSlider），组件内不出现任何颜色。已知问题：Windows 原生 mpv
+    子窗口会盖住 Qt 兄弟叠层（PRD Notes 预期，交 V1 复核）；选项弹层用
+    Qt.Popup 顶层窗，可以正常浮在画面上。
+    """
+
+    def __init__(self, pane, parent=None):
+        super().__init__(parent)
+        self._pane = pane
+        self.setObjectName("playerOverlay")
+        self.setProperty("guoRole", "controlOverlay")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 7, 14, 7)
+        row.setSpacing(8)
+
+        self.quality_button = QPushButton("自动")
+        self.quality_button.setProperty("guoRole", "ctrlBtn")
+        self.quality_button.setToolTip("清晰度（当前档点开可选）")
+        self.quality_button.setCursor(Qt.PointingHandCursor)
+        self.quality_button.clicked.connect(
+            lambda: pane.show_quality_popup(self.quality_button))
+
+        self.speed_button = QPushButton("1.0x")
+        self.speed_button.setProperty("guoRole", "ctrlBtn")
+        self.speed_button.setToolTip("倍速 0.5x–3.0x")
+        self.speed_button.setCursor(Qt.PointingHandCursor)
+        self.speed_button.clicked.connect(
+            lambda: pane.show_speed_popup(self.speed_button))
+
+        self.mute_button = QPushButton("静音")
+        self.mute_button.setProperty("guoRole", "ctrlBtn")
+        self.mute_button.setToolTip("静音 / 取消静音（M）")
+        self.mute_button.setCursor(Qt.PointingHandCursor)
+        self.mute_button.clicked.connect(pane.toggle_mute)
+
+        self.volume_slider = QSlider(Qt.Horizontal)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(100)
+        self.volume_slider.setSingleStep(5)
+        self.volume_slider.setPageStep(10)
+        self.volume_slider.setFixedWidth(140)
+        self.volume_slider.setToolTip("音量（↑↓ 每档 5）")
+        self.volume_slider.valueChanged.connect(pane.set_volume)
+
+        row.addWidget(self.quality_button)
+        row.addWidget(self.speed_button)
+        row.addStretch(1)
+        row.addWidget(self.mute_button)
+        row.addWidget(self.volume_slider)
+        self.hide()
+
+    def mouseMoveEvent(self, event):
+        # 覆盖条上的活动也算“鼠标还在”，别让收起计时把正在用的条子收掉
+        self._pane.hover_activity()
+        super().mouseMoveEvent(event)
+
+    def sync_geometry(self):
+        """贴画面区底部横一条；宽度随画面走。"""
+        stage = self.parentWidget()
+        if stage is None:
+            return
+        margin = 10
+        height = self.sizeHint().height()
+        width = max(10, stage.width() - 2 * margin)
+        self.setGeometry(margin, max(0, stage.height() - height - margin),
+                         width, height)
+
+
+class EpisodeDock(QWidget):
+    """P1a：右侧选集停靠栏（标题行 + EpisodeGrid），可折成一条细边。
+
+    分组页签 / 当前集高亮 / 已看淡化都由 EpisodeGrid 的 guoRole QSS 负责，
+    这里只管数据、折叠和把点击原样转发出去（信号带 1-based index）。
+    """
+
+    episode_selected = pyqtSignal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("episodeDock")
+        self._episodes = []
+        self._current_index = None
+        self._collapsed = True  # 没有数据前先收成细条，不挤占画面
+        self._auto_expanded = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(10, 10, 10, 10)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        self.title_label = QLabel("选集")
+        self.title_label.setProperty("guoRole", "sectionHeader")
+        header.addWidget(self.title_label)
+        header.addStretch(1)
+        self.collapse_button = QPushButton("→")  # U+2192: 折叠方向；⟩/⟨ 在 YaHei/DejaVu 均缺字形
+        self.collapse_button.setProperty("guoRole", "ctrlBtn")
+        self.collapse_button.setFixedSize(26, 26)
+        # ctrlBtn 全局 padding(12px 横向)会吃光 26px 宽的文字区；仅覆盖内边距，颜色仍走全局四态
+        self.collapse_button.setStyleSheet("padding: 2px 4px;")
+        self.collapse_button.setToolTip("收起选集栏")
+        self.collapse_button.setCursor(Qt.PointingHandCursor)
+        self.collapse_button.clicked.connect(self.toggle_collapsed)
+        header.addWidget(self.collapse_button)
+        outer.addLayout(header)
+
+        self.grid = EpisodeGrid(self)
+        self.grid.episode_clicked.connect(self.episode_selected)
+        outer.addWidget(self.grid, 1)
+
+        self._apply_collapsed()
+
+    # ------------------------------------------------------------------ 数据
+    def set_episodes(self, episodes):
+        self._episodes = [dict(ep) for ep in (episodes or []) if isinstance(ep, dict)]
+        for position, ep in enumerate(self._episodes):
+            ep.setdefault("index", position + 1)
+        self._push()
+        if self._episodes and not self._auto_expanded:
+            self._auto_expanded = True
+            self.set_collapsed(False)
+
+    def set_current(self, index):
+        """1-based 集号：改 current 标记、切组并滚到可见。"""
+        if index == self._current_index:
+            self.grid.scroll_to_current()
+            return
+        self._current_index = index
+        self._push()
+        self.grid.scroll_to_current()
+
+    def count(self):
+        return len(self._episodes)
+
+    def _push(self):
+        rows = []
+        for ep in self._episodes:
+            row = dict(ep)
+            row["current"] = (row.get("index") == self._current_index)
+            rows.append(row)
+        self.grid.set_episodes(rows)
+
+    # ---------------------------------------------------------------- 折叠
+    def toggle_collapsed(self):
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed):
+        self._collapsed = bool(collapsed)
+        self._apply_collapsed()
+
+    def is_collapsed(self):
+        return self._collapsed
+
+    def _apply_collapsed(self):
+        if self._collapsed:
+            self.title_label.hide()
+            self.grid.hide()
+            self.setFixedWidth(DOCK_RAIL_WIDTH)
+            self.collapse_button.setText("←")
+            self.collapse_button.setToolTip("展开选集栏")
+        else:
+            self.setFixedWidth(DOCK_WIDTH)
+            self.collapse_button.setText("→")
+            self.collapse_button.setToolTip("收起选集栏")
+            self.title_label.show()
+            self._push()
+            self.grid.show()
+
+
 class PlayerPane(QWidget):
     """Player surface plus transport controls for one episode."""
 
@@ -714,6 +955,11 @@ class PlayerPane(QWidget):
     nextRequested = pyqtSignal()
     danmakuToggled = pyqtSignal(bool)
     danmakuOpacityChanged = pyqtSignal(int)
+    # P1 新增（旧信号一律不动）：
+    episodeClicked = pyqtSignal(int)        # 停靠栏点击，0-based position
+    qualityChanged = pyqtSignal(str)        # 清晰度 slug（auto/1080p/720p/540p）
+    volumeChanged = pyqtSignal(int)         # 音量 0–100
+    preloadNextRequested = pyqtSignal(int)  # 下一集 1-based index（P1e 接线口）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -788,7 +1034,15 @@ class PlayerPane(QWidget):
         self.speed_box.clicked.connect(self.cycle_speed)
 
         # 弹幕开关：字幕轨由 attach_danmaku() 挂给 mpv，这里只切显隐。
-        self._danmaku_enabled = tools.danmaku_enabled()
+        # P1d：优先恢复 QSettings 的键；键缺失时 load_player_prefs 会用
+        # tools 现值播种，两边不一致时回写 tools（main 的抓取闸门读 tools）。
+        self._prefs = load_player_prefs()
+        self._danmaku_enabled = bool(self._prefs["danmaku_enabled"])
+        if self._danmaku_enabled != bool(tools.danmaku_enabled()):
+            try:
+                tools.set_danmaku_enabled(self._danmaku_enabled)
+            except Exception:
+                pass
         self._danmaku_loaded = False
         self._danmaku_path = ""
         self._danmaku_count = 0
@@ -842,13 +1096,59 @@ class PlayerPane(QWidget):
         stage.setRowStretch(0, 1)
         stage.setColumnStretch(0, 1)
 
-        layout = QVBoxLayout(self)
+        # P1a：左侧画面+控制条，右侧选集停靠栏（可折叠）。stage / controls
+        # 两个对象与 objectName 原样保留——main.py 的沉浸式全屏样式仍指着
+        # player.controls，外层旧侧栏不受影响。
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(6)
+        column.addWidget(self.stage, 1)
+        column.addWidget(self.controls)
+
+        self.dock = EpisodeDock(self)
+        self.dock.episode_selected.connect(self._on_episode_clicked)
+
+        layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(self.stage, 1)
-        layout.addWidget(self.controls)
-        self.set_speeds = [1.0, 1.25, 1.5, 2.0, 0.75]
-        self._speed_index = 0
+        layout.addLayout(column, 1)
+        layout.addWidget(self.dock)
+
+        # P1b：悬停在画面上时浮出的半透明控制条（清晰度/倍速/静音/音量）。
+        # stage 开了鼠标追踪：占位/海报上的移动会冒泡到 stage，由 eventFilter
+        # 转成 hover_activity；覆盖条自身也在 mouseMoveEvent 里续期。
+        self.overlay = ControlOverlay(self, self.stage)
+        self.stage.setMouseTracking(True)
+        self.stage.installEventFilter(self)
+        self._overlay_timer = QTimer(self)
+        self._overlay_timer.setInterval(OVERLAY_HIDE_DELAY)
+        self._overlay_timer.setSingleShot(True)
+        self._overlay_timer.timeout.connect(self._hide_overlay)
+
+        # P1c/P1d：倍速扩成常用档；三枚偏好键在构造期恢复（只读盘不写盘）。
+        self.set_speeds = list(SPEED_CHOICES)
+        self._speed_index = self._nearest_speed_index(self._prefs["speed"])
+        self._quality_slug = str(self._prefs["quality"])
+        self._volume = 100
+        self._muted = False
+        self._episode_position = None   # 0-based，与 main 的切集序号同语义
+        self._preload_requested_for = None
+        self._preload_hook = None
+        self._sync_speed_ui()
+        self._sync_quality_ui()
+        self._sync_volume_ui()
+
+        # P1c：只新增 main.py 未占用的按键——空格/←/→ 已由主窗口绑定走
+        # toggle_pause/seek_relative，这里再绑会双重触发；↑↓/F/M 是空位。
+        self._shortcuts = []
+        for key, handler in ((Qt.Key_Up, lambda: self.change_volume(5)),
+                             (Qt.Key_Down, lambda: self.change_volume(-5)),
+                             (Qt.Key_F, self.toggle_fullscreen),
+                             (Qt.Key_M, self.toggle_mute)):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.WindowShortcut)
+            shortcut.activated.connect(lambda h=handler: self._run_player_shortcut(h))
+            self._shortcuts.append(shortcut)
         self._fullscreen = False
         # 光标是否被我们藏起来了：全屏空闲时和控件一起收掉
         self._cursor_hidden = False
@@ -1188,6 +1488,14 @@ class PlayerPane(QWidget):
                               "width", "height")
         # Keep the speed chosen before this launch across episodes.
         self._session.set_property("speed", self.set_speeds[self._speed_index])
+        # P1c：音量/静音跟着悬停控制条的状态延续到新会话。
+        self._session.set_property("volume", int(self._volume))
+        if self._muted:
+            self._session.set_property("mute", True)
+        # P1c：音量/静音跟着悬停控制条的当前状态延续到新会话。
+        self._session.set_property("volume", int(self._volume))
+        if self._muted:
+            self._session.set_property("mute", True)
         if self._danmaku_loaded and self._danmaku_path:
             self._session.command(["sub-add", self._danmaku_path, "select", "弹幕"])
             self._session.set_property("sub-visibility",
@@ -1210,6 +1518,8 @@ class PlayerPane(QWidget):
                 if not self._pause_intent:
                     self._session.set_property("pause", False)
             self._set_status("播放中")
+            # P1e：本集真正加载出来了，才去预热下一集（内部按集去重）。
+            self._request_preload_next()
             if self._pending_resume > 1.0:
                 resume = self._pending_resume
                 self._pending_resume = 0.0
@@ -1287,11 +1597,8 @@ class PlayerPane(QWidget):
             self._session.command(["seek", seconds, "relative"])
 
     def cycle_speed(self):
-        self._speed_index = (self._speed_index + 1) % len(self.set_speeds)
-        speed = self.set_speeds[self._speed_index]
-        self.speed_box.setText(self._speed_text(speed))
-        if self.is_playing():
-            self._session.set_property("speed", speed)
+        # 底栏按钮的单点入口：全部落到 set_speed（吸附+应用+持久化同一处）。
+        self.set_speed(self.set_speeds[(self._speed_index + 1) % len(self.set_speeds)])
 
     @staticmethod
     def _speed_text(speed):
@@ -1299,6 +1606,248 @@ class PlayerPane(QWidget):
         if speed == int(speed):
             return "倍速 %.1fx" % speed
         return "倍速 %sx" % ("%.2f" % speed).rstrip("0")
+
+    # ------------------------------------------------------- P1b 悬停控制条
+    def eventFilter(self, watched, event):
+        # stage 上的鼠标移动（占位/海报/覆盖条空白区冒泡上来的）都算悬停
+        # 活动；stage 尺寸变了（折叠停靠栏、窗口缩放）要把覆盖条重新贴底。
+        if watched is self.stage:
+            etype = event.type()
+            if etype == QEvent.MouseMove:
+                self.hover_activity()
+            elif etype == QEvent.Resize:
+                if self.overlay.isVisible():
+                    self.overlay.sync_geometry()
+        return super().eventFilter(watched, event)
+
+    def hover_activity(self):
+        """画面内有鼠标活动：亮出悬停控制条，并开始/续期 2 秒收起倒计时。"""
+        self.overlay.sync_geometry()
+        self.overlay.show()
+        self.overlay.raise_()
+        self._overlay_timer.start()
+
+    def _hide_overlay(self):
+        if not self.overlay.isVisible():
+            return
+        # 鼠标还停在覆盖条上（正在拖音量、点清晰度）就先别收，重新计时
+        point = self.overlay.mapFromGlobal(QCursor.pos())
+        if self.overlay.rect().contains(point):
+            self._overlay_timer.start()
+            return
+        self.overlay.hide()
+
+    def show_quality_popup(self, anchor):
+        """清晰度浮层：现有 quality 通道（slug 存键 + 信号，V1 接 resolve）。"""
+        self._show_choice_popup(anchor, list(QUALITY_CHOICES),
+                                self._quality_slug, self.set_quality_slug)
+
+    def show_speed_popup(self, anchor):
+        self._show_choice_popup(anchor,
+                                [(value, self._speed_chip(value)) for value in self.set_speeds],
+                                self.speed(), self.set_speed)
+
+    def _show_choice_popup(self, anchor, entries, current_value, on_pick):
+        """竖排选项小浮层。和透明度条同路数：Qt.Popup 顶层窗，能浮在原生
+        视频窗口之上（Windows 下覆盖条本体可能被盖，见类注释，交 V1 复核）。"""
+        popup = QFrame(self, Qt.Popup)
+        popup.setProperty("role", "playerPopup")
+        popup.setAttribute(Qt.WA_StyledBackground, True)
+        popup.setAttribute(Qt.WA_DeleteOnClose, True)
+        body = QVBoxLayout(popup)
+        body.setContentsMargins(6, 6, 6, 6)
+        body.setSpacing(4)
+        for value, label in entries:
+            button = QPushButton(("✓ " if value == current_value else "") + str(label))
+            button.setProperty("guoRole", "ctrlBtn")
+            button.setCursor(Qt.PointingHandCursor)
+            button.setMinimumWidth(88)
+
+            def picked(event=None, value=value, popup=popup, on_pick=on_pick):
+                popup.close()
+                on_pick(value)
+
+            button.clicked.connect(picked)
+            body.addWidget(button)
+        popup.adjustSize()
+        top = anchor.mapToGlobal(QPoint(0, 0))
+        popup.move(top.x(), max(0, top.y() - popup.height() - 6))
+        popup.show()
+        popup.raise_()
+
+    # -------------------------------------------------------------- P1d 倍速
+    def speed(self):
+        return self.set_speeds[self._speed_index]
+
+    def _nearest_speed_index(self, value):
+        try:
+            target = float(value)
+        except (TypeError, ValueError):
+            return self.set_speeds.index(1.0)
+        return min(range(len(self.set_speeds)),
+                   key=lambda i: abs(self.set_speeds[i] - target))
+
+    def set_speed(self, value):
+        """倍速单点入口：吸附常用档、应用会话、写 QSettings（变更即存）。"""
+        index = self._nearest_speed_index(value)
+        speed = self.set_speeds[index]
+        self._speed_index = index
+        self._sync_speed_ui()
+        if self.is_playing():
+            self._session.set_property("speed", speed)
+        player_settings().setValue(SPEED_KEY, float(speed))
+        self.activity()
+
+    def _sync_speed_ui(self):
+        speed = self.set_speeds[self._speed_index]
+        self.speed_box.setText(self._speed_text(speed))
+        self.overlay.speed_button.setText(self._speed_chip(speed))
+
+    @staticmethod
+    def _speed_chip(speed):
+        if speed == int(speed):
+            return "%.1fx" % speed
+        return "%sx" % ("%.2f" % speed).rstrip("0")
+
+    # ------------------------------------------------------------ P1c 音量
+    def volume(self):
+        return int(self._volume)
+
+    def is_muted(self):
+        return bool(self._muted)
+
+    def set_volume(self, value):
+        """0–100（与 mpv volume 同标度）。无会话时只记状态——Mock 验证走这条。"""
+        try:
+            level = int(round(float(value)))
+        except (TypeError, ValueError):
+            return
+        level = max(0, min(100, level))
+        self._volume = level
+        if self.is_playing():
+            self._session.set_property("volume", level)
+            if level > 0 and self._muted:
+                self._muted = False
+                self._session.set_property("mute", False)
+        self._sync_volume_ui()
+        self.volumeChanged.emit(self._volume)
+
+    def change_volume(self, delta):
+        self.set_volume(self._volume + int(delta))
+
+    def toggle_mute(self):
+        self._muted = not self._muted
+        if self.is_playing():
+            self._session.set_property("mute", self._muted)
+        self._sync_volume_ui()
+        self.activity()
+
+    def _sync_volume_ui(self):
+        slider = self.overlay.volume_slider
+        if slider.value() != self._volume and not slider.isSliderDown():
+            slider.blockSignals(True)
+            slider.setValue(self._volume)
+            slider.blockSignals(False)
+        self.overlay.mute_button.setText("已静音" if self._muted else "静音")
+
+    # ---------------------------------------------------------- P1b 清晰度
+    def quality_slug(self):
+        return self._quality_slug
+
+    @staticmethod
+    def quality_level(slug):
+        """slug → resolve/preload 用的 int（自动/1080/720/540，同 main 顺序）。"""
+        return QUALITY_LEVELS.get(str(slug), 0)
+
+    def set_quality_slug(self, slug, persist=True):
+        slug = str(slug)
+        if slug not in QUALITY_LEVELS:
+            slug = "auto"
+        changed = slug != self._quality_slug
+        self._quality_slug = slug
+        self._sync_quality_ui()
+        if changed:
+            # 变更即存；S1/旧配置读的都是这三枚键，只读启动恢复用 load_player_prefs。
+            player_settings().setValue(QUALITY_KEY, slug)
+            self.qualityChanged.emit(slug)
+
+    def _sync_quality_ui(self):
+        self.overlay.quality_button.setText(
+            QUALITY_LABELS.get(self._quality_slug, "自动"))
+
+    # -------------------------------------------------------------- P1a 选集
+    def set_episodes(self, episodes):
+        """喂选集列表 list[dict{index?,title?,watched?,vip?}]，按播放顺序。"""
+        self.dock.set_episodes(list(episodes or []))
+
+    def set_current_episode(self, position):
+        """0-based 序号：高亮落位；正在播放时顺手预热下一集（P1e）。"""
+        try:
+            pos = int(position)
+        except (TypeError, ValueError):
+            return
+        if pos < 0:
+            return
+        self._episode_position = pos
+        self._preload_requested_for = None
+        self.dock.set_current(pos + 1)
+        if self.is_playing():
+            self._request_preload_next()
+
+    def current_episode(self):
+        return self._episode_position
+
+    def set_dock_collapsed(self, collapsed):
+        self.dock.set_collapsed(bool(collapsed))
+
+    def _on_episode_clicked(self, index):
+        # EpisodeGrid 回的是 1-based index；对外统一换 0-based position，
+        # V1 直接把它接到 play_episode(drama, position, ...) 上。
+        position = int(index) - 1
+        if position < 0:
+            return
+        self.set_current_episode(position)
+        self.episodeClicked.emit(position)
+
+    # ------------------------------------------------------------ P1e 预缓冲
+    def set_preload_hook(self, hook):
+        """V1 接线口：hook(next_index) 里调 core_client.preload（只调不改）。"""
+        self._preload_hook = hook if callable(hook) else None
+
+    def _request_preload_next(self):
+        position = self._episode_position
+        if position is None:
+            return
+        next_index = position + 2          # 1-based 的下一集 index
+        if next_index > self.dock.count():
+            return
+        if self._preload_requested_for == position:
+            return
+        self._preload_requested_for = position
+        hook = self._preload_hook
+        if hook is not None:
+            try:
+                hook(next_index)
+            except Exception:
+                pass                       # 预热失败绝不能打断当前播放
+        self.preloadNextRequested.emit(next_index)
+
+    # ------------------------------------------------------------ P1c 快捷键
+    def _run_player_shortcut(self, handler):
+        if self._player_shortcuts_allowed():
+            handler()
+
+    def _player_shortcuts_allowed(self):
+        """播放页可见、焦点不在文本/选项类控件才放行：弹幕输入框（ QLineEdit/
+        QPlainTextEdit，若将来出现）聚焦时，这些快捷键必须整体失效。空格/←→
+        由 main.py 窗口级绑定（自带同款守卫），这里不重复注册。"""
+        if not self.isVisible():
+            return False
+        focus = QApplication.focusWidget()
+        if isinstance(focus, (QLineEdit, QTextEdit, QPlainTextEdit, QComboBox,
+                              QAbstractSpinBox, QAbstractSlider)):
+            return False
+        return True
 
     # ----------------------------------------------------------------- danmaku
     def danmaku_enabled(self):
@@ -1339,6 +1888,9 @@ class PlayerPane(QWidget):
 
     def _on_danmaku_button(self, checked):
         self._danmaku_enabled = bool(checked)
+        # P1d：用户拨开关=变更即存；tools 侧由 main 的 danmakuToggled 处理器
+        # 同步（main.py:1403），S1 以后读的就是这三枚键里的这一枚。
+        player_settings().setValue(DANMAKU_KEY, self._danmaku_enabled)
         self._apply_danmaku_visibility()
         self.danmakuToggled.emit(self._danmaku_enabled)
         self.activity()          # 全屏下点按钮，把控制条亮出来
@@ -1453,7 +2005,11 @@ class PlayerPane(QWidget):
     def set_fullscreen(self, on):
         self._fullscreen = on
         self.full_button.setText("退出全屏" if on else "全屏")
+        # P1a：全屏只留画面，停靠栏跟着收掉（退出后恢复折叠前的展开状态）
+        self.dock.setVisible(not on)
         if on:
+            self.overlay.hide()
+            self._overlay_timer.stop()
             self.activity()          # 进全屏先亮着，5 秒不动再收
         else:
             self._controls_timer.stop()
@@ -1526,6 +2082,10 @@ class PlayerPane(QWidget):
         self._hide_poster()
         self._set_surface(False)
         self._set_status("选择分集后点击播放")
+        # P1b/P1e：停播时收掉悬停控制条，并允许下一集重新预热
+        self.overlay.hide()
+        self._overlay_timer.stop()
+        self._preload_requested_for = None
         self.reset_danmaku()
         self.pauseChanged.emit(False)
         # A user-initiated stop while fullscreen must bring the window frame
