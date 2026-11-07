@@ -306,23 +306,17 @@ func TestHuangdouCallSharesTightBudget(t *testing.T) {
 	}
 }
 
-// TestHuangdouCoverRefererFallsBackToPreferredHost 为本地适配版：上游
-// TestHuangdouCoverRefererFollowsPool 要求 app_covers.go 逐池域名跟随，但本地
-// 中央 app_covers.go 的黄豆分支只硬编码遗留两域（不在 Q7 可改范围）。
-// 当前实际语义：池域名封面统一回落到首选站点（providerHosts 或 huangdouBaseURL）
-// + "/home"；非池域名封面在 providerHosts 已配置时同样跟随首选站点。
-func TestHuangdouCoverRefererFallsBackToPreferredHost(t *testing.T) {
+func TestHuangdouCoverRefererFollowsPool(t *testing.T) {
 	d := &Downloader{cfg: defaultConfig(), providerHosts: map[string]string{}}
-	want := huangdouBaseURL + "/home"
 	for _, pooled := range huangdouHostPool {
 		cover := "https://" + pooled + "/covers/a.jpg"
+		want := "https://" + pooled + "/home"
 		if got := nativeCoverReferer(d, sourceHuangdou, cover); got != want {
-			t.Fatalf("池域名封面 referer 未回落到首选站点: %s -> %s (want %s)", pooled, got, want)
+			t.Fatalf("封面 referer 未跟随域名池: %s -> %s (want %s)", pooled, got, want)
 		}
 	}
 	d.providerHosts[sourceHuangdou] = "https://" + huangdouHostPool[1]
-	want = "https://" + huangdouHostPool[1] + "/home"
-	if got := nativeCoverReferer(d, sourceHuangdou, "https://example.com/covers/a.jpg"); got != want {
-		t.Fatalf("非池域名封面未回落到配置站点: %s (want %s)", got, want)
+	if got := nativeCoverReferer(d, sourceHuangdou, "https://example.com/covers/a.jpg"); got != "https://"+huangdouHostPool[1]+"/home" {
+		t.Fatalf("非池域名封面未回落到首选站点: %s", got)
 	}
 }

@@ -76,18 +76,31 @@ func providerSourceForURL(raw string) string {
 		return sourceHuangguoAI
 	case host == "huangguo.video":
 		return sourceHuangguoVideo
-	case host == "tideember.cc" || host == "xqjurgek.top":
+	case isHuangdouHost(host):
 		return sourceHuangdou
 	case host == "hongguoduanju.com" || host == "www.hongguoduanju.com":
 		return sourceHongguo
 	case host == "huangju.net" || host == "www.huangju.net" || host == "api.huangju.net":
 		return sourceHuangju
-	case host == "delta.ygrwdsgt.cc" || host == "yeguodj.com" || host == "www.yeguodj.com":
+	case host == "ygdj7.com" || host == "www.ygdj7.com" || host == "ygdj15.com" || host == "www.ygdj15.com" ||
+		host == "attract.vgbyziuz.cc" || host == "as.vgbyziuz.cc" || host == "anyway.vgbyziuz.cc" ||
+		host == "analyze.buxefaex.cc" || strings.HasSuffix(host, ".buxefaex.cc") ||
+		strings.HasSuffix(host, ".fzchosdi.cc") || strings.HasSuffix(host, ".lwblvxvy.cc") || strings.HasSuffix(host, ".vgbyziuz.cc") ||
+		host == "delta.ygrwdsgt.cc" || host == "yeguodj.com" || host == "www.yeguodj.com":
 		return sourceYeguo
 	case host == "dsd.com.se" || host == "www.dsd.com.se":
 		return sourceDSD
 	case host == "sorani.net" || host == "www.sorani.net" || host == "api.sorani.cc" || host == "sorani.cc":
 		return sourceSorani
+	case host == "jinguoduanju.app" || host == "www.jinguoduanju.app" || host == "play.jinguoduanju.app" ||
+		host == "jgdj.app" || host == "www.jgdj.app":
+		return sourceJinguoDuanju
+	case host == "guipianwu.com" || host == "www.guipianwu.com":
+		return providerSlugGuipian
+	case host == "jennyhow.com" || host == "www.jennyhow.com":
+		return providerSlugHanxiaoquan
+	case host == "heitaodj.com" || host == "www.heitaodj.com":
+		return sourceHeitao
 	default:
 		return ""
 	}
