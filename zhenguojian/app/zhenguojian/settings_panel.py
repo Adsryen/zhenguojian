@@ -636,8 +636,8 @@ class SettingsPanel(QWidget):
         else:
             self._sources_hint.setText(
                 failure +
-                "数据来源：内置源表回退（本地核心 list_sources 未就绪，F1 开发中）；"
-                "切换暂存本地 QSettings " + SOURCES_STAGED_KEY + "。")
+                "数据来源：内置源表回退（本地核心未连接）；"
+                "开关先记在本地，连接核心后自动同步。")
 
         self._mount_sorani_row()
 
