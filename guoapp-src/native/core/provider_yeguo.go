@@ -297,3 +297,10 @@ func (d *Downloader) resolveYeguoMedia(ctx context.Context, task Task) (provider
 	media.Variants = options[1:]
 	return d.prepareWebProviderMedia(ctx, media, "野果")
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceYeguo, DisplayName: "野果", SearchKind: providerSearchOnline,
+		EnabledByDefault: true, Domains: []string{"delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com"}, Implemented: true,
+	})
+}

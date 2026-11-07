@@ -379,3 +379,11 @@ func (d *Downloader) resolveSoraniMedia(ctx context.Context, task Task) (provide
 	}
 	return media, nil
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceSorani, DisplayName: "青空", SearchKind: providerSearchOnline, Lanes: true,
+		CatalogKinds: []string{"1", "2", "5"},
+		EnabledByDefault: true, Domains: []string{"sorani.net", "www.sorani.net", "api.sorani.cc", "sorani.cc"}, Implemented: true,
+	})
+}

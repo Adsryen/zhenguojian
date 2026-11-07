@@ -87,38 +87,23 @@ func splitProviderDramaID(id string) (source, sourceID string, ok bool) {
 	return source, strings.TrimSpace(sourceID), true
 }
 
+// isHuangguoProviderSource reports whether source normalizes to a registered
+// provider slug. The hardcoded nine-source switch now lives in the provider
+// registry (see provider_registry.go); unimplemented-but-registered sources
+// count as known here and are gated by Implemented in nativeSourceAvailable.
 func isHuangguoProviderSource(source string) bool {
-	switch canonicalProviderSource(source) {
-	case sourceHuangguoAI, sourceHuangguoVideo, sourceHuangdou, sourceHongguo, sourceHuangju, sourceYeguo, sourceDSD, sourceCloudFront, sourceSorani:
-		return true
-	default:
-		return false
-	}
+	return isRegisteredProviderSource(source)
 }
 
+// canonicalProviderSource normalizes user/provider input to a canonical slug
+// through the registry's alias and domain index. Unknown values keep the old
+// behaviour of returning the trimmed input unchanged.
 func canonicalProviderSource(source string) string {
-	switch strings.ToLower(strings.TrimSpace(source)) {
-	case "huangguo", "huangguoai", "huangguoai.com":
-		return sourceHuangguoAI
-	case "huangguo-video", "huangguo.video":
-		return sourceHuangguoVideo
-	case "huangdou", "tideember.cc", "xqjurgek.top":
-		return sourceHuangdou
-	case "hongguo", "hongguoduanju.com":
-		return sourceHongguo
-	case "huangju", "huangju.net", "api.huangju.net":
-		return sourceHuangju
-	case "yeguo", "delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com":
-		return sourceYeguo
-	case "dsd", "dsd.com.se", "www.dsd.com.se":
-		return sourceDSD
-	case "cloudfront":
-		return sourceCloudFront
-	case "sorani", "sorani.net", "www.sorani.net", "api.sorani.cc", "sorani.cc":
-		return sourceSorani
-	default:
-		return strings.TrimSpace(source)
+	trimmed := strings.TrimSpace(source)
+	if slug, ok := providerSlugForAlias(trimmed); ok {
+		return slug
 	}
+	return trimmed
 }
 
 func mergeDramaMetadata(base, extra Drama) Drama {
@@ -1310,4 +1295,16 @@ func normalizeProviderMediaURL(pageURL, raw string) string {
 func isProviderHTTPMediaURL(raw string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
 	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Hostname() != "" && parsed.User == nil
+}
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceHuangguoAI, DisplayName: "黄果 AI", SearchKind: providerSearchOnline,
+		CatalogKinds: []string{"ai-duanju", "ai-manju", "ai-huanlian", "ai-mogai"},
+		EnabledByDefault: true, Domains: []string{"huangguo", "huangguoai.com"}, Implemented: true,
+	})
+	registerProviderSource(ProviderDef{
+		Slug: sourceHuangguoVideo, DisplayName: "黄果视频", SearchKind: providerSearchCache,
+		EnabledByDefault: true, Domains: []string{"huangguo.video"}, Implemented: true,
+	})
 }

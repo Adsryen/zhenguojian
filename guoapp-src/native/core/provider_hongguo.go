@@ -355,3 +355,11 @@ func anyList(v any) []any {
 	}
 	return nil
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceHongguo, DisplayName: "红果", SearchKind: providerSearchOnline,
+		Seasons: true, CatalogKinds: []string{"short_play", "comic_series", "ai_series"},
+		EnabledByDefault: true, Domains: []string{"hongguoduanju.com"}, Implemented: true,
+	})
+}

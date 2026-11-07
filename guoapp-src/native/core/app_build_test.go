@@ -10,15 +10,26 @@ import (
 	"time"
 )
 
+// The provider registry (registry defaults: every implemented source ships
+// enabled) replaces the old buildAllSources edition gate. "Restricted"
+// scenarios are now expressed through user preferences, which these tests
+// set in memory.
 func TestNativeBuildAuthorization(t *testing.T) {
+	setSourcePrefsOverrides(nil)
 	for _, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoVideo, sourceHuangguoAI, sourceCloudFront, sourceDSD, "unknown"} {
-		allowed := source == sourceHongguo || buildAllSources == "true" && source != "unknown"
+		allowed := source != "unknown"
 		for _, action := range []string{"catalog", "cached", "sourceStatus", "sourceJob", "cancelSourceJob", "detail", "cover", "resolve", "enqueueDownloads", "localPlayback"} {
 			input := nativeInput{Action: action, Source: source, Drama: nativeDrama{ID: source + ":123", Source: source}}
 			err := nativeAuthorizeInput(input)
 			if (err == nil) != allowed {
 				t.Fatalf("%s %s: allowed=%v, error=%v", action, source, allowed, err)
 			}
+		}
+	}
+	// Registered-but-unimplemented sources must stay invisible to the user.
+	for _, source := range []string{"jinguoduanju", "jinguo", "heitao", "guipian", "hanxiaoquan"} {
+		if err := nativeAuthorizeInput(nativeInput{Action: "catalog", Source: source}); !errors.Is(err, errNativeBuildSource) {
+			t.Fatalf("unimplemented source %s passed authorization: %v", source, err)
 		}
 	}
 	for _, input := range []nativeInput{
@@ -39,7 +50,23 @@ func TestNativeBuildAuthorization(t *testing.T) {
 }
 
 func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *testing.T) {
+	t.Run("all sources enabled", func(t *testing.T) {
+		runBuildDownloadScenario(t, false)
+	})
+	t.Run("foreign sources disabled", func(t *testing.T) {
+		runBuildDownloadScenario(t, true)
+	})
+}
+
+func runBuildDownloadScenario(t *testing.T, restrict bool) {
+	setSourcePrefsOverrides(nil)
+	t.Cleanup(func() { setSourcePrefsOverrides(nil) })
 	manager := downloadTestManager(t)
+	if restrict {
+		for _, source := range []string{sourceHuangdou, sourceHuangguoVideo, sourceHuangguoAI, sourceCloudFront, sourceDSD} {
+			setSourcePrefsOverride(source, false)
+		}
+	}
 	records := []*nativeDownloadRecord{}
 	for index, source := range []string{sourceHongguo, sourceHuangdou, sourceHuangguoVideo, sourceHuangguoAI, sourceCloudFront, sourceDSD} {
 		drama := nativeDrama{ID: source + ":123", Source: source, Title: "合成下载"}
@@ -60,7 +87,7 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 	t.Cleanup(reopened.close)
 	jobs, err := reopened.snapshot()
 	expected := 1
-	if buildAllSources == "true" {
+	if !restrict {
 		expected = 6
 	}
 	if err != nil || len(jobs) != expected {
@@ -79,7 +106,7 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 		t.Fatal(err)
 	}
 	workers := 1
-	if buildAllSources == "true" {
+	if !restrict {
 		workers = 2
 	}
 	seen := map[string]bool{}
@@ -91,10 +118,10 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 			t.Fatal("allowed download did not start")
 		}
 	}
-	if !seen[sourceHongguo] || buildAllSources == "true" && !seen[sourceHuangdou] {
+	if !seen[sourceHongguo] || !restrict && !seen[sourceHuangdou] {
 		t.Fatalf("wrong sources scheduled: %v", seen)
 	}
-	if buildAllSources != "true" {
+	if restrict {
 		reopened.mu.Lock()
 		active := len(reopened.active)
 		reopened.mu.Unlock()
@@ -114,7 +141,7 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 		t.Fatal(err)
 	}
 	reopened.close()
-	if buildAllSources != "true" {
+	if restrict {
 		for _, original := range records[1:] {
 			if reopened.jobs[original.ID] == nil {
 				t.Fatal("hidden download was removed during bulk operations")
@@ -129,7 +156,7 @@ func TestNativeBuildPreservesForeignDownloadRecordsAndRestrictsScheduling(t *tes
 			t.Fatalf("saved hidden downloads lost: %v", err)
 		}
 	}
-	if buildAllSources == "true" {
+	if !restrict {
 		if job := reopened.jobs[nativeDownloadID(sourceDSD+":123", 1)]; job == nil {
 			t.Fatal("DSD download was lost during bulk operations")
 		}

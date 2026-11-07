@@ -74,6 +74,7 @@ func (engine *nativeEngine) lockSourceCatalog(ctx context.Context, source string
 }
 
 func (engine *nativeEngine) loadSourceRecords() {
+	engine.loadSourcePrefs()
 	engine.sourceRecords = map[string]nativeSourceRecord{}
 	engine.sourceTasks = map[string]*nativeSourceTask{}
 	path := filepath.Join(engine.directory, "sources.json")
@@ -108,6 +109,37 @@ func (engine *nativeEngine) loadSourceRecords() {
 		}
 		engine.sourceRecords[source] = record
 	}
+}
+
+// loadSourcePrefs replaces the in-memory source switches from
+// source_prefs.json (same directory/mechanism as sources.json). A missing or
+// unreadable file leaves factory defaults (no overrides) in effect.
+func (engine *nativeEngine) loadSourcePrefs() {
+	path := filepath.Join(engine.directory, "source_prefs.json")
+	info, err := os.Stat(path)
+	if err != nil || info.Size() > nativeSourceMaxBytes {
+		return
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	var prefs nativeSourcePrefsFile
+	if json.Unmarshal(body, &prefs) != nil {
+		return
+	}
+	setSourcePrefsOverrides(prefs.Overrides)
+}
+
+func (engine *nativeEngine) saveSourcePrefsLocked() error {
+	body, err := json.Marshal(nativeSourcePrefsFile{Overrides: sourcePrefsSnapshot()})
+	if err == nil && len(body) > nativeSourceMaxBytes {
+		err = errNativeSourceLimit
+	}
+	if err == nil {
+		err = writeNativeCacheFile(filepath.Join(engine.directory, "source_prefs.json"), body)
+	}
+	return nativeSaveError("站源开关设置", err)
 }
 
 func (engine *nativeEngine) saveSourceRecordsLocked() error {

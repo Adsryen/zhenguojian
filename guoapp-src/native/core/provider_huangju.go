@@ -352,3 +352,10 @@ func (d *Downloader) resolveHuangjuMedia(ctx context.Context, task Task) (provid
 	}
 	return media, nil
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceHuangju, DisplayName: "剧果", SearchKind: providerSearchOnline,
+		EnabledByDefault: true, Domains: []string{"huangju.net", "api.huangju.net"}, Implemented: true,
+	})
+}

@@ -328,3 +328,10 @@ func (d *Downloader) legacyRequest(ctx context.Context, method, apiPath string, 
 	}
 	return nil, lastErr
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceCloudFront, DisplayName: "黄果旧版", SearchKind: providerSearchCache,
+		EnabledByDefault: true, Implemented: true,
+	})
+}

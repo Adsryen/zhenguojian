@@ -77,6 +77,10 @@ func main() {
 							reply(id, core.NativePosterMetadata(string(encoded)))
 						} else if request.Action == "dramaCreators" || request.Action == "creatorProfile" || request.Action == "creatorWorks" || request.Action == "browseFilters" || request.Action == "browseFiltered" {
 							reply(id, core.NativeDiscovery(string(encoded)))
+						} else if request.Action == "listSources" || request.Action == "setSourceEnabled" {
+							// Registry-level source switch commands; core parses the
+							// small {action,slug,enabled} payload itself.
+							reply(id, core.NativeSourcesCommand(string(encoded)))
 						} else {
 							reply(id, core.NativeRequest(string(encoded)))
 						}

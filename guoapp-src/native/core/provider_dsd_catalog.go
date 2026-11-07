@@ -343,3 +343,10 @@ func (d *Downloader) fetchDSDCatalogPage(ctx context.Context, page int, category
 	}
 	return items, hasMore, errors.Join(failures...)
 }
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceDSD, DisplayName: "帝果", SearchKind: providerSearchOnline, Lanes: true,
+		EnabledByDefault: true, Domains: []string{"dsd.com.se", "www.dsd.com.se"}, Implemented: true,
+	})
+}

@@ -423,3 +423,11 @@ func uuidLike() string {
 	}
 	return raw[:8] + "-" + raw[8:12] + "-" + raw[12:16] + "-" + raw[16:20] + "-" + raw[20:]
 }
+
+
+func init() {
+	registerProviderSource(ProviderDef{
+		Slug: sourceHuangdou, DisplayName: "黄豆", SearchKind: providerSearchCache,
+		EnabledByDefault: true, Domains: []string{"tideember.cc", "xqjurgek.top"}, Implemented: true,
+	})
+}

@@ -90,9 +90,6 @@ func TestSourceUpdatesPreservePagesOtherSourcesAndMetadata(t *testing.T) {
 }
 
 func TestSourceJobsDeduplicateCancelAndRecoverAfterRestart(t *testing.T) {
-	if buildAllSources != "true" {
-		t.Skip("full edition source lifecycle")
-	}
 	var calls atomic.Int32
 	started := make(chan struct{})
 	engine := sourceFixtureEngine(t, func(request *http.Request) (*http.Response, error) {

@@ -356,6 +356,26 @@ class CoreClient:
     def drama_creators(self, drama):
         return self.call("dramaCreators", drama=drama, timeout=45.0)
 
+    def list_sources(self):
+        """全部站源描述（核心 provider_registry 单一事实源）。
+
+        每项含 slug/name/enabled（M1/S1 契约）以及核心附带的
+        displayName/searchKind/lanes/seasons/catalogKinds/enabledByDefault/
+        implemented 字段；enabled 缺省时按 True 处理。"""
+        items = (self.call("listSources", timeout=15.0) or {}).get("items", [])
+        view = []
+        for item in items:
+            row = dict(item)
+            row.setdefault("enabled", True)
+            if not row.get("name"):
+                row["name"] = row.get("displayName") or row.get("slug", "")
+            view.append(row)
+        return view
+
+    def set_source_enabled(self, slug, enabled):
+        """开关某个站源；核心写入 data 目录 source_prefs.json 后立即生效。"""
+        return self.call("setSourceEnabled", slug=slug, enabled=bool(enabled), timeout=15.0)
+
     def creator_profile(self, creator):
         return self.call("creatorProfile", creator=creator, timeout=45.0)
 
