@@ -31,12 +31,21 @@ func yeguoFlag(value any) (bool, bool) {
 		return flag, true
 	}
 	switch nativeText(value) {
-	case "0":
+	case "0", "false":
 		return false, true
-	case "1":
+	case "1", "true":
 		return true, true
 	}
 	return false, false
+}
+
+func firstPresent(values map[string]any, keys ...string) any {
+	for _, key := range keys {
+		if value, ok := values[key]; ok && value != nil && nativeText(value) != "" {
+			return value
+		}
+	}
+	return nil
 }
 
 func (d *Downloader) fetchYeguoCategories(ctx context.Context) ([]nativeCategory, error) {
@@ -92,7 +101,7 @@ func yeguoDramaFromMap(row map[string]any, site string) (Drama, error) {
 	case "1":
 		status = "ongoing"
 	case "2":
-		status = "completed"
+		status = "finished"
 	}
 	var tags []string
 	seenTags := map[string]bool{}
@@ -112,8 +121,8 @@ func yeguoDramaFromMap(row map[string]any, site string) (Drama, error) {
 	drama := Drama{ID: providerDramaID(sourceYeguo, id), Source: sourceYeguo, SourceID: id,
 		Title: truncate(title, 512), Name: truncate(title, 512), Desc: description, Intro: description,
 		Cover: cover, CoverURL: cover, EpisodeCount: episodes, TotalEpisode: episodes,
-		CategoryName: "短剧", ChannelName: "野果", Views: mapString(row, "play_count", "play_count_text"),
-		Tags: tags, ReleaseStatus: status, OnlineDate: mapString(row, "published_at", "created_at")}
+		CategoryName: "短剧", ChannelName: "野果", Views: normalizeViews(mapString(row, "play_count", "play_count_text")),
+		Tags: tags, ReleaseStatus: status, OnlineDate: providerReleaseDate(mapString(row, "published_at", "created_at"))}
 	if vip, known := yeguoFlag(row["is_vip"]); known {
 		drama.VIP = &vip
 	}
@@ -142,27 +151,36 @@ func (d *Downloader) fetchYeguoCatalogPage(ctx context.Context, page int, catego
 	if !valid || len(rows) > 500 {
 		return nil, false, errors.New("野果目录格式无效")
 	}
-	actualPage, pageValid := webProviderInteger(data["page"], 1000000)
-	limit, limitValid := webProviderInteger(data["limit"], 500)
-	total, totalValid := webProviderInteger(data["total"], 100000000)
-	if !pageValid || actualPage != page || !limitValid || limit < 1 || len(rows) > limit || !totalValid || total < len(rows) {
+	if actualPage, pageValid := webProviderInteger(firstPresent(data, "page", "page_num", "pageNum", "current_page", "currentPage"), 1000000); pageValid && actualPage != page {
 		return nil, false, errors.New("野果分页信息无效，请重试")
 	}
-	hasMore := page < (total+limit-1)/limit
+	limit, limitValid := webProviderInteger(firstPresent(data, "limit", "page_size", "pageSize", "per_page", "perPage"), 500)
+	if !limitValid || limit < 1 || limit < len(rows) {
+		limit = len(rows)
+	}
+	total, totalValid := webProviderInteger(firstPresent(data, "total", "total_count", "totalCount"), 100000000)
+	if totalValid && total < len(rows) {
+		totalValid = false
+	}
+	hasMore := limit > 0 && len(rows) >= limit
+	if totalValid && limit > 0 {
+		hasMore = page < (total+limit-1)/limit
+	}
 	if data["has_more"] != nil {
 		more, valid := yeguoFlag(data["has_more"])
-		if !valid || more != hasMore {
-			return nil, false, errors.New("野果分页总数与续页标记不符")
+		if !valid {
+			return nil, false, errors.New("野果分页信息无效，请重试")
 		}
+		hasMore = more
 	}
-	if total > 0 && page <= (total+limit-1)/limit && len(rows) == 0 {
+	if hasMore && len(rows) == 0 {
 		return nil, false, errors.New("野果未返回应有的目录页，请重试")
 	}
 	items := make([]Drama, 0, len(rows))
 	seen := map[string]bool{}
 	for _, value := range rows {
 		row, _ := value.(map[string]any)
-		drama, err := yeguoDramaFromMap(row, d.providerBaseURL(sourceYeguo))
+		drama, err := yeguoDramaFromMap(row, d.yeguoClient().siteURL())
 		if err != nil {
 			return nil, false, err
 		}
@@ -193,7 +211,7 @@ func (d *Downloader) fetchYeguoDetail(ctx context.Context, sourceID string) (Dra
 	if err != nil {
 		return Drama{}, nil, err
 	}
-	site := d.providerBaseURL(sourceYeguo)
+	site := d.yeguoClient().siteURL()
 	drama, err := yeguoDramaFromMap(row, site)
 	if err != nil {
 		return Drama{}, nil, err
@@ -270,7 +288,7 @@ func (d *Downloader) resolveYeguoMedia(ctx context.Context, task Task) (provider
 	if !valid || number < 1 {
 		return providerMedia{}, errors.New("野果播放分集编号无效")
 	}
-	referer := yeguoEpisodePage(d.providerBaseURL(sourceYeguo), sourceID, number)
+	referer := yeguoEpisodePage(d.yeguoClient().siteURL(), sourceID, number)
 	quality := yeguoMediaQuality(mapString(row, "resolution"))
 	var options []providerMedia
 	seen := map[string]bool{}
@@ -294,13 +312,20 @@ func (d *Downloader) resolveYeguoMedia(ctx context.Context, task Task) (provider
 		return providerMedia{}, errors.New("野果未提供该集播放地址，请重试或确认站源权限")
 	}
 	media := options[0]
-	media.Variants = options[1:]
+	media.Variants = options
 	return d.prepareWebProviderMedia(ctx, media, "野果")
 }
 
+// init 保留本地注册表接线（reference 无 init；中央 provider_registry.go 单调合并）。
+// Domains 扩充为上游活域名名单：新主站/备份站/transit 站 + 遗留域。
 func init() {
 	registerProviderSource(ProviderDef{
 		Slug: sourceYeguo, DisplayName: "野果", SearchKind: providerSearchOnline,
-		EnabledByDefault: true, Domains: []string{"delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com"}, Implemented: true,
+		EnabledByDefault: true, Implemented: true,
+		Domains: []string{
+			"delta.ygrwdsgt.cc", "yeguodj.com", "www.yeguodj.com",
+			"attract.vgbyziuz.cc", "as.vgbyziuz.cc", "anyway.vgbyziuz.cc",
+			"analyze.buxefaex.cc", "ygdj15.com", "ygdj7.com",
+		},
 	})
 }
