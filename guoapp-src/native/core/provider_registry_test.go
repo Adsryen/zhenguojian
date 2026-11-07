@@ -76,11 +76,8 @@ func TestProviderRegistryListAndToggle(t *testing.T) {
 		t.Fatalf("hongguo entry wrong: %+v", hongguo)
 	}
 	guipian := bySlug["guipian"]
-	if guipian.DisplayName != "鬼片" || guipian.Implemented || guipian.Enabled || guipian.SearchKind != providerSearchRSS {
-		t.Fatalf("placeholder source must stay unimplemented and disabled: %+v", guipian)
-	}
-	if !guipian.EnabledByDefault {
-		t.Fatalf("placeholder ships factory-enabled for the Q tasks: %+v", guipian)
+	if guipian.DisplayName != "鬼片" || !guipian.Implemented || !guipian.Enabled || guipian.SearchKind != providerSearchRSS {
+		t.Fatalf("ported source must be implemented and enabled: %+v", guipian)
 	}
 
 	// Toggle yeguo off then on through the command surface.
@@ -104,12 +101,6 @@ func TestProviderRegistryListAndToggle(t *testing.T) {
 		return e
 	}(); err == nil || !strings.Contains(err.Error(), "未知站源") {
 		t.Fatalf("unknown slug accepted: %v", err)
-	}
-	if err := func() error {
-		_, e := decodeSourcesCommand(t, NativeSourcesCommand(`{"action":"setSourceEnabled","slug":"guipian","enabled":true}`))
-		return e
-	}(); err == nil || !strings.Contains(err.Error(), errNativeBuildSource.Error()) {
-		t.Fatalf("unimplemented slug must keep the build message: %v", err)
 	}
 }
 

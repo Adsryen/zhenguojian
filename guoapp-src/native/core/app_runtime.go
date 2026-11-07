@@ -590,7 +590,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao) {
+	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao || source == providerSlugGuipian || source == providerSlugHanxiaoquan) {
 		var items []Drama
 		var more bool
 		var err error
@@ -603,6 +603,10 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			items, more, err = d.fetchJinguoDuanjuCatalogPage(ctx, page, "", query)
 		case sourceHeitao:
 			items, more, err = d.fetchHeitaoCatalogPage(ctx, page, "", query)
+		case providerSlugGuipian:
+			items, more, err = d.searchGuipian(ctx, page, query)
+		case providerSlugHanxiaoquan:
+			items, more, err = d.searchHanxiaoquan(ctx, page, query)
 		default:
 			items, more, err = d.fetchJinguoCatalogPage(ctx, page, "", query)
 		}
@@ -695,6 +699,10 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchJinguoDuanjuCatalogPage(ctx, page, category, "")
 	case sourceHeitao:
 		items, result.HasMore, err = d.fetchHeitaoCatalogPage(ctx, page, category, "")
+	case providerSlugGuipian:
+		items, result.HasMore, err = d.fetchGuipianCatalogPage(ctx, page, category, "")
+	case providerSlugHanxiaoquan:
+		items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -760,6 +768,10 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchJinguoDuanjuDetail(ctx, sourceID)
 	case sourceHeitao:
 		raw, chapters, err = engine.downloader.fetchHeitaoDetail(ctx, sourceID)
+	case providerSlugGuipian:
+		raw, chapters, err = engine.downloader.fetchGuipianDetail(ctx, sourceID)
+	case providerSlugHanxiaoquan:
+		raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
 	default:
 		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
 	}

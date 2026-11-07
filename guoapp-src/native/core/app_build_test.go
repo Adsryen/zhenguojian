@@ -26,12 +26,6 @@ func TestNativeBuildAuthorization(t *testing.T) {
 			}
 		}
 	}
-	// Registered-but-unimplemented sources must stay invisible to the user.
-	for _, source := range []string{"guipian", "hanxiaoquan"} {
-		if err := nativeAuthorizeInput(nativeInput{Action: "catalog", Source: source}); !errors.Is(err, errNativeBuildSource) {
-			t.Fatalf("unimplemented source %s passed authorization: %v", source, err)
-		}
-	}
 	for _, input := range []nativeInput{
 		{Action: "resolve", Drama: nativeDrama{ID: "huangdou:123", Source: sourceHongguo}},
 		{Action: "resolve", Drama: nativeDrama{ID: "hongguo:123", Source: sourceHongguo}, Chapter: Chapter{Source: sourceHuangdou}},
