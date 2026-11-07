@@ -1,0 +1,210 @@
+package core
+
+import (
+	"context"
+	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+)
+
+type providerMedia struct {
+	credentials *providerMediaCredentials
+	URL         string
+	Referer     string
+	Duration    time.Duration
+	Playlist    string
+	HLSKey      []byte
+	CENCKey     []byte
+	Quality     int
+	// Definition 是服务端给的档位标签（"1080p"），Width/Height 是真实像素，
+	// Bitrate 是码率（bps）。标签和真实分辨率会不一致——平台上有把 1280x720
+	// 标成 1080p 的片源，界面得能把这个说出来。
+	Definition string
+	Width      int
+	Height     int
+	Bitrate    int
+	Variants   []providerMedia
+}
+
+func (d *Downloader) providerBaseURL(source string) string {
+	source = canonicalProviderSource(source)
+	var configured, fallback string
+	switch source {
+	case sourceHuangguoAI:
+		configured, fallback = d.cfg.HuangguoAIURL, huangguoAIBaseURL
+	case sourceHuangguoVideo:
+		configured, fallback = d.cfg.HuangguoVideoURL, huangguoVideoBaseURL
+	case sourceHuangdou:
+		configured, fallback = d.cfg.HuangdouURL, huangdouBaseURL
+	case sourceHongguo:
+		configured, fallback = d.cfg.HongguoURL, hongguoBaseURL
+	case sourceHuangju:
+		configured, fallback = d.cfg.HuangjuURL, huangjuBaseURL
+	case sourceYeguo:
+		configured, fallback = d.cfg.YeguoURL, yeguoBaseURL
+	case sourceDSD:
+		configured, fallback = d.cfg.DSDURL, dsdBaseURL
+	case sourceSorani:
+		configured, fallback = d.cfg.SoraniURL, soraniSiteBaseURL
+	default:
+		fallback = "https://d2pypzndaqisk.cloudfront.net"
+	}
+	return strings.TrimRight(firstNonEmpty(configured, fallback), "/")
+}
+
+func providerSourceForURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	switch {
+	case host == "huangguoai.com" || strings.HasSuffix(host, ".ediayikma.cc") || strings.HasSuffix(host, ".agdkczeyx.cc"):
+		return sourceHuangguoAI
+	case host == "huangguo.video":
+		return sourceHuangguoVideo
+	case host == "tideember.cc" || host == "xqjurgek.top":
+		return sourceHuangdou
+	case host == "hongguoduanju.com" || host == "www.hongguoduanju.com":
+		return sourceHongguo
+	case host == "huangju.net" || host == "www.huangju.net" || host == "api.huangju.net":
+		return sourceHuangju
+	case host == "delta.ygrwdsgt.cc" || host == "yeguodj.com" || host == "www.yeguodj.com":
+		return sourceYeguo
+	case host == "dsd.com.se" || host == "www.dsd.com.se":
+		return sourceDSD
+	case host == "sorani.net" || host == "www.sorani.net" || host == "api.sorani.cc" || host == "sorani.cc":
+		return sourceSorani
+	default:
+		return ""
+	}
+}
+
+func (d *Downloader) providerURLCandidates(raw string) []string {
+	source := providerSourceForURL(raw)
+	if source == "" || source == sourceHuangju || source == sourceYeguo {
+		return []string{raw}
+	}
+	parsed, _ := url.Parse(raw)
+	d.providerMu.Lock()
+	preferred := d.providerHosts[source]
+	d.providerMu.Unlock()
+	var candidates []string
+	seen := map[string]bool{}
+	add := func(candidate string) {
+		if candidate != "" && !seen[candidate] {
+			seen[candidate] = true
+			candidates = append(candidates, candidate)
+		}
+	}
+	add(rehostProviderURL(parsed, preferred))
+	configured := d.providerBaseURL(source)
+	add(rehostProviderURL(parsed, configured))
+	if providerSourceForURL(configured) == "" {
+		return candidates
+	}
+	for _, candidate := range providerURLCandidates(raw) {
+		add(candidate)
+	}
+	return candidates
+}
+
+func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (providerMedia, error) {
+	chapter := task.Chapter
+	chapter.Source = canonicalProviderSource(chapter.Source)
+	if chapter.Source == "" {
+		chapter.Source = sourceFromDramaID(task.DramaID)
+	}
+	if chapter.Source == sourceCloudFront {
+		return d.resolveLegacyMedia(ctx, task)
+	}
+	if chapter.Source == sourceHuangju {
+		return d.resolveHuangjuMedia(ctx, task)
+	}
+	if chapter.Source == sourceYeguo {
+		return d.resolveYeguoMedia(ctx, task)
+	}
+	if chapter.Source == sourceDSD {
+		return d.resolveDSDMedia(ctx, task)
+	}
+	if chapter.Source == sourceSorani {
+		return d.resolveSoraniMedia(ctx, task)
+	}
+	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
+		return d.resolveHongguoMedia(ctx, task)
+	}
+	if chapter.PageURL == "" && (chapter.Source == sourceHuangguoAI || chapter.Source == sourceHuangguoVideo) {
+		if source, sourceID, valid := splitProviderDramaID(task.DramaID); valid {
+			_, chapters, err := d.GetHuangguoChapters(ctx, source, sourceID)
+			if err != nil {
+				return providerMedia{}, fmt.Errorf("刷新旧任务播放地址失败: %w", err)
+			}
+			matched := false
+			for _, fresh := range chapters {
+				if fresh.ID == chapter.ID {
+					chapter = fresh
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return providerMedia{}, fmt.Errorf("原章节已变化，请更新该合集后重新下载")
+			}
+		}
+	}
+	media := providerMedia{URL: chapter.VideoURL, Referer: firstNonEmpty(chapter.Referer, d.providerBaseURL(chapter.Source)+"/")}
+	if chapter.Source == sourceHuangdou {
+		_, sourceID, valid := splitProviderDramaID(task.DramaID)
+		if valid {
+			sequence, err := strconv.Atoi(chapter.EpisodeString(task.Index))
+			if err != nil || sequence < 1 {
+				return providerMedia{}, fmt.Errorf("黄豆集数无效")
+			}
+			client := newHuangdouAPIClient(d)
+			media, err = d.resolveHuangdouPlayback(ctx, client, sourceID, sequence)
+			if err != nil {
+				return providerMedia{}, err
+			}
+			media.Referer = client.host + "/home"
+		}
+	}
+	if chapter.PageURL != "" && (chapter.Source == sourceHuangguoAI || chapter.Source == sourceHuangguoVideo) {
+		responses := &playbackResponseURLs{}
+		pageContext := context.WithValue(ctx, playbackResponseURLsKey{}, responses)
+		body, err := d.fetchProviderText(pageContext, chapter.PageURL, media.Referer)
+		if err != nil {
+			return providerMedia{}, err
+		}
+		pageURL := chapter.PageURL
+		if actual, ok := responses.values.Load(chapter.PageURL); ok {
+			pageURL = actual.(string)
+		}
+		if chapter.Source == sourceHuangguoAI {
+			media.URL = parseAIVideoURL(body, pageURL)
+		} else {
+			media.URL = parseDataHLS(body, pageURL)
+		}
+		media.Referer = pageURL
+	}
+	if !isProviderHTTPMediaURL(media.URL) {
+		return providerMedia{}, fmt.Errorf("%s 未返回有效播放地址，请刷新章节或确认站点访问权限", chapter.Source)
+	}
+	parsed, _ := url.Parse(media.URL)
+	if strings.HasSuffix(strings.ToLower(parsed.Path), ".m3u8") {
+		playlist, finalURL, err := d.fetchMediaPlaylist(ctx, media.URL, media.Referer)
+		if err != nil {
+			return providerMedia{}, fmt.Errorf("获取播放列表失败: %w", err)
+		}
+		if !strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(playlist, "\ufeff")), "#EXTM3U") {
+			return providerMedia{}, fmt.Errorf("站点未返回有效 M3U8，可能需要登录或链接已失效")
+		}
+		if duration := m3u8Duration(playlist); duration > 0 {
+			media.Duration = duration
+		}
+		media.Playlist = playlist
+		media.URL = finalURL
+	}
+	return media, nil
+}

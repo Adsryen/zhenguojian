@@ -1,0 +1,246 @@
+[2026/11/8 01:49:45] [Log] -------------------------------------------
+------------------
+[2026/11/8 01:49:45] [Log] crypto.publicDecrypt called
+------------------
+[2026/11/8 01:49:45] [Log] Key: -----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nVoGCHqIMJyqgALEUrc
+5JJhap0+HtJqzPE04pz4y+nrOmY7/12f3HvZyyoRsxKdXTZbO0wEHFIh0cRqsuaJ
+PyaOOPbA0BsalofIAY3mRhQQ3vSf+rn3g+w0S+udWmKV9DnmJlpWqizFajU4T/E4
+5ZgMNcXt3E1ips32rdbTR0Nnen9PVITvrbJ3l6CI2BFBImZQZ2P8N+LsqfJsqyVV
+wDkt3mHAVxV7FZbfYWG+8FDSuKQHaCmvgAtChx9hwl3J6RekkqDVa6GIV13D23LS
+qdk0Jb521wFJi/V6QAK6SLBiby5gYN6zQQ5RQpjXtR53MwzTdiAzGEuKdOtrY2Me
+DwIDAQAB
+-----END PUBLIC KEY-----
+
+
+------------------
+[2026/11/8 01:49:45] [Log] Buffer (Hex): 75736572406578616d706c652e636f6d
+------------------
+[2026/11/8 01:49:45] [Log] BrowserWindow created
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("document.loadData") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("document.loadData") result: "{\"snap\":null,\"filePath\":\"C:\\\\Users\\\\15949\\\\Desktop\\\\真果鉴源码\\\\AI_BUILD.md\",\"backups\":null,\"shouldReadFromDisk\":false,\"windowCounts\":1}"
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.put") args: ["useTreeStyle",true]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.put") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.put") args: ["sidebar_tab","file-tree"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.put") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.put") args: ["sidebar_tab","file-tree"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.put") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.getRecentFiles") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.getRecentFiles") result: {"files":[{"name":"AI_BUILD.md","path":"C:\\Users\\15949\\Desktop\\真果鉴源码\\AI_BUILD.md","date":1794073785471},{"name":"README.md","path":"C:\\Users\\15949\\AppData\\Local\\Temp\\7zO4D927246\\README.md","date":1794071995468},{"name":"发布上线与数据变更治理规范.md","path":"F:\\myworkspace\\05_Development_Projects\\Work_Projects\\JoyGov\\ops\\治理\\规范制度\\发布上线与数据变更治理规范.md","date":1790338604619},{"name":"附件-发布上线申请单模板.md","path":"F:\\myworkspace\\05_Development_Projects\\Work_Projects\\JoyGov\\ops\\治理\\规范制度\\附件-发布上线申请单模板.md","date":1790338603998},{"name":"附件-基础设施资源申请与回收登记单.md","path":"F:\\myworkspace\\05_Development_Projects\\Work_Projects\\JoyGov\\ops\\治理\\规范制度\\附件-基础设施资源申请与回收登记单.md","date":1790324588861},{"name":"F盘清理建议清单.md","path":"F:\\000000\\F盘清理建议清单.md","date":1788926550074},{"name":"financial-2026-04-26.md","path":"C:\\Users\\15949\\Desktop\\financial\\financial-2026-04-26.md","date":1777202515563},{"name":"Financial 2c2ab2c384b980fb8702f7fcd547b102.md","path":"C:\\Users\\15949\\AppData\\Local\\Temp\\7zOC175900F\\Financial 2c2ab2c384b980fb8702f7fcd547b102.md","date":1777202348021},{"name":"financial-2026-01-03.md","path":"C:\\Users\\15949\\Desktop\\financial\\financial-2026-01-03.md","date":1777202319998},{"name":"financial.md","path":"C:\\Users\\15949\\Desktop\\financial.md","date":1777200986008},{"name":"chat-帮我算一下我每个月的开销_  _摩托车每5000km要保养  保养320元，每天上班通勤7km，周一到周五，周末可能会出去兜会风，每周平均30km左右吧  95号汽油7.5一升左右，油耗是3.1_100km_  _工作日：早饭3元左右，午饭16，晚饭自己做饭，一荤一素_休息日：不吃早饭，午饭晚饭自己做，所以要预估每天的买菜_  _电费每个月差不多55左右吧，水费20 气费20_  _不知道还有什么花销，你可以提醒一下我.md","path":"C:\\Users\\15949\\Desktop\\chat-帮我算一下我每个月的开销_  _摩托车每5000km要保养  保养320元，每天上班通勤7km，周一到周五，周末可能会出去兜会风，每周平均30km左右吧  95号汽油7.5一升左右，油耗是3.1_100km_  _工作日：早饭3元左右，午饭16，晚饭自己做饭，一荤一素_休息日：不吃早饭，午饭晚饭自己做，所以要预估每天的买菜_  _电费每个月差不多55左右吧，水费20 气费20_  _不知道还有什么花销，你可以提醒一下我.md","date":1777192437567},{"name":"README.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Personal\\Git\\Douban-to-IMDb\\README.md","date":1770407497046},{"name":"简历.md","path":"C:\\Users\\15949\\Desktop\\简历.md","date":1767111324621},{"name":"中科海光k100智能体平台部署说明书.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\JoyGov\\智能体-自动化部署\\中科海光k100智能体平台部署说明书.md","date":1763305278916},{"name":"崇州公安智能体平台部署说明书.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\JoyGov\\智能体-自动化部署\\崇州公安智能体平台部署说明书.md","date":1763305271389},{"name":"重庆市江北区公安局智能体平台部署说明书（V1.0版本）.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\JoyGov\\智能体-自动化部署\\重庆市江北区公安局智能体平台部署说明书（V1.0版本）.md","date":1763305255748},{"name":"README.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Personal\\Git\\badboy-recollection\\README.md","date":1756745809826},{"name":"jl.md","path":"C:\\Users\\15949\\Desktop\\jl.md","date":1755618524265},{"name":"README.md","path":"F:\\OneDrive\\DDNS-GO\\README.md","date":1755343039593},{"name":"K8S 证书过期解决办法之替换证书 - 阿里云开发者社区.md","path":"C:\\Users\\15949\\Desktop\\hugotemp\\K8S 证书过期解决办法之替换证书 - 阿里云开发者社区\\K8S 证书过期解决办法之替换证书 - 阿里云开发者社区.md","date":1754817932723},{"name":"9_4_playbook变量.text","path":"C:\\Users\\15949\\Desktop\\9_4_playbook变量.text","date":1737792365076},{"name":"demo.md","path":"C:\\Users\\15949\\Desktop\\demo.md","date":1735539112983},{"name":"模拟试题.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\模拟考试\\模拟试题.md","date":1735489313005},{"name":"信创高级服务器操作系统自动化运维实践 - 客户端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第九章 Ansible管理\\信创高级服务器操作系统自动化运维实践 - 客户端.md","date":1735488288097},{"name":"信创高级服务器操作系统自动化运维实践 - 服务端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第九章 Ansible管理\\信创高级服务器操作系统自动化运维实践 - 服务端.md","date":1735488267107},{"name":"信创高级服务器操作系统SAN网络存储实践-客户端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第八章 ISCSI存储服务\\信创高级服务器操作系统SAN网络存储实践-客户端.md","date":1735461905353},{"name":"信创高级服务器操作系统SAN网络存储实践-服务器.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第八章 ISCSI存储服务\\信创高级服务器操作系统SAN网络存储实践-服务器.md","date":1735461871409},{"name":"信创高级服务器操作系统NAS网络存储实践 - 客户端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第七章 NFS服务部署\\信创高级服务器操作系统NAS网络存储实践 - 客户端.md","date":1735460484066},{"name":"信创高级服务器操作系统NAS网络存储实践 - 服务端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第七章 NFS服务部署\\信创高级服务器操作系统NAS网络存储实践 - 服务端.md","date":1735460441797},{"name":"信创高级服务器操作系统网络时间服务器部署实践 - 客户端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第六章 时钟同步服务部署\\信创高级服务器操作系统网络时间服务器部署实践 - 客户端.md","date":1735404865555},{"name":"信创高级服务器操作系统网络时间服务器部署实践 - 服务端.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第六章 时钟同步服务部署\\信创高级服务器操作系统网络时间服务器部署实践 - 服务端.md","date":1735404721988},{"name":"网络负载均衡与高可用方案实践.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第五章 高级网络应用\\网络负载均衡与高可用方案实践.md","date":1735402465840},{"name":"DHCP服务部署实践 - 服务器.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第四章 DHCP服务部署\\DHCP服务部署实践 - 服务器.md","date":1735401693350},{"name":"DHCP服务部署实践 - 客户端_1.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第四章 DHCP服务部署\\DHCP服务部署实践 - 客户端_1.md","date":1735401688875},{"name":"DNS服务器授权与域名解析实践 - 从服务器.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第三章 DNS服务部署\\DNS服务器授权与域名解析实践 - 从服务器.md","date":1735313533739},{"name":"DNS服务器授权与域名解析实践 - 主服务器.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第三章 DNS服务部署\\DNS服务器授权与域名解析实践 - 主服务器.md","date":1735312073673},{"name":"某电子商务企业高可用项目实践.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第二章 Nginx服务部署\\某电子商务企业高可用项目实践.md","date":1735138402233},{"name":"信创高级服务器操作系统LNMP业务部署实践.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第二章 Nginx服务部署\\信创高级服务器操作系统LNMP业务部署实践.md","date":1735138357387},{"name":"信创高级服务器操作系统内生安全实践.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统运维高级工程师KYCP（运维）\\第一章 系统安全与监控\\信创高级服务器操作系统内生安全实践.md","date":1735134943669},{"name":"模拟考试.md","path":"C:\\Users\\15949\\OneDrive - Princeton University\\Work\\0.大任\\麒麟系统\\证书考试\\麒麟操作系统云计算工程师KYCA（云计算）\\模拟考试\\模拟考试.md","date":1734964178468}],"folders":[]}
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.setTitle") args: [null,false]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.checkAsFocus") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.checkAsFocus") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("document.getSnapWithValidation") args: [null]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("document.getSnapWithValidation") result: "{\"snap\":null,\"shouldReadFromDisk\":false}"
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.checkAsFocus") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.checkAsFocus") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("document.hasDuplicateName") args: ["AI_BUILD.md"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("document.hasDuplicateName") result: false
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("document.setLastSync") args: ["2026-11-07T17:49:46.205Z"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("document.setLastSync") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.setTitle") args: [null,false]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.setTitle") args: ["AI_BUILD.md - Typora"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.setTitle") args: [null,false]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("theme.setThemeSource") args: ["system"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("theme.setThemeSource") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.put") args: ["backgroundColor","#FFFFFF"]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.put") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.put") args: ["isDarkMode",false]
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.put") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("window.checkAsFocus") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("window.checkAsFocus") result: 
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.getDownloadingDicts") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.getDownloadingDicts") result: "[]"
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.getUserDictionaryPath") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.getUserDictionaryPath") result: "C:\\Users\\15949\\AppData\\Roaming\\Typora\\typora-dictionaries"
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .invoke("setting.getUserDict") args: []
+------------------
+[2026/11/8 01:49:46] [Log] [IPC] .handle("setting.getUserDict") result: "{}"
+------------------
+[2026/11/8 01:49:47] [Log] [IPC] .invoke("setting.getKeyBinding") args: []
+------------------
+[2026/11/8 01:49:47] [Log] [IPC] .handle("setting.getKeyBinding") result: {"_useLowerCase":true}
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("document.switchDocument") args: ["C:\\Users\\15949\\Desktop\\真果鉴源码\\README.md"]
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("window.checkAsFocus") args: []
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("window.checkAsFocus") result: 
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("document.switchDocument") result: "{\"snap\":null,\"filePath\":\"C:\\\\Users\\\\15949\\\\Desktop\\\\真果鉴源码\\\\README.md\",\"backups\":null,\"shouldReadFromDisk\":false,\"windowCounts\":1}"
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("window.setTitle") args: [null,false]
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .invoke("document.hasDuplicateName") args: ["README.md"]
+------------------
+[2026/11/8 01:50:02] [Log] [IPC] .handle("document.hasDuplicateName") result: false
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .invoke("document.setLastSync") args: ["2026-11-07T17:50:02.994Z"]
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .handle("document.setLastSync") result: 
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .invoke("window.setTitle") args: ["README.md - Typora"]
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .invoke("window.setTitle") args: [null,false]
+------------------
+[2026/11/8 01:50:03] [Log] [IPC] .handle("window.setTitle") result: 
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .invoke("window.updateMenuForIsAlwaysOnTop") args: []
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .handle("window.updateMenuForIsAlwaysOnTop") result: 
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .invoke("menu.updateCustomZoom") args: []
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .handle("menu.updateCustomZoom") result: 
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .invoke("window.checkAsFocus") args: []
+------------------
+[2026/11/8 01:52:00] [Log] [IPC] .handle("window.checkAsFocus") result: 
+------------------
+[2026/11/8 01:58:36] [Log] -------------------------------------------
+------------------
+[2026/11/8 01:58:36] [Log] crypto.publicDecrypt called
+------------------
+[2026/11/8 01:58:36] [Log] Key: -----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA7nVoGCHqIMJyqgALEUrc
+5JJhap0+HtJqzPE04pz4y+nrOmY7/12f3HvZyyoRsxKdXTZbO0wEHFIh0cRqsuaJ
+PyaOOPbA0BsalofIAY3mRhQQ3vSf+rn3g+w0S+udWmKV9DnmJlpWqizFajU4T/E4
+5ZgMNcXt3E1ips32rdbTR0Nnen9PVITvrbJ3l6CI2BFBImZQZ2P8N+LsqfJsqyVV
+wDkt3mHAVxV7FZbfYWG+8FDSuKQHaCmvgAtChx9hwl3J6RekkqDVa6GIV13D23LS
+qdk0Jb521wFJi/V6QAK6SLBiby5gYN6zQQ5RQpjXtR53MwzTdiAzGEuKdOtrY2Me
+DwIDAQAB
+-----END PUBLIC KEY-----
+
+
+------------------
+[2026/11/8 01:58:36] [Log] Buffer (Hex): 75736572406578616d706c652e636f6d
+------------------
