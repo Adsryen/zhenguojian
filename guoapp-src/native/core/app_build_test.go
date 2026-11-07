@@ -27,7 +27,7 @@ func TestNativeBuildAuthorization(t *testing.T) {
 		}
 	}
 	// Registered-but-unimplemented sources must stay invisible to the user.
-	for _, source := range []string{"jinguoduanju", "jinguo", "heitao", "guipian", "hanxiaoquan"} {
+	for _, source := range []string{"guipian", "hanxiaoquan"} {
 		if err := nativeAuthorizeInput(nativeInput{Action: "catalog", Source: source}); !errors.Is(err, errNativeBuildSource) {
 			t.Fatalf("unimplemented source %s passed authorization: %v", source, err)
 		}
