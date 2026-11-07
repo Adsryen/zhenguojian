@@ -1032,10 +1032,7 @@ class MainWindow(QMainWindow):
         widget = None
         try:
             from .settings_panel import SettingsPanel
-            try:
-                widget = SettingsPanel()
-            except TypeError:
-                widget = SettingsPanel(self._core)  # S1 若要求传 core 的兜底
+            widget = SettingsPanel(self._core)  # 直连核心：站源开关落 source_prefs.json
         except Exception:
             widget = None
         if widget is None or not isinstance(widget, QWidget):
@@ -1082,6 +1079,7 @@ class MainWindow(QMainWindow):
         self.rank_list.setMaximumWidth(340)
         self.rank_list.setMinimumWidth(300)
         self.rank_list.dramaActivated.connect(self.open_detail)
+        self.rank_list.set_cover_loader(self._covers, self._request_covers)  # C1 遗留：榜单行补真封面
         self.rank_retry = QPushButton("重试加载")
         self.rank_retry.setProperty("role", "ghost")
         self.rank_retry.clicked.connect(self._retry_rankings)
