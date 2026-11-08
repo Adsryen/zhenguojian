@@ -380,6 +380,38 @@ class CoreClient:
         """开关某个站源；核心写入 data 目录 source_prefs.json 后立即生效。"""
         return self.call("setSourceEnabled", slug=slug, enabled=bool(enabled), timeout=15.0)
 
+    def resource_settings(self):
+        """读取核心的网络与下载设置（行协议 resourceSettings）。
+
+        返回 dict：proxyMode(auto|direct|manual)、proxyUrl、
+        catalogConcurrency、catalogIntervalMs、downloadConcurrency、
+        downloadBySource、warning、systemProxyStatus。设置由核心持久化在
+        data 目录 resource-settings.json，改动即时对取流/目录/下载生效。"""
+        return self.call("resourceSettings", timeout=10.0)
+
+    def save_resource_settings(self, proxy_mode=None, proxy_url=None,
+                               catalog_concurrency=None, catalog_interval_ms=None,
+                               download_concurrency=None, download_by_source=None):
+        """保存网络与下载设置（行协议 saveResourceSettings，核心侧校验）。
+
+        proxyUrl 支持 http/https/socks5/socks5h 前缀（manual 模式必填有效
+        地址）；并发 1-6、间隔 0-5000 毫秒。只发送显式给出的字段，其余保持
+        当前值。校验失败抛 CoreError（核心中文信息，调用方展示即可）。"""
+        current = self.resource_settings() or {}
+        settings = {
+            "proxyMode": proxy_mode if proxy_mode is not None else current.get("proxyMode", "auto"),
+            "proxyUrl": proxy_url if proxy_url is not None else current.get("proxyUrl", ""),
+            "catalogConcurrency": int(catalog_concurrency if catalog_concurrency is not None
+                                      else current.get("catalogConcurrency", 3)),
+            "catalogIntervalMs": int(catalog_interval_ms if catalog_interval_ms is not None
+                                     else current.get("catalogIntervalMs", 250)),
+            "downloadConcurrency": int(download_concurrency if download_concurrency is not None
+                                       else current.get("downloadConcurrency", 2)),
+            "downloadBySource": bool(download_by_source if download_by_source is not None
+                                     else current.get("downloadBySource", False)),
+        }
+        return self.call("saveResourceSettings", settings=settings, timeout=15.0)
+
     def sorani_account(self, command="", identifier="", password="", captcha_id="", track=None):
         """青空次元账号（T1，行协议 soraniAccount / provider_sorani_account.go）。
 

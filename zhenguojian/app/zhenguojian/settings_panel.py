@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""S1 设置面板：站源开关 / 播放默认 / 存储路径 / 关于。
+"""S1 设置面板：站源开关 / 播放默认 / 存储路径 / 网络与下载 / 关于。
 
 对外契约（M1 挂载用）
 ====================
@@ -33,7 +33,8 @@ import os
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                             QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
+                             QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout,
+                             QWidget)
 
 from . import tools, ui
 from .settings_widgets import GuoSwitch, SourceCard, SourceGrid
@@ -256,6 +257,7 @@ class SettingsPanel(QWidget):
         self._populate_sources()
         self._load_playback()
         self._load_paths()
+        self._load_network()
         self._refresh_about()
         self.refresh_qss()
 
@@ -338,6 +340,31 @@ class SettingsPanel(QWidget):
             "  border-radius: %(guo_radius)s; padding: 4px 10px;"
             "  color: %(guo_text)s; }"
             "QLineEdit[guoRole=\"pathBox\"]:read-only { color: %(guo_muted)s; }"
+            # 数字输入（网络与下载区）：与 pathBox 同描边口径，上下按钮自绘
+            "QSpinBox { background: %(guo_chip_bg)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 10px;"
+            "  color: %(guo_text)s; }"
+            "QSpinBox:hover, QSpinBox:focus { border-color: %(guo_accent)s; }"
+            "QSpinBox:disabled { color: %(disabled_text)s;"
+            "  background: %(surface2)s; border-color: %(disabled_border)s; }"
+            "QSpinBox::up-button, QSpinBox::down-button {"
+            "  subcontrol-origin: border; width: 18px;"
+            "  background: %(surface2)s; border: none; }"
+            "QSpinBox::up-button { subcontrol-position: top right;"
+            "  border-top-right-radius: %(guo_radius)s; }"
+            "QSpinBox::down-button { subcontrol-position: bottom right;"
+            "  border-bottom-right-radius: %(guo_radius)s; }"
+            "QSpinBox::up-button:hover, QSpinBox::down-button:hover {"
+            "  background: %(guo_chip_hover)s; }"
+            "QSpinBox::up-button:pressed, QSpinBox::down-button:pressed {"
+            "  background: %(guo_chip_pressed)s; }"
+            "QSpinBox::up-arrow { image: none; border-left: 4px solid transparent;"
+            "  border-right: 4px solid transparent;"
+            "  border-bottom: 5px solid %(guo_muted)s; width: 0; height: 0; }"
+            "QSpinBox::down-arrow { image: none; border-left: 4px solid transparent;"
+            "  border-right: 4px solid transparent;"
+            "  border-top: 5px solid %(guo_muted)s; width: 0; height: 0; }"
             "QPushButton[role=\"ghost\"] { background: transparent;"
             "  border: 1px solid %(guo_border)s; color: %(guo_muted)s;"
             "  border-radius: %(guo_radius)s; padding: 4px 12px; }"
@@ -381,7 +408,7 @@ class SettingsPanel(QWidget):
         title = QLabel("设置")
         title.setProperty("guoRole", "panelTitle")
         root.addWidget(title)
-        sub = QLabel("站源 · 播放默认 · 存储 · 关于")
+        sub = QLabel("站源 · 播放默认 · 存储 · 网络 · 关于")
         sub.setProperty("guoRole", "panelSub")
         root.addWidget(sub)
 
@@ -398,6 +425,7 @@ class SettingsPanel(QWidget):
         cl.addWidget(self._build_sources_section())
         cl.addWidget(self._build_playback_section())
         cl.addWidget(self._build_paths_section())
+        cl.addWidget(self._build_network_section())
         cl.addWidget(self._build_about_section())
         cl.addStretch(1)
         scroll.setWidget(content)
@@ -824,7 +852,160 @@ class SettingsPanel(QWidget):
         self._paths_hint.setText(message)
         self.libraryRootChanged.emit(target)
 
-    # ------------------------------------------------------------ ④ 关于
+    # ------------------------------------------------------------ ④ 网络与下载
+    _PROXY_MODES = ("auto", "direct", "manual")
+
+    def _build_network_section(self):
+        box, body, self._network_hint = self._section(
+            "s1_network", "网络与下载",
+            "代理与并发由本地核心统一执行（目录/取流/下载全部生效），保存即时生效；"
+            "「自动」模式跟随系统代理与环境变量。")
+        self.proxy_mode_combo = self._combo_row(body, "代理模式", "s1_proxymode")
+        self.proxy_mode_combo.addItems(["自动（跟随系统）", "直连", "手动"])
+        prow = QWidget()
+        pl = QHBoxLayout(prow)
+        pl.setContentsMargins(0, 2, 0, 2)
+        pl.setSpacing(10)
+        plab = QLabel("代理地址")
+        plab.setProperty("guoRole", "fieldLabel")
+        plab.setMinimumWidth(96)
+        pl.addWidget(plab)
+        self.proxy_url_edit = QLineEdit()
+        self.proxy_url_edit.setObjectName("s1_proxyurl")
+        self.proxy_url_edit.setProperty("guoRole", "pathBox")
+        self.proxy_url_edit.setPlaceholderText(
+            "http://127.0.0.1:7890 或 socks5://127.0.0.1:7891")
+        self.proxy_url_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        pl.addWidget(self.proxy_url_edit, 1)
+        pl.addStretch(1)
+        body.addWidget(prow)
+
+        self.catalog_spin = self._spin_row(body, "目录并发", "s1_catcon", 1, 6)
+        self.interval_spin = self._spin_row(body, "请求间隔", "s1_catgap", 0, 5000,
+                                            step=250)
+        self.download_spin = self._spin_row(body, "下载并发", "s1_dlcon", 1, 6)
+        brow = QWidget()
+        bl = QHBoxLayout(brow)
+        bl.setContentsMargins(0, 2, 0, 2)
+        bl.setSpacing(10)
+        blab = QLabel("按站源分道下载")
+        blab.setProperty("guoRole", "fieldLabel")
+        blab.setMinimumWidth(96)
+        bl.addWidget(blab)
+        self.bysource_switch = GuoSwitch()
+        self.bysource_switch.setObjectName("s1_bysource")
+        self.bysource_switch.setCursor(Qt.PointingHandCursor)
+        bl.addWidget(self.bysource_switch)
+        bl.addStretch(1)
+        body.addWidget(brow)
+
+        srow = QWidget()
+        sl = QHBoxLayout(srow)
+        sl.setContentsMargins(0, 6, 0, 2)
+        sl.setSpacing(10)
+        self._network_save = QPushButton("保存设置")
+        self._network_save.setObjectName("s1_netsave")
+        self._network_save.setProperty("role", "ghost")
+        self._network_save.setCursor(Qt.PointingHandCursor)
+        self._network_save.clicked.connect(self._on_save_network)
+        sl.addWidget(self._network_save)
+        self._network_status = QLabel("")
+        self._network_status.setProperty("guoRole", "rowError")
+        self._network_status.setWordWrap(True)
+        sl.addWidget(self._network_status, 1)
+        body.addWidget(srow)
+        return box
+
+    def _spin_row(self, body, label_text, object_name, lo, hi, step=1):
+        row = QWidget()
+        lay = QHBoxLayout(row)
+        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setSpacing(10)
+        lab = QLabel(label_text)
+        lab.setProperty("guoRole", "fieldLabel")
+        lab.setMinimumWidth(96)
+        lay.addWidget(lab)
+        spin = QSpinBox()
+        spin.setObjectName(object_name)
+        spin.setRange(lo, hi)
+        spin.setSingleStep(step)
+        spin.setSuffix(" ms")
+        spin.setMinimumWidth(140)
+        lay.addWidget(spin)
+        lay.addStretch(1)
+        body.addWidget(row)
+        return spin
+
+    def _net_core(self):
+        core = self._resolve_core()
+        if core is not None and callable(getattr(core, "resource_settings", None)):
+            return core
+        return None
+
+    def _load_network(self):
+        core = self._net_core()
+        widgets = (self.proxy_mode_combo, self.proxy_url_edit, self.catalog_spin,
+                   self.interval_spin, self.download_spin, self.bysource_switch,
+                   self._network_save)
+        for w in widgets:
+            w.setEnabled(core is not None)
+        if core is None:
+            self._network_hint.setText(
+                "本地核心未连接，暂无法读取或保存网络设置；启动应用后此区可用。")
+            return
+        try:
+            settings = core.resource_settings() or {}
+        except Exception as exc:  # pragma: no cover
+            self._network_hint.setText("读取网络设置失败：%s" % exc)
+            return
+        mode = str(settings.get("proxyMode", "auto"))
+        idx = self._PROXY_MODES.index(mode) if mode in self._PROXY_MODES else 0
+        for w in widgets[:6]:
+            w.blockSignals(True)
+        self.proxy_mode_combo.setCurrentIndex(idx)
+        self.proxy_url_edit.setText(str(settings.get("proxyUrl", "") or ""))
+        self.catalog_spin.setValue(int(settings.get("catalogConcurrency", 3)))
+        self.interval_spin.setValue(int(settings.get("catalogIntervalMs", 250)))
+        self.catalog_spin.setSuffix(" 路")
+        self.download_spin.setSuffix(" 路")
+        self.interval_spin.setSuffix(" 毫秒")
+        self.download_spin.setValue(int(settings.get("downloadConcurrency", 2)))
+        self.bysource_switch.setChecked(bool(settings.get("downloadBySource", False)))
+        for w in widgets[:6]:
+            w.blockSignals(False)
+        self.bysource_switch.refresh_state()
+        self._network_status.setText("")
+        warning = str(settings.get("warning", "") or "")
+        status = str(settings.get("systemProxyStatus", "") or "")
+        if warning:
+            self._network_status.setText(warning)
+        if status:
+            self._network_save.setToolTip("代理状态：%s" % status)
+
+    def _on_save_network(self):
+        core = self._net_core()
+        if core is None or not callable(getattr(core, "save_resource_settings", None)):
+            self._network_status.setText("本地核心未连接，设置未保存。")
+            return
+        try:
+            saved = core.save_resource_settings(
+                proxy_mode=self._PROXY_MODES[self.proxy_mode_combo.currentIndex()],
+                proxy_url=self.proxy_url_edit.text().strip(),
+                catalog_concurrency=self.catalog_spin.value(),
+                catalog_interval_ms=self.interval_spin.value(),
+                download_concurrency=self.download_spin.value(),
+                download_by_source=self.bysource_switch.isChecked())
+        except Exception as exc:
+            # 核心校验失败（并发/间隔/地址格式）：中文信息原样回显，原设置不变。
+            self._network_status.setText(str(exc))
+            return
+        self._network_status.setText("")
+        if saved:
+            self.proxy_url_edit.setText(str(saved.get("proxyUrl", "") or ""))
+        self._network_hint.setText("已保存并即时生效（持久化在数据目录 "
+                                   "resource-settings.json）。")
+
+    # ------------------------------------------------------------ ⑤ 关于
     def _build_about_section(self):
         box, body, _ = self._section(
             "s1_about", "关于", "真果鉴 · 红果短剧聚合客户端（站源适配参考 guoapp）。")
