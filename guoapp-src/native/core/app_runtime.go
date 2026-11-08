@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -353,6 +354,28 @@ func NativeRequest(raw string) (result string) {
 	return string(body)
 }
 
+// nativeBuildInfo 读取 go build 默认注入的 VCS 指纹（Go 1.18+），
+// 供界面显示「当前程序是哪个提交打出来的」。用 -buildvcs=false 构建
+// 或不在 git 工作区内构建时取不到，返回空值由界面显示「未知」。
+func nativeBuildInfo() map[string]any {
+	info := map[string]any{"revision": "", "commitTime": "", "modified": false}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return info
+	}
+	for _, setting := range bi.Settings {
+		switch setting.Key {
+		case "vcs.revision":
+			info["revision"] = setting.Value
+		case "vcs.time":
+			info["commitTime"] = setting.Value
+		case "vcs.modified":
+			info["modified"] = setting.Value == "true"
+		}
+	}
+	return info
+}
+
 func nativeDispatch(input nativeInput) (any, error) {
 	if err := nativeAuthorizeInput(input); err != nil {
 		return nil, err
@@ -368,7 +391,11 @@ func nativeDispatch(input nativeInput) (any, error) {
 			nativeState.engine = engine
 		}
 		nativeState.Unlock()
-		return map[string]any{"version": "0.2.17", "standalone": true, "allSources": buildAllSources == "true"}, nil
+		resp := map[string]any{"version": "0.2.17", "standalone": true, "allSources": buildAllSources == "true"}
+		for key, value := range nativeBuildInfo() {
+			resp[key] = value
+		}
+		return resp, nil
 	}
 	engine := nativeState.engine
 	nativeState.Unlock()

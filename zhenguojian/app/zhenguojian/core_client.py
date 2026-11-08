@@ -63,6 +63,9 @@ class CoreClient:
         self._recommend_page = 0
         self._recommend_generation = 0
         self.version = ""
+        # 打包时的 git 提交指纹（由 sidecar 的 go build VCS stamp 透传）：
+        # revision/commitTime/modified，取不到时为空，界面显示「未知」。
+        self.build_info = {}
         self._closing = False
         self._restarting = False
         self._restart_lock = threading.Lock()
@@ -91,6 +94,7 @@ class CoreClient:
         threading.Thread(target=self._drain_stderr, args=(self._process,), daemon=True).start()
         info = self.call("initialize", directory=self.data_dir, timeout=timeout)
         self.version = (info or {}).get("version", "")
+        self.build_info = {k: (info or {}).get(k) for k in ("revision", "commitTime", "modified")}
         return info
 
     def _point_downloads_at_app_folder(self):

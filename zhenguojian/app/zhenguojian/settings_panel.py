@@ -939,6 +939,7 @@ class SettingsPanel(QWidget):
             "s1_about", "关于", "真果鉴 · 红果短剧聚合客户端（站源适配参考 guoapp）。")
         self._about_version = self._kv_row(body, "应用版本")
         self._about_core = self._kv_row(body, "本地核心")
+        self._about_commit = self._kv_row(body, "打包提交")
         self._about_data = self._kv_row(body, "数据目录")
         # 配置存储说明较长：用独立 wordWrap 提示段，避免把行最小宽度撑爆
         store = QLabel("")
@@ -964,6 +965,20 @@ class SettingsPanel(QWidget):
         body.addWidget(row)
         return val
 
+    def _format_commit(self):
+        """把 sidecar 透传的 go build VCS 指纹排成一行可读文本。"""
+        info = getattr(self._core, "build_info", None) if self._core else None
+        revision = (info or {}).get("revision") or ""
+        if not revision:
+            return "未知（本地核心未连接，或构建未注入版本信息）"
+        stamp = revision[:12]
+        when = (info or {}).get("commitTime") or ""
+        if when:
+            stamp += "  ·  " + when[:10]
+        if (info or {}).get("modified"):
+            stamp += "  ·  ⚠ 构建时含未提交改动"
+        return stamp
+
     def _refresh_about(self):
         self._about_version.setText("真果鉴 v%s" % APP_VERSION)
         core_version = getattr(self._core, "version", "") if self._core else ""
@@ -971,6 +986,10 @@ class SettingsPanel(QWidget):
             self._about_core.setText(str(core_version))
         else:
             self._about_core.setText("本地核心未连接")
+        self._about_commit.setText(self._format_commit())
+        info = getattr(self._core, "build_info", None) if self._core else None
+        full = (info or {}).get("revision") or ""
+        self._about_commit.setToolTip(full or "无版本指纹")
         try:
             self._about_data.setText(tools.data_dir())
         except Exception:  # pragma: no cover
