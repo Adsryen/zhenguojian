@@ -1,0 +1,188 @@
+name: build-dist
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+env:
+  APP_NAME: 真果鉴
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - name: Test core
+        working-directory: guoapp-src/native
+        run: |
+          go vet ./core/
+          # 红果/上游站点从 CI 机房 IP 不可达属预期，网络 live 测试跳过（本地回归仍全跑）
+          go test ./core/ -count=1 -timeout 30m -skip 'Live(Smoke|CatalogSmoke|KeywordIgnored|SearchDeepLocal|SearchSmoke)?$'
+
+      - name: Build sidecar (linux)
+        working-directory: zhenguojian/sidecar
+        run: |
+          python3 - <<'PY'
+          import json, os
+          core = os.path.abspath("../guoapp-src/native/core")
+          overlay = {"Replace": {
+              os.path.join(core, "sidecar_overlay_discovery.go"): os.path.abspath("core_overlay/discovery.go"),
+              os.path.join(core, "sidecar_overlay_poster_metadata.go"): os.path.abspath("core_overlay/poster_metadata.go"),
+          }}
+          with open("sidecar-overlay.json", "w") as fh:
+              json.dump(overlay, fh)
+          PY
+          mkdir -p dist-linux
+          go build -overlay sidecar-overlay.json -o dist-linux/sidecar.exe .
+
+      - name: UI import smoke (offscreen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgl1 libegl1 libxkbcommon0
+          python3 -m pip install --upgrade pip --break-system-packages || true
+          python3 -m pip install PyQt5 --break-system-packages
+          cd zhenguojian/app
+          QT_QPA_PLATFORM=offscreen python3 - <<'PY'
+          import sys
+          from PyQt5.QtWidgets import QApplication
+          app = QApplication(sys.argv)
+          import zhenguojian.ui as ui
+          css = ui.build_stylesheet()
+          assert "guoRole" in css or len(css) > 1000, "stylesheet empty"
+          import zhenguojian.main  # noqa: F401  全量面板 import 链
+          import zhenguojian.settings_panel  # noqa: F401
+          import zhenguojian.widgets_guo  # noqa: F401
+          print("UI smoke OK")
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-linux-x64
+          path: zhenguojian/sidecar/dist-linux/sidecar.exe
+          retention-days: 30
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          architecture: x64
+
+      - name: Show commit
+        run: git log --oneline -1
+
+      - name: Build sidecar.exe
+        working-directory: zhenguojian\sidecar
+        run: |
+          # overlay 写到仓库外（RUNNER_TEMP），避免未跟踪文件把 go build 的 VCS modified 置真
+          @"
+          import json, os
+          core = os.path.abspath(os.path.join('..', '..', 'guoapp-src', 'native', 'core'))
+          overlay = {'Replace': {
+              os.path.join(core, 'sidecar_overlay_discovery.go'): os.path.abspath(os.path.join('core_overlay', 'discovery.go')),
+              os.path.join(core, 'sidecar_overlay_poster_metadata.go'): os.path.abspath(os.path.join('core_overlay', 'poster_metadata.go')),
+          }}
+          out = os.path.join(os.environ['RUNNER_TEMP'], 'core-overlay-ci.json')
+          with open(out, 'w') as fh:
+              json.dump(overlay, fh)
+          print(out)
+          "@ | Set-Content "$env:RUNNER_TEMP\make-overlay.py" -Encoding UTF8
+          python "$env:RUNNER_TEMP\make-overlay.py"
+          New-Item -ItemType Directory -Force ..\..\dist\runtime | Out-Null
+          go build -overlay "$env:RUNNER_TEMP\core-overlay-ci.json" -trimpath -ldflags "-s -w" -o ..\..\dist\runtime\sidecar.exe .
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Download ffmpeg
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+          curl.exe -sSL --retry 3 -o ffmpeg.zip $url
+          Expand-Archive -Force ffmpeg.zip fftmp
+          New-Item -ItemType Directory -Force dist\runtime\ffmpeg | Out-Null
+          Copy-Item fftmp\ffmpeg-master-latest-win64-gpl\bin\ffmpeg.exe dist\runtime\ffmpeg\
+          Copy-Item fftmp\ffmpeg-master-latest-win64-gpl\bin\ffprobe.exe dist\runtime\ffmpeg\
+          Remove-Item -Recurse -Force ffmpeg.zip, fftmp
+
+      - name: Download mpv
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = Invoke-RestMethod -Headers @{ "User-Agent" = "ci" } https://api.github.com/repos/mpv-player/mpv/releases/latest
+          $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*full*.7z" } | Select-Object -First 1
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
+          Write-Host ("mpv asset: " + $asset.name)
+          curl.exe -sSL --retry 3 -o mpv.7z $asset.browser_download_url
+          New-Item -ItemType Directory -Force mpvtmp, dist\runtime\mpv | Out-Null
+          & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.7z | Out-Null
+          $exe = Get-ChildItem -Recurse mpvtmp -Filter mpv.exe | Select-Object -First 1
+          Copy-Item $exe.FullName dist\runtime\mpv\mpv.exe
+          Remove-Item -Recurse -Force mpv.7z, mpvtmp
+
+      - name: Install python deps
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "PyQt5==5.15.11" pywin32 pyinstaller
+
+      - name: PyInstaller
+        working-directory: zhenguojian\app
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed `
+            --name "真果鉴" --onedir --contents-directory . `
+            --paths . --distpath ..\..\dist-app --workpath ..\..\build-work --specpath ..\..\build-work `
+            run.py
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Assemble dist
+        run: |
+          $stage = "dist\真果鉴"
+          New-Item -ItemType Directory -Force $stage | Out-Null
+          # onedir 输出（PyInstaller 6.x 把支持文件放 _internal，exe 在 dist-app\真果鉴\ 根）
+          Copy-Item -Recurse -Force "dist-app\真果鉴\*" $stage\
+          # runtime（sidecar/mpv/ffmpeg）与 exe 同级——tools.app_root()=exe 所在目录
+          # 上面 dist\ 里已有 runtime\sidecar.exe（第一步构建产物在 dist\ 根）
+          Move-Item -Force dist\runtime $stage\runtime -ErrorAction SilentlyContinue
+          git show -s --format=%cI HEAD | Set-Content -NoNewline ct.txt
+          $commit = (Get-Content ct.txt).Trim(); Remove-Item ct.txt
+          $json = '{"revision":"' + "${{ github.sha }}" + '","commitTime":"' + $commit + '","modified":false}'
+          [IO.File]::WriteAllText("$PWD\$stage\build-info.json", $json)
+          Get-ChildItem -Recurse $stage | Select-Object -First 40 FullName
+
+      - name: Selftest (informational)
+        run: |
+          .\dist\真果鉴\真果鉴.exe --selftest
+          if ($LASTEXITCODE -ne 0) { Write-Warning "selftest failed (上游可能对 CI 机房 IP 敏感)，不阻断打包" }
+
+      - name: Package zip
+        run: |
+          Compress-Archive -Path "dist\真果鉴" -DestinationPath "真果鉴-windows-x64.zip" -Force
+          (Get-Item "真果鉴-windows-x64.zip").Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zhenGuoJian-windows-x64
+          path: 真果鉴-windows-x64.zip
+          retention-days: 30
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 真果鉴-windows-x64.zip
+          generate_release_notes: true
