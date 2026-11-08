@@ -2,10 +2,13 @@
 """Find dramas with server-provided multi-dimensional filters and continuous paging.
 
 C1 版式：顶部「分类 Tab 条」(体裁通道，F2 guoRole=groupTab 质感) 接管原
-genre 筛选行；墙顶大卡片位（首个 Tab 顶部 hero）与钉住刷新按钮由
-PosterWall 提供。新增 `set_source(slug)`：M1 站源切换契约，存 slug，
-后续 browse_filters / browse_filtered 请求透传 source（core_client 暂不
-认识该 kwarg 时降级为 filters 透传，Go discovery 侧对未知 key 安全忽略）。
+genre 筛选行；墙顶大卡片位（首个 Tab 顶部 hero，固定高 260px 横条 banner）
+与钉住刷新按钮由 PosterWall 提供。`set_source(slug)`：M1 站源切换契约，
+存 slug，后续 browse_filters / browse_filtered 请求透传 source（core_client
+暂不认识该 kwarg 时降级为 filters 透传，Go discovery 侧对未知 key 安全忽略）。
+筛选面板第一行为「站源」芯片行（set_sources 注入清单，缺省用本地兜底表）：
+点芯片等价于 SourceSwitchPopup 选源，双向同步高亮；站源是切换上下文，
+不参与 genre 等筛选维度，slug 不进 _filters 与摘要字符串。
 """
 from __future__ import annotations
 
@@ -28,13 +31,57 @@ FILTER_ORDER = ("genre", "category_dim_theme", "category_dim_role", "category_di
 DEFAULT_TABS = (("", "全部"), ("short_play", "真人剧"),
                 ("comic_series", "漫剧"), ("ai_series", "AI剧"))
 
+# 筛选面板「站源」芯片行兜底表：与 main.py FALLBACK_SOURCES 同口径本地抄
+# 一份（12 个展示源，黄果拆 视频/AI/旧版 三个变体 id），不 import main。
+# 外部通过 set_sources() 注入真表时优先用注入值。
+FALLBACK_SOURCES = (
+    ("hongguo", "红果"), ("hanxiaoquan", "韩小圈"), ("guipian", "鬼片"),
+    ("sorani", "青空"), ("huangdou", "黄豆"), ("huangju", "剧果"),
+    ("yeguo", "野果"), ("dsd", "帝果"), ("jinguoduanju", "禁果短剧"),
+    ("jinguo", "禁果"), ("heitao", "黑桃"),
+    ("huangguo-video", "黄果·视频"), ("huangguoai", "黄果·AI"),
+    ("cloudfront", "黄果·旧版"),
+)
+
+
+def _normalise_sources(raw):
+    """把 sources 注入格式统一为 [{"slug","name","implemented"}]。
+
+    接受 list[dict{slug,name[,implemented]}] 或 list[(slug,name[,ok])]，
+    容忍 dict 缺 name（回落 slug）、空 slug、重复 slug。
+    """
+    out, seen = [], set()
+    for entry in raw or ():
+        implemented = True
+        if isinstance(entry, dict):
+            slug = str(entry.get("slug") or "")
+            name = str(entry.get("name") or slug)
+            implemented = bool(entry.get("implemented", True))
+        elif isinstance(entry, (list, tuple)):
+            if not entry:
+                continue
+            slug = str(entry[0] or "")
+            name = str(entry[1]) if len(entry) > 1 and entry[1] else slug
+            implemented = bool(entry[2]) if len(entry) > 2 else True
+        else:
+            slug = name = str(entry or "")
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append({"slug": slug, "name": name, "implemented": implemented})
+    return out
+
 
 class BrowsePanel(QWidget):
     openDrama = pyqtSignal(object)
     searchRequested = pyqtSignal(str)
     statusMessage = pyqtSignal(str)
+    # 筛选面板里点「站源」芯片切换成功后发出（与 SourceSwitchPopup 的
+    # source_selected 语义一致，供 main.py 后续接线同步 popup/QSettings；
+    # 未接线时面板自身已刷新，无副作用）。
+    sourcePicked = pyqtSignal(str)
 
-    def __init__(self, core, parent=None):
+    def __init__(self, core, parent=None, sources=None):
         super().__init__(parent)
         self.setProperty("role", "browsePage")
         self._core = core
@@ -59,8 +106,13 @@ class BrowsePanel(QWidget):
         self._empty_pages = 0
         self._collapsed = False
         self._source = ""
+        # 站源上下文（非筛选维度）：slug 永不进 _filters / 筛选摘要字符串。
+        self._sources = _normalise_sources(sources) or _normalise_sources(FALLBACK_SOURCES)
+        self._source_row = None
+        self._source_group = None
         self._tab_labels = [name for _, name in DEFAULT_TABS]
         self._build_ui()
+        self._rebuild_source_row()
         self._set_tabs(DEFAULT_TABS)
         self._covers.loaded.connect(self.wall.set_pixmap)
         self._covers.failed.connect(self.wall.set_failed)
@@ -143,7 +195,13 @@ class BrowsePanel(QWidget):
         width=max(300,self.filter_scroll.viewport().width())
         required=self.filter_layout.heightForWidth(width)
         if required<=0: required=self.filter_holder.sizeHint().height()
-        self.filter_scroll.setFixedHeight(min(max(80,required+4),max(160,int(self.height()*0.46))))
+        # 高度帽：比例上限 0.38（原 0.46 会把 hero+海报墙挤没）；hero 激活
+        # 时再按「hero+两行卡片」所需视口高度让路（280 ≈ 标题行/Tab 条/摘要
+        # 行/底栏 + 边距，实测值）。筛选区自身可内滚，海报墙可外滚兜底。
+        upper = int(self.height() * 0.38)
+        if self.wall.hero_active():
+            upper = min(upper, max(0, self.height() - 280 - self.wall.hero_banner_min_viewport(2)))
+        self.filter_scroll.setFixedHeight(min(max(80,required+4),max(140,upper)))
     def _search(self):
         query=self.query.text().strip()
         if query:self.searchRequested.emit(query)
@@ -163,13 +221,84 @@ class BrowsePanel(QWidget):
         filter key 安全忽略），为 M1 接入后端透传留出接口。已加载过则
         立即重刷找剧页（main.py 站源切换调用点预期「自己刷新」）；
         未加载过则只记录，首帧加载自然带上。
+
+        筛选面板的「站源」芯片行与本方法双向同步：外部（SourceSwitchPopup
+        →main.py getattr）进来时，这里负责把高亮态刷到芯片上。
         """
         slug = str(slug or "")
         if slug == self._source: return
         self._source = slug
+        self._sync_source_chips()
         self._filter_cache = {}
         if self._loaded:
             self._load_filters()
+    def set_sources(self, sources):
+        """注入展示源清单，用于筛选面板「站源」芯片行。
+
+        sources 接受 list[dict{slug,name[,implemented]}] 或
+        list[(slug,name[,ok])]（与 main.py / SourceSwitchPopup.set_sources
+        同口径）；为空则回退内置 FALLBACK_SOURCES 兜底表。
+        """
+        self._sources = _normalise_sources(sources) or _normalise_sources(FALLBACK_SOURCES)
+        self._rebuild_source_row()
+    def _source_display_slug(self):
+        # _source=""（未显式切换过）＝用服务端默认站源：芯片按列表第一项
+        # （红果，与 main.py DEFAULT_SOURCE 同口径）呈现选中态。
+        return str(self._source or (self._sources[0]["slug"] if self._sources else ""))
+    def _rebuild_source_row(self):
+        """重建筛选面板第一行的「站源」芯片行。站源是切换上下文，不进
+        _filters / 摘要 / 重置逻辑。"""
+        if self._source_row is not None:
+            self.filter_layout.removeWidget(self._source_row)
+            # deleteLater 要等事件循环退出才生效：先 hide+脱离父子链，
+            # 否则旧芯片会残影叠在新行上（与 _build_filters 清理口径一致）。
+            self._source_row.hide()
+            self._source_row.setParent(None)
+            self._source_row.deleteLater()
+            self._source_row = None
+        if self._source_group is not None:
+            self._source_group.deleteLater()
+            self._source_group = None
+        if not self._sources:
+            return
+        row = QWidget();row_layout=QHBoxLayout(row);row_layout.setContentsMargins(0,0,0,0);row_layout.setSpacing(10)
+        label = QLabel("站源");label.setProperty("role","filterLabel");label.setFixedWidth(48);row_layout.addWidget(label,0,Qt.AlignTop)
+        holder = QWidget();flow = FlowLayout(holder,spacing=4);holder.setSizePolicy(QSizePolicy.Expanding,QSizePolicy.Preferred)
+        group = QButtonGroup(self);group.setExclusive(True);self._source_group = group
+        checked = self._source_display_slug()
+        for entry in self._sources:
+            slug = entry["slug"]
+            button = QPushButton(entry["name"])
+            button.setProperty("role","filterChip");button.setCheckable(True);button.setChecked(slug == checked)
+            button.setCursor(Qt.PointingHandCursor)
+            button._source_slug = slug
+            if not entry.get("implemented", True):
+                button.setEnabled(False);button.setToolTip("尚未接入，暂不可切换")
+            else:
+                button.setToolTip("切换到 %s" % entry["name"])
+            button.clicked.connect(lambda picked=False,s=slug: self._select_source(s))
+            group.addButton(button);flow.addWidget(button)
+        row_layout.addWidget(holder,1)
+        self._source_row = row
+        self.filter_layout.insertWidget(0,row)
+        QTimer.singleShot(0,self._size_filters)
+    def _sync_source_chips(self):
+        if self._source_group is None:
+            return
+        checked = self._source_display_slug()
+        buttons = self._source_group.buttons()
+        for button in buttons: button.setChecked(False)
+        for button in buttons:
+            if getattr(button,"_source_slug",None) == checked:
+                button.setChecked(True);break
+    def _select_source(self, slug):
+        """点「站源」芯片＝在 SourceSwitchPopup 里选该源：走同一 set_source
+        逻辑（刷 chip 高亮 + 清缓存重刷），并发 sourcePicked 供外部同步
+        popup/QSettings 接线；slug 不进筛选条件字符串。"""
+        if slug == self._source:
+            return
+        self.set_source(slug)
+        self.sourcePicked.emit(slug)
     def _load_filters(self):
         genre=self._filters["genre"];cache_key=(genre,self._source)
         self._filter_token+=1;token=self._filter_token
@@ -199,6 +328,7 @@ class BrowsePanel(QWidget):
             if item.widget():item.widget().hide();item.widget().deleteLater()
         for group in self._button_groups.values(): group.deleteLater()
         self._button_groups={}
+        self._rebuild_source_row()  # 站源行永远是第一行，不参与 genre 维度筛选
         genre_group=next((g for g in self._groups if g.get("key")=="genre"),None)
         if genre_group is not None:
             # 服务器给的 genre 通道为准（别发明）；Tab 条接管该行，芯片区不再重复渲染
@@ -250,6 +380,8 @@ class BrowsePanel(QWidget):
                 # 首个 Tab 顶部大卡片位（source-map ④：首 Tab hero）
                 if self._is_first_tab() and items:self.wall.set_hero(items[0])
                 else:self.wall.set_hero(None)
+                # hero 出现/消失改变「hero+两行」所需高度，让筛选区重新让路
+                QTimer.singleShot(0,self._size_filters)
             next_offset=int(result.get("nextOffset") or 0);self._has_more=bool(result.get("hasMore")) and next_offset>offset
             self._offset=next_offset;self._cursor=str(result.get("sessionId") or "");self._loading=False
             self._empty_pages=self._empty_pages+1 if not added else 0

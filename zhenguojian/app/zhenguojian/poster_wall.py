@@ -6,8 +6,10 @@
 
 - QListWidget IconMode 响应式网格（对应原版 ``auto-fill + minmax``，
   列数按宽度算，见 `_recompute_tile`）；
-- 顶部钉住的「大卡片位」`set_hero`：横版大图 + 标题 + 简介，按
-  research/source-map.md ④ 的版式（首 Tab 顶部大卡）；
+- 顶部钉住的「大卡片位」`set_hero`：guoapp 式横条 banner——高度上限
+  HERO_H(260px)、宽随内容区，封面小图(150×210)在右、标题+简介在左，
+  简介最多两行省略；窗口矮到放不下 banner+一行卡片时 banner 收缩/隐藏，
+  海报墙永远可见（按 research/source-map.md ④ 的版式：首 Tab 顶部大卡）。
 - 顶部钉住的刷新按钮（`set_refresh_enabled` + `refreshRequested`，默认
   关闭，不影响日历/创作者页的既有用法）；
 - 数据流原样保留：封面仍走 `set_cover_loader` + 外部 `set_pixmap/
@@ -22,10 +24,10 @@ from __future__ import annotations
 import time
 
 from PyQt5.QtCore import QRect, QRectF, QSize, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import (QBrush, QColor, QFont, QFontMetrics, QLinearGradient, QPainter,
+from PyQt5.QtGui import (QBrush, QColor, QFont, QFontMetrics, QPainter,
                          QPainterPath, QPen, QPixmap)
 from PyQt5.QtWidgets import (QAbstractItemView, QListWidget, QListWidgetItem, QPushButton,
-                             QStyle, QStyledItemDelegate, QWidget)
+                             QSizePolicy, QStyle, QStyledItemDelegate, QWidget)
 
 from .ui import DESIGN
 from .poster_tooltip import poster_tooltip
@@ -35,10 +37,15 @@ COVER_RADIUS = 9          # 原版 .rel-cover / 卡片封面圆角
 CARD_GAP = 14             # 原版 grid gap（格子与格子之间）
 MIN_TILE = 128            # 原版 minmax(128px, 1fr) 的下限（封面宽）
 BADGE_H = 20
-# 顶部大卡片位尺寸（Mock，按 source-map ④：整宽，高度约宽度的三成）
-HERO_RATIO = 0.30
-HERO_MIN_H = 150
-HERO_MAX_H = 230
+# 顶部大卡片位（guoapp 式横条 banner）：高度上限 HERO_H，宽随内容区。
+# 旧版按宽度 0.30 比例算高（上限 230），在个别分辨率/布局下 banner 会
+# 挤压海报墙；改为固定上限 HERO_H + 纵向 Fixed sizePolicy 双保险，任何
+# 布局都不可能把它撑高；窗口太矮放不下「banner+至少一行卡片」时 banner
+# 先收缩到 HERO_MIN_H，再不够直接隐藏，保证海报墙永远可见可滚动。
+HERO_H = 260              # banner 高度上限 px（设计意图 240-280 区间）
+HERO_MIN_H = 140          # banner 收缩下限，低于此值隐藏 banner 让位给墙
+HERO_PAD = 16             # banner 内边距
+HERO_COVER = (150, 210)   # 右侧封面槽，与 widgets.THUMB_SIZE 同口径
 REFRESH_H = 30            # 无 hero 时给顶部钉住刷新按钮预留的行高
 
 
@@ -298,9 +305,12 @@ class _CardSlot(QWidget):
 
 
 class _WallHero(QWidget):
-    """顶部大卡片位：横版大图 + 标题 + 简介（发现页首 Tab）。
+    """顶部大卡片位：guoapp 式横条 banner（高度上限 HERO_H，矮窗可让位）。
 
-    自绘（封面裁切填充 + 左侧/底部渐变压暗），点击转成 dramaActivated。
+    版式：卡片底 + 左侧标题/简介（简介最多两行省略）、右侧 150×210 封面
+    小图；自绘，点击转成 dramaActivated。纵向 sizePolicy 钉成 Fixed，
+    实际高度由 PosterWall._layout_overlays 设定——即使被误放进带 stretch
+    的布局里也不会吃空间。
     """
 
     def __init__(self, owner, parent=None):
@@ -309,6 +319,8 @@ class _WallHero(QWidget):
         self._drama = None
         self._pixmap = None
         self._hover = False
+        self.setFixedHeight(HERO_H)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         self.setCursor(Qt.PointingHandCursor)
         self.setAttribute(Qt.WA_Hover, True)
 
@@ -346,29 +358,32 @@ class _WallHero(QWidget):
         path = QPainterPath()
         path.addRoundedRect(rect, radius, radius)
         painter.setClipPath(path)
-        painter.fillRect(rect, QColor(DESIGN["cover_bg"]))
+        painter.fillRect(rect, QColor(DESIGN["guo_card_bg"]))
         drama = self._drama or {}
+        # 右侧封面槽（标准 150×210，垂直居中，圆角裁切，居中缩放裁切）；
+        # banner 矮于标准高度时封面等比缩小，保持 5:7 比例。
+        cover_h = min(HERO_COVER[1], self.height() - 2 * HERO_PAD)
+        cover_w = int(round(cover_h * HERO_COVER[0] / HERO_COVER[1]))
+        cover = QRectF(self.width() - HERO_PAD - cover_w,
+                       (self.height() - cover_h) / 2.0, cover_w, cover_h)
+        cover_clip = QPainterPath()
+        cover_clip.addRoundedRect(cover, COVER_RADIUS, COVER_RADIUS)
         pixmap = self._pixmap
+        painter.save()
+        painter.setClipPath(cover_clip)
+        painter.fillRect(cover, QColor(DESIGN["cover_bg"]))
         if pixmap is not None and not pixmap.isNull():
-            scaled = pixmap.scaled(self.size(), Qt.KeepAspectRatioByExpanding,
+            scaled = pixmap.scaled(cover.size().toSize(), Qt.KeepAspectRatioByExpanding,
                                    Qt.SmoothTransformation)
-            left = max(0, (scaled.width() - self.width()) // 2)
-            top = max(0, (scaled.height() - self.height()) // 2)
-            painter.drawPixmap(-left, -top, scaled)
-        # 左侧 + 底部双层渐变压暗，保证文字可读
-        shade = max(120, int(rect.width() * 0.62))
-        grad = QLinearGradient(rect.left(), 0, rect.left() + shade, 0)
-        grad.setColorAt(0.0, QColor(6, 8, 14, 205))
-        grad.setColorAt(1.0, QColor(6, 8, 14, 0))
-        painter.fillRect(rect, grad)
-        grad2 = QLinearGradient(0, max(0.0, rect.bottom() - 90), 0, rect.bottom())
-        grad2.setColorAt(0.0, QColor(6, 8, 14, 0))
-        grad2.setColorAt(1.0, QColor(6, 8, 14, 180))
-        painter.fillRect(rect, grad2)
+            left = max(0, (scaled.width() - int(cover.width())) // 2)
+            top = max(0, (scaled.height() - int(cover.height())) // 2)
+            painter.drawPixmap(int(cover.left()) - left, int(cover.top()) - top, scaled)
+        painter.restore()
+        # 左侧文字栏：标题 1 行省略 + 简介最多 2 行省略，整体垂直居中
+        x = HERO_PAD + 2
+        text_width = max(60, int(cover.left() - x - HERO_PAD))
         title = (drama.get("title") or "短剧").strip()
         desc = str(drama.get("description") or drama.get("intro") or "").strip().replace("\n", " ")
-        x = 18
-        text_width = max(40, self.width() - x * 2 - 60)
         title_font = QFont(self.font())
         title_font.setPixelSize(17)
         title_font.setBold(True)
@@ -377,21 +392,23 @@ class _WallHero(QWidget):
         title_metrics = QFontMetrics(title_font)
         desc_metrics = QFontMetrics(desc_font)
         lines = _wrap_lines(desc_metrics, desc, text_width, 2) if desc else []
-        bottom = self.height() - 14
         desc_h = desc_metrics.height() * len(lines)
+        gap = 6 if lines else 0
+        block_h = title_metrics.height() + gap + desc_h
+        top = int((self.height() - block_h) / 2)
         painter.setFont(title_font)
-        painter.setPen(QColor("#ffffff"))
-        title_rect = QRect(x, bottom - desc_h - title_metrics.height() - 6,
-                           text_width, title_metrics.height())
-        painter.drawText(title_rect, Qt.AlignLeft | Qt.AlignVCenter,
+        painter.setPen(QColor(DESIGN["text"]))
+        painter.drawText(QRect(x, top, text_width, title_metrics.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter,
                          title_metrics.elidedText(title, Qt.ElideRight, text_width))
-        painter.setFont(desc_font)
-        painter.setPen(QColor(215, 220, 229, 200))
-        y = bottom - desc_h
-        for line in lines:
-            painter.drawText(QRect(x, y, text_width, desc_metrics.height()),
-                             Qt.AlignLeft | Qt.AlignVCenter, line)
-            y += desc_metrics.height()
+        if lines:
+            painter.setFont(desc_font)
+            painter.setPen(QColor(DESIGN["muted"]))
+            y = top + title_metrics.height() + gap
+            for line in lines:
+                painter.drawText(QRect(x, y, text_width, desc_metrics.height()),
+                                 Qt.AlignLeft | Qt.AlignVCenter, line)
+                y += desc_metrics.height()
         painter.setClipping(False)
         painter.setPen(QPen(QColor(DESIGN["guo_accent"] if self._hover else DESIGN["guo_border"]), 1))
         painter.setBrush(Qt.NoBrush)
@@ -447,6 +464,18 @@ class PosterWall(QListWidget):
     # ------------------------------------------------------------- sizing
     def tile_size(self):
         return self._tile
+
+    def hero_active(self):
+        return self._hero is not None and self._hero_drama is not None
+
+    def hero_banner_min_viewport(self, rows=2):
+        """「hero + rows 行卡片」同时可见所需的视口高度。
+
+        宿主面板（browse_panel）用它决定筛选区让出多少高度；hero 未启用
+        时返回纯网格高度，方便同一公式复用。
+        """
+        base = HERO_H + 8 if self.hero_active() else 0
+        return base + rows * (self._tile.height() + CARD_GAP) + 6
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -561,19 +590,29 @@ class PosterWall(QListWidget):
         self._layout_overlays()
 
     def _hero_height(self):
-        return min(HERO_MAX_H, max(HERO_MIN_H, int(self.viewport().width() * HERO_RATIO)))
+        """banner 高度上限 HERO_H(260)，与宽度解耦；窗口太矮时按比例让位，
+        保证 hero 下方至少还能看到一行卡片；连让位下限都不够就返回 0 隐藏
+        hero——海报墙永远可见、可滚动，绝不允许 hero 吃掉整个内容区。"""
+        total = self.height() - 2 * self.frameWidth()
+        keep = max(self._tile.height(), MIN_TILE) + CARD_GAP
+        h = min(HERO_H, total - 8 - keep)
+        return h if h >= HERO_MIN_H else 0
 
     def _layout_overlays(self):
         frame = self.frameWidth()
         viewport = self.viewport()
         hero_active = self._hero is not None and self._hero_drama is not None
         hero_h = self._hero_height() if hero_active else 0
+        if hero_h <= 0:
+            hero_active = False
         reserve = hero_h + 8 if hero_h else (REFRESH_H + 6 if self._refresh_enabled else 0)
         if reserve != self._top_reserve:
             self._top_reserve = reserve
             self.setViewportMargins(0, reserve, 0, 0)
         if hero_active:
+            self._hero.setFixedHeight(hero_h)
             self._hero.setGeometry(viewport.x(), frame + 3, viewport.width(), hero_h)
+            self._hero.show()
             self._hero.raise_()
         elif self._hero is not None:
             self._hero.hide()

@@ -902,6 +902,8 @@ class MainWindow(QMainWindow):
         self.source_switch = SourceSwitchPopup()
         self.source_switch.source_selected.connect(self._on_source_selected)
         self.source_switch.source_toggled.connect(self._on_source_toggled)
+        # 筛选面板里的站源 chip 也要回写右上切换钮的当前态。
+        self.browse_panel.sourcePicked.connect(self.source_switch.set_current)
         strip.addWidget(hint)
         strip.addStretch(1)
         strip.addWidget(self.source_switch)
@@ -930,9 +932,10 @@ class MainWindow(QMainWindow):
         return stored if stored in known else DEFAULT_SOURCE
 
     def _apply_sources_to_switch(self):
-        """把当前清单灌进弹层；F1 的 list_sources 到位后异步替换硬编码表。"""
+        """把当前清单灌进弹层与筛选面板；F1 的 list_sources 到位后异步替换硬编码表。"""
         self.source_switch.set_sources(self._sources)
         self.source_switch.set_current(self.current_source)
+        self.browse_panel.set_sources(self._sources)
         if not hasattr(self._core, "list_sources"):
             return  # F1 尚未提供：回退 12 源展示表已经够用
         def work():
@@ -945,6 +948,7 @@ class MainWindow(QMainWindow):
             self._sources = entries
             self.source_switch.set_sources(entries)
             self.source_switch.set_current(self.current_source)
+            self.browse_panel.set_sources(entries)
         # 拉取失败保持静默：回退表可用，不该每次启动都打扰用户
         self._runner.run(work, on_success=done)
 
