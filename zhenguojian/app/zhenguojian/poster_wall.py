@@ -409,10 +409,13 @@ class _WallHero(QWidget):
                 painter.drawText(QRect(x, y, text_width, desc_metrics.height()),
                                  Qt.AlignLeft | Qt.AlignVCenter, line)
                 y += desc_metrics.height()
+        # 常态不描边：真机反馈带边框的卡片像「中间突出的块」，
+        # 与页面脱节；只在悬停时给一圈强调色提示可点击。
         painter.setClipping(False)
-        painter.setPen(QPen(QColor(DESIGN["guo_accent"] if self._hover else DESIGN["guo_border"]), 1))
-        painter.setBrush(Qt.NoBrush)
-        painter.drawPath(path)
+        if self._hover:
+            painter.setPen(QPen(QColor(DESIGN["guo_accent"]), 1))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(path)
 
 
 class PosterWall(QListWidget):

@@ -384,13 +384,19 @@ class BrowsePanel(QWidget):
         def done(result):
             if token!=self._token:return
             result=result or {};items=result.get("items") or []
-            before=self.wall.count();self.wall.append_items(items);added=self.wall.count()-before
             if reset:
-                # 首个 Tab 顶部大卡片位（source-map ④：首 Tab hero）
-                if self._is_first_tab() and items:self.wall.set_hero(items[0])
-                else:self.wall.set_hero(None)
+                # 首个 Tab 顶部大卡片位（source-map ④：首 Tab hero）。
+                # hero 占用的那部从墙里剔除——真机反馈同一部出现两次，
+                # 看起来像内容区中间「突出来一块」。
+                if self._is_first_tab() and items:
+                    self.wall.set_hero(items[0]);grid_items=items[1:]
+                else:
+                    self.wall.set_hero(None);grid_items=items
                 # hero 出现/消失改变「hero+两行」所需高度，让筛选区重新让路
                 QTimer.singleShot(0,self._size_filters)
+            else:
+                grid_items=items
+            before=self.wall.count();self.wall.append_items(grid_items);added=self.wall.count()-before
             next_offset=int(result.get("nextOffset") or 0);self._has_more=bool(result.get("hasMore")) and next_offset>offset
             self._offset=next_offset;self._cursor=str(result.get("sessionId") or "");self._loading=False
             self._empty_pages=self._empty_pages+1 if not added else 0
