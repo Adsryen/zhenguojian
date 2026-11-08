@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -329,9 +330,53 @@ func (d *Downloader) legacyRequest(ctx context.Context, method, apiPath string, 
 	return nil, lastErr
 }
 
+// searchLegacy 走黄果旧版云端接口的在线关键词搜索。真网侦察（2026-11-08，
+// 证据见 .trellis/tasks/11-08-q8-search-all/notes.md）确认它与禁果同族：
+// GET /api/app/playlet/keyword/search + 参数 keyword 精确/模糊命中，
+// 其他候选路径 404、参数名 name 被服务端拒绝（4001 parameters error）。
+func (d *Downloader) searchLegacy(ctx context.Context, page int, query string) ([]Drama, bool, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 256 {
+		return nil, false, errors.New("黄果目录查询参数无效")
+	}
+	pageSize := max(1, d.cfg.PageSize)
+	var result listResponse
+	params := map[string]string{
+		"pageNumber": strconv.Itoa(max(1, page)),
+		"pageSize":   strconv.Itoa(pageSize),
+		"keyword":    query,
+	}
+	if err := d.fetchAPI(ctx, "/api/app/playlet/keyword/search", params, &result); err != nil {
+		return nil, false, err
+	}
+	seen := map[string]bool{}
+	var items []Drama
+	for _, drama := range result.List {
+		sourceID := strings.TrimSpace(drama.ID)
+		if sourceID == "" || seen[sourceID] {
+			continue
+		}
+		seen[sourceID] = true
+		drama.SourceID, drama.Source = sourceID, sourceCloudFront
+		drama.ID = providerDramaID(sourceCloudFront, sourceID)
+		drama.ChannelName = firstNonEmpty(drama.ChannelName, "黄果旧版")
+		drama.CategoryName = firstNonEmpty(drama.CategoryName, drama.CategoryNameSnake, drama.Category)
+		cover := []any{drama.CoverURL, drama.CoverURLSnake, drama.Cover, drama.ImageURL, drama.ImageURLSnake, drama.Image, drama.Img, drama.Pic, drama.Picture, drama.Poster, drama.Thumb, drama.Thumbnail}
+		drama.Cover, drama.CoverURL = "", ""
+		for _, candidate := range cover {
+			if address := legacyCoverURL(candidate); address != "" {
+				drama.Cover, drama.CoverURL = address, address
+				break
+			}
+		}
+		items = append(items, drama)
+	}
+	return items, len(result.List) >= pageSize, nil
+}
+
 func init() {
 	registerProviderSource(ProviderDef{
-		Slug: sourceCloudFront, DisplayName: "黄果旧版", SearchKind: providerSearchCache,
+		Slug: sourceCloudFront, DisplayName: "黄果旧版", SearchKind: providerSearchOnline,
 		EnabledByDefault: true, Implemented: true,
 	})
 }

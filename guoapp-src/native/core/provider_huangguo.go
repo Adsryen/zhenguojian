@@ -46,6 +46,7 @@ var (
 	reDetailHref      = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/detail/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
 	reDramaCardStart  = regexp.MustCompile(`(?is)<div\b[^>]*class=["'][^"']*\bhg-drama-card\b[^"']*["'][^>]*>`)
 	reVideoCard       = regexp.MustCompile(`(?is)<article\b[^>]*class=["'][^"']*\bvideo-card\b[^"']*["'][^>]*>.*?</article>`)
+	reVideoSearchCard = regexp.MustCompile(`(?is)<article\b[^>]*class=["'][^"']*\bsearch-content-card\b[^"']*["'][^>]*>.*?</article>`)
 	reAnyArticle      = regexp.MustCompile(`(?is)<article\b[^>]*>.*?</article>`)
 	reHuangguoLink    = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/(?:series|video)/([^"'/?#]+)[^"']*)["'][^>]*>.*?</a>`)
 	reAIEpisodeLink   = regexp.MustCompile(`(?is)<a\b[^>]*href=["']([^"']*/video/[^"']+)["'][^>]*>.*?</a>`)
@@ -708,9 +709,10 @@ func dramaFromAIMap(m map[string]any, pageURL, category string) (Drama, bool) {
 
 func parseHuangguoVideoCards(rawHTML, pageURL string) []Drama {
 	blocks := reVideoCard.FindAllString(rawHTML, -1)
+	blocks = append(blocks, reVideoSearchCard.FindAllString(rawHTML, -1)...)
 	if len(blocks) == 0 {
 		for _, block := range reAnyArticle.FindAllString(rawHTML, -1) {
-			if strings.Contains(strings.ToLower(block), "video-card") {
+			if strings.Contains(strings.ToLower(block), "video-card") || strings.Contains(strings.ToLower(block), "search-content-card") {
 				blocks = append(blocks, block)
 			}
 		}
@@ -737,6 +739,32 @@ func parseHuangguoVideoCards(rawHTML, pageURL string) []Drama {
 		out = append(out, Drama{ID: providerDramaID(sourceHuangguoVideo, sourceID), Source: sourceHuangguoVideo, SourceID: sourceID, Title: title, Name: title, Desc: desc, Intro: desc, Cover: cover, CoverURL: cover, CategoryName: category, ChannelName: "huangguo.video", Remark: firstNonEmpty(extractByClassText(block, "bg-black/55"), extractByClassText(block, "text-gold-dim"))})
 	}
 	return out
+}
+
+// searchHuangguoVideo 使用黄果视频站内服务端渲染的 /search?q= 结果页
+// （article.search-content-card）。2026-11-08 真网侦察结论（证据链见
+// .trellis/tasks/11-08-q8-search-all/notes.md）：fetchProviderText 的 iPhone
+// Safari UA 可通过 Cloudflare WAF（桌面 curl UA 被 403 拦截页）；结果一次性
+// 返回、分页参数被忽略，因此 page>1 直接返回空页终止翻页。
+func (d *Downloader) searchHuangguoVideo(ctx context.Context, page int, query string) ([]Drama, bool, error) {
+	query = strings.TrimSpace(query)
+	if query == "" || len(query) > 256 {
+		return nil, false, errors.New("黄果视频目录查询参数无效")
+	}
+	if page > 1 {
+		return nil, false, nil
+	}
+	base := d.providerBaseURL(sourceHuangguoVideo)
+	address := base + "/search?q=" + url.QueryEscape(query)
+	body, err := d.fetchProviderText(ctx, address, base+"/")
+	if err != nil {
+		return nil, false, err
+	}
+	items := parseHuangguoVideoCards(body, address)
+	if len(items) == 0 && !strings.Contains(body, "search-content-card") {
+		return nil, false, errors.New("黄果视频搜索结果解析失败，页面结构可能已调整")
+	}
+	return items, false, nil
 }
 
 func parseHuangguoAIEpisodes(rawHTML, pageURL, sourceID string) []providerEpisode {
@@ -1318,7 +1346,7 @@ func init() {
 		EnabledByDefault: true, Domains: []string{"huangguo", "huangguoai.com"}, Implemented: true,
 	})
 	registerProviderSource(ProviderDef{
-		Slug: sourceHuangguoVideo, DisplayName: "黄果视频", SearchKind: providerSearchCache,
+		Slug: sourceHuangguoVideo, DisplayName: "黄果视频", SearchKind: providerSearchOnline,
 		EnabledByDefault: true, Domains: []string{"huangguo.video"}, Implemented: true,
 	})
 }
