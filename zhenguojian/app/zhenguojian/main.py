@@ -902,8 +902,9 @@ class MainWindow(QMainWindow):
         self.source_switch = SourceSwitchPopup()
         self.source_switch.source_selected.connect(self._on_source_selected)
         self.source_switch.source_toggled.connect(self._on_source_toggled)
-        # 筛选面板里的站源 chip 也要回写右上切换钮的当前态。
-        self.browse_panel.sourcePicked.connect(self.source_switch.set_current)
+        # 筛选面板里的站源 chip 要走与弹层相同的切换语义（持久化 current_source、
+        # 刷两个弹层）；set_source 同 slug 早退，不会二次刷新。
+        self.browse_panel.sourcePicked.connect(self._on_source_selected)
         strip.addWidget(hint)
         strip.addStretch(1)
         strip.addWidget(self.source_switch)
@@ -949,6 +950,12 @@ class MainWindow(QMainWindow):
             self.source_switch.set_sources(entries)
             self.source_switch.set_current(self.current_source)
             self.browse_panel.set_sources(entries)
+            # 搜索页弹层可能还没建（首启异步回包早于 _build_search），建好时
+            # 会用 self._sources 自行初始化，这里只负责已存在的情况。
+            search_switch = getattr(self, "search_source_switch", None)
+            if search_switch is not None:
+                search_switch.set_sources(entries)
+                search_switch.set_current(self.current_source)
         # 拉取失败保持静默：回退表可用，不该每次启动都打扰用户
         self._runner.run(work, on_success=done)
 
@@ -997,6 +1004,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(
                 "「%s」尚未接入，暂不可切换" % self._source_name(slug), 5000)
             self.source_switch.set_current(self.current_source)
+            self.search_source_switch.set_current(self.current_source)
             return
         self.current_source = slug
         try:
@@ -1004,6 +1012,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.source_switch.set_current(slug)
+        self.search_source_switch.set_current(slug)
         self._apply_source_to_search_bar()
         # C1 并行提供 browse_panel.set_source(slug)：有就让它自己刷新找剧页；
         # 还没有时只有搜索范围生效，不算失败。
@@ -1249,12 +1258,19 @@ class MainWindow(QMainWindow):
     def _build_search(self):
         page = QWidget()
         bar = QHBoxLayout()
+        # 搜索页自带站源切换入口：与找剧页共用同一套信号，切源即时生效。
+        self.search_source_switch = SourceSwitchPopup()
+        self.search_source_switch.source_selected.connect(self._on_source_selected)
+        self.search_source_switch.source_toggled.connect(self._on_source_toggled)
+        self.search_source_switch.set_sources(self._sources)
+        self.search_source_switch.set_current(self.current_source)
         self.search_edit = QLineEdit()
         self._apply_source_to_search_bar()
         self.search_edit.returnPressed.connect(lambda: self._run_search())
         self.search_button = QPushButton("搜索")
         self.search_button.setProperty("role", "accent")
         self.search_button.clicked.connect(self._run_search)
+        bar.addWidget(self.search_source_switch)
         bar.addWidget(self.search_edit, 1)
         bar.addWidget(self.search_button)
 
