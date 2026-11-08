@@ -140,6 +140,11 @@ class GuoSwitch(QCheckBox):
         self._refresh()
         super().hoverLeaveEvent(event)
 
+    def hitButton(self, pos):
+        # 自绘轨道后 QStyle 的 indicator 子控件矩形塌缩，默认命中区点不中，
+        # 真机反馈开关「无法滑动」；改为整个控件范围可点。
+        return self.rect().contains(pos)
+
     def mousePressEvent(self, event):
         self._down = True
         self._refresh()

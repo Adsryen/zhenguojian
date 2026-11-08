@@ -856,9 +856,31 @@ class SettingsPanel(QWidget):
         body.addWidget(row)
         return val
 
-    def _format_commit(self):
-        """把 sidecar 透传的 go build VCS 指纹排成一行可读文本。"""
+    def _commit_info(self):
+        """指纹来源两级：sidecar 的 go build VCS 戳记 → 程序目录 build-info.json。
+
+        构建脚本若带 -buildvcs=false（或在 git 工作区外编译），戳记会缺失；
+        此时允许打包时在 exe 同目录写 build-info.json：
+        {"revision": "<git rev-parse HEAD>", "commitTime": "<%cI>", "modified": bool}
+        """
         info = getattr(self._core, "build_info", None) if self._core else None
+        if (info or {}).get("revision"):
+            return info
+        try:
+            import json
+            path = os.path.join(tools.app_root(), "build-info.json")
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict) and data.get("revision"):
+                    return data
+        except Exception:  # pragma: no cover
+            pass
+        return info or {}
+
+    def _format_commit(self):
+        """把打包时的 git 指纹排成一行可读文本。"""
+        info = self._commit_info()
         revision = (info or {}).get("revision") or ""
         if not revision:
             return "未知（本地核心未连接，或构建未注入版本信息）"
