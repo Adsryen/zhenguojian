@@ -203,8 +203,10 @@ func (client *jinguoAPIClient) invalidate(token string) {
 // jinguoSessionExpired triggers the one relogin retry. 5005 ("no token" /
 // expired guest token) is the PRD contract; 5009 ("invalid token") was
 // observed live on 2026-11-07 for rejected tokens and recovers the same way,
-// so it relogins too. Only affects jinguoAPIError; the m3u8 path maps 5005
-// through legacyAPIError inside fetchMediaPlaylist (shared, not extended).
+// so it relogins too. The m3u8 stream path now maps both codes as
+// jinguoAPIError inside fetchJinguoPlaylist (jinguo-local, provider_jinguo.go);
+// the shared fetchMediaPlaylist still only maps 5005 through legacyAPIError
+// for the other providers and is deliberately not extended.
 func jinguoSessionExpired(err error) bool {
 	var apiErr *jinguoAPIError
 	var mediaErr *legacyAPIError

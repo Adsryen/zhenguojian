@@ -448,6 +448,51 @@ func TestHuangguoaiEdgeCandidatesPool(t *testing.T) {
 	}
 }
 
+// TestHuangguoAIForkFamilyPoolOrder 固化 2026-11-08 实测结论：同族 fork
+// （kuoluoss/zhenguojian，guoapp3 系）的存活域名家族全部在硬镜像段，死域
+// huangguoai.fit 不入池；fork 域作配置基址时不注入 sha256 生成域（仅
+// huangguoai.com 基址收割生成域），保证池序 301 漂移池→硬镜像→生成域→cfg 不变。
+func TestHuangguoAIForkFamilyPoolOrder(t *testing.T) {
+	previous := huangguoAIBaseMirrors
+	t.Cleanup(func() { huangguoAIBaseMirrors = previous; huangguoAIDriftReset() })
+	wantMirrors := []string{
+		"https://huangguoai.com",
+		"https://thu.lbvrhyir.cc",
+		"https://pku.xxbgwypx.cc",
+		"https://ttvoij.ediayikma.cc",
+		"https://thu.ediayikma.cc",
+		"https://pku.ediayikma.cc",
+		"https://fdu.ediayikma.cc",
+		"https://thu.agdkczeyx.cc",
+		"https://26d.gitiecgad.cc",
+	}
+	if strings.Join(huangguoAIBaseMirrors, " ") != strings.Join(wantMirrors, " ") {
+		t.Fatalf("hard mirror pool = %v, want %v", huangguoAIBaseMirrors, wantMirrors)
+	}
+	if strings.Join(huangguoAIMirrorDomains, " ") != "lbvrhyir.cc xxbgwypx.cc ediayikma.cc agdkczeyx.cc" {
+		t.Fatalf("generated-domain suffix pool = %v", huangguoAIMirrorDomains)
+	}
+	huangguoAIDriftReset()
+	d := huangguoaiFixtureDownloader("https://thu.ediayikma.cc")
+	candidates := d.huangguoAIEdgeCandidates()
+	if len(candidates) != len(wantMirrors) {
+		t.Fatalf("fork-base candidates = %v, want exactly the %d hard mirrors", candidates, len(wantMirrors))
+	}
+	for _, candidate := range candidates {
+		root := strings.TrimSuffix(candidate, huangguoAIEdgePath)
+		found := false
+		for _, mirror := range wantMirrors {
+			if root == mirror {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("candidate %q is not a pooled hard mirror (generation must stay off for fork bases)", candidate)
+		}
+	}
+}
+
 func isPoolMirrorHost(t *testing.T, host string) bool {
 	t.Helper()
 	for _, mirror := range huangguoAIBaseMirrors {

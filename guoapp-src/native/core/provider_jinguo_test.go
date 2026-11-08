@@ -166,6 +166,50 @@ func TestJinguoExpiredSessionRefreshesPlaylistOnce(t *testing.T) {
 	}
 }
 
+func TestJinguoPlaylistReloginsOn5009Once(t *testing.T) {
+	var logins atomic.Int32
+	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/api/app/mine/login/h5":
+			return legacyFixtureResponse(request, map[string]string{"token": "fresh-" + string(rune('0'+logins.Add(1)))}), nil
+		case "/api/app/vid/h5/m3u8/JHA-213/tk1/a.m3u8":
+			if request.URL.Query().Get("token") == "fresh-1" {
+				return sourceFixtureResponse(request, 200, `{"code":5009,"msg":"invalid token"}`), nil
+			}
+			return sourceFixtureResponse(request, 200, "#EXTM3U\n#EXT-X-KEY:METHOD=AES-128,URI=\"/api/app/vid/sec\"\n#EXTINF:5,\nhttps://cdn.example.test/0.ts\n#EXT-X-ENDLIST\n"), nil
+		default:
+			t.Errorf("unexpected request: %s", request.URL)
+			return nil, errors.New("unexpected endpoint")
+		}
+	})
+	media, err := d.resolveJinguoMedia(context.Background(), Task{Chapter: Chapter{Source: jinguoSource, VideoURL: "JHA-213/tk1/a.m3u8"}})
+	if err != nil || logins.Load() != 2 || !strings.Contains(media.Playlist, "/api/app/vid/sec") {
+		t.Fatalf("5009 stream relogin: %+v logins=%d %v", media, logins.Load(), err)
+	}
+}
+
+func TestJinguoPlaylistKeepsNonAuthEnvelopeFatal(t *testing.T) {
+	var logins atomic.Int32
+	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {
+		switch request.URL.Path {
+		case "/api/app/mine/login/h5":
+			return legacyFixtureResponse(request, map[string]string{"token": "fresh-" + string(rune('0'+logins.Add(1)))}), nil
+		case "/api/app/vid/h5/m3u8/JHA-213/tk1/a.m3u8":
+			return sourceFixtureResponse(request, 200, `{"code":4004,"msg":"video not found"}`), nil
+		default:
+			t.Errorf("unexpected request: %s", request.URL)
+			return nil, errors.New("unexpected endpoint")
+		}
+	})
+	_, err := d.resolveJinguoMedia(context.Background(), Task{Chapter: Chapter{Source: jinguoSource, VideoURL: "JHA-213/tk1/a.m3u8"}})
+	if err == nil || !strings.Contains(err.Error(), "站源未返回有效的播放列表") {
+		t.Fatalf("non-auth envelope err = %v", err)
+	}
+	if logins.Load() != 1 {
+		t.Fatalf("non-auth code must not burn a relogin, logins=%d", logins.Load())
+	}
+}
+
 func TestJinguoFailsOverToBackupLineAndKeepsIt(t *testing.T) {
 	var primaryCalls, backupCalls atomic.Int32
 	d := sourceFixtureDownloader(t, func(request *http.Request) (*http.Response, error) {

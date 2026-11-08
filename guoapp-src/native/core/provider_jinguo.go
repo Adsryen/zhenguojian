@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -260,11 +262,61 @@ func jinguoPlaylistPath(videoURL string) (string, bool) {
 	return strings.Join(segments, "/"), true
 }
 
+// fetchJinguoPlaylist fetches one episode's m3u8 with jinguo-specific error
+// mapping. The shared fetchMediaPlaylist recognises only envelope code 5005
+// on the stream path; live evidence (2026-11-07/08, both lines) shows a
+// rejected or stale guest token also surfaces there as code 5009 ("invalid
+// token"). 5005 = session missing/expired (PRD contract), 5009 = token
+// rejected — both mean the session is unusable, so map each to
+// *jinguoAPIError and let jinguoSessionExpired drive the single
+// rebuild+relogin retry in resolveJinguoMedia. Every other failure keeps the
+// shared wording, so unrelated dead links stay non-retriable and the login
+// single-flight is only consumed by genuine auth failures.
+func (d *Downloader) fetchJinguoPlaylist(ctx context.Context, address, referer string) (string, string, error) {
+	if !isProviderHTTPMediaURL(address) {
+		return "", "", errors.New("播放列表地址无效")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
+	if err != nil {
+		return "", "", err
+	}
+	request.Header.Set("Referer", referer)
+	response, err := d.doMediaRequest(request)
+	if err != nil {
+		return "", "", err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
+	if err != nil || len(body) > 4<<20 {
+		return "", "", errors.New("播放列表过大或读取失败")
+	}
+	if response.StatusCode != http.StatusOK || catalogResponseBlockReason(response, body) != "" {
+		return "", "", d.catalogResponseError(request, response, body)
+	}
+	text := strings.TrimSpace(strings.TrimPrefix(string(body), "\ufeff"))
+	if !strings.HasPrefix(text, "#EXTM3U") {
+		var envelope apiEnvelope
+		if json.Unmarshal(body, &envelope) == nil {
+			code := strings.Trim(string(envelope.Code), `"`)
+			if code == "5005" || code == "5009" {
+				return "", "", &jinguoAPIError{code: code, message: "播放会话已失效"}
+			}
+		}
+		return "", "", errors.New("站源未返回有效的播放列表，链接可能已失效")
+	}
+	finalURL := address
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL = response.Request.URL.String()
+	}
+	return text, finalURL, nil
+}
+
 // resolveJinguoMedia fetches the episode playlist. Live evidence (2026-11-07,
 // both lines): the m3u8 endpoint authenticates with ?token= only — the plain
 // fetchMediaPlaylist headers (UA/Referer) suffice, no Authorization needed.
-// A stale session surfaces as legacyAPIError 5005 from the non-#EXTM3U
-// envelope; retry once after a fresh guest login.
+// A stale session surfaces as envelope code 5005 or 5009 from the non-#EXTM3U
+// body (mapped by fetchJinguoPlaylist above); retry once after a fresh guest
+// login.
 func (d *Downloader) resolveJinguoMedia(ctx context.Context, task Task) (providerMedia, error) {
 	if strings.TrimSpace(task.Chapter.VideoURL) == "" {
 		return providerMedia{}, errors.New("禁果该集需要金币或会员解锁后才能播放")
@@ -284,7 +336,7 @@ func (d *Downloader) resolveJinguoMedia(ctx context.Context, task Task) (provide
 		for _, base := range client.bases() {
 			referer := base + "/"
 			address := base + "/api/app/vid/h5/m3u8/" + path + "?" + url.Values{"token": {token}}.Encode()
-			playlist, finalURL, err := d.fetchMediaPlaylist(ctx, address, referer)
+			playlist, finalURL, err := d.fetchJinguoPlaylist(ctx, address, referer)
 			if err == nil {
 				client.rememberBase(base)
 				return providerMedia{URL: finalURL, Playlist: playlist, Referer: referer, Duration: m3u8Duration(playlist)}, nil

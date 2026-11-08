@@ -12,6 +12,15 @@ package core
 // 301 到未被池收录的 26d.gitiecgad.cc。本文件在重定向链上「收割」落地域名（huangguoAILearnDrift），
 // 后续边缘调用优先打收割到的域名；POST 重定向默认会被 net/http 降级为 GET 并丢体，
 // 因此这里用独立 scoped client 在 CheckRedirect 中把 301/302/303 重新签回 POST+信封体。
+//
+// 2026-11-08 实测（代理出口、信封内部路径用本仓 /api/videos/category/ai-duanju）：同族 fork
+// （kuoluoss/zhenguojian，guoapp3 系）使用的备用域名家族 huangguoai.com、fdu/pku/thu/ttvoij.
+// ediayikma.cc、thu.agdkczeyx.cc 全部存活（status:1），且已全部收录在 huangguoAIBaseMirrors
+// 硬镜像段（provider_huangguo.go，池序 301 漂移池→硬镜像→生成域→cfg 不变，本次无需增改）；
+// huangguoai.fit 对 /api/edge/request 返回 404 HTML，判死不入池。四族后缀的 sha256 生成域
+// 上游均识别（实测各族首个生成域 f312a.lbvrhyir.cc / 7ef2d0.xxbgwypx.cc / e2fa.ediayikma.cc /
+// 82cccb.agdkczeyx.cc 全部 status:1），huangguoAIMirrorDomains 无需扩充。注意：fork 的内部
+// 路径 /api/v1/drama/* 本上游不识别（一律返回「请求无法处理」），探活必须用本仓 /api/videos/* 内部路径。
 
 import (
 	"bytes"
