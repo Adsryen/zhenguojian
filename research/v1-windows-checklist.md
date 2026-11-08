@@ -52,5 +52,17 @@ resources / library / newseries / search / detail / preload / download / decrypt
 3. 柚子：设置 > 站源 中默认关闭且带红色 18+ 徽章；手动开启后找剧/搜索/详情/播放全链路可用，
    取流不应报 403（eden_play_ 播放凭证 Cookie 已处理）；关闭后一切入口应提示「已在设置中停用」。
 4. 站源弹层、设置页、找剧筛选芯片三处的 18+ 徽章均只显示在柚子行。
-5. 青空搜索对超长结果集（单字关键词如「我」）上游返回体超 4MB 会报「数据过大」，属上游限制，
-   两个汉字以上的常规关键词应正常。
+5. 青空搜索对超长结果集（单字关键词如「我」）上游返回体超限会被拒绝（报「数据过大」或「目录数据
+   格式无效」均可能），属上游限制，两个汉字以上的常规关键词应正常。
+
+## GitHub CI 与 Release（2026-11-08 增补）
+
+1. 官方产物改为私有仓库 Release：https://github.com/Adsryen/zhenguojian/releases/tag/v1.0.0
+   下载 zhenGuoJian-windows-x64.zip，解压后运行 真果鉴\真果鉴.exe（同目录已带 runtime：
+   sidecar.exe / mpv / ffmpeg / ffprobe 与 build-info.json）。
+2. 设置 > 关于 的「打包提交」应显示 v1.0.0 对应哈希（ffcb563 起）；若显示「构建时含未提交改动」
+   或「未知」说明产物异常。
+3. 若继续用本地一键打包：先删除 zhenguojian\sidecar\vendor 整个目录再跑，让 go mod vendor
+   重新快照当前 core（旧 vendor 快照会绕过源码更新，编出缺 setSourceEnabled 的旧核心，
+   即柚子开关报「不支持的应用操作」的根源）。
+4. CI 每次 tag v* 自动重发 Release；workflow_dispatch 只出临时工件（保留 14 天）供开发自测。
