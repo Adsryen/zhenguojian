@@ -125,15 +125,24 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $rel = Invoke-RestMethod -Headers @{ "User-Agent" = "ci" } https://api.github.com/repos/mpv-player/mpv/releases/latest
-          $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*full*.7z" } | Select-Object -First 1
+          # v0.42+ 官方 release 为 mpv-vX.Y.Z-x86_64-w64-mingw32[-full].zip；旧版是 mpv-x86_64-<日期>-git-*.7z
+          $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*full*.zip" } | Select-Object -First 1
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*.zip" -and $_.name -notlike "*pdb*" } | Select-Object -First 1 }
           if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
+          if (-not $asset) { throw "no usable mpv windows asset" }
           Write-Host ("mpv asset: " + $asset.name)
-          curl.exe -sSL --retry 3 -o mpv.7z $asset.browser_download_url
           New-Item -ItemType Directory -Force mpvtmp, dist\runtime\mpv | Out-Null
-          & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.7z | Out-Null
+          curl.exe -sSL --retry 3 -o mpv.pkg $asset.browser_download_url
+          if ($asset.name -like "*.zip") {
+            Expand-Archive -Force mpv.pkg mpvtmp
+          } else {
+            & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.pkg | Out-Null
+          }
           $exe = Get-ChildItem -Recurse mpvtmp -Filter mpv.exe | Select-Object -First 1
           Copy-Item $exe.FullName dist\runtime\mpv\mpv.exe
-          Remove-Item -Recurse -Force mpv.7z, mpvtmp
+          $com = Get-ChildItem -Recurse mpvtmp -Filter mpv.com -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($com) { Copy-Item $com.FullName dist\runtime\mpv\mpv.com }
+          Remove-Item -Recurse -Force mpv.pkg, mpvtmp
 
       - name: Install python deps
         run: |
