@@ -58,6 +58,8 @@ func (d *Downloader) providerBaseURL(source string) string {
 		configured, fallback = "", guipianSiteBase
 	case providerSlugHanxiaoquan:
 		configured, fallback = "", hanxiaoquanSiteBase
+	case sourceYouzi:
+		configured, fallback = "", youziSite()
 	default:
 		fallback = "https://d2pypzndaqisk.cloudfront.net"
 	}
@@ -101,6 +103,8 @@ func providerSourceForURL(raw string) string {
 		return providerSlugHanxiaoquan
 	case host == "heitaodj.com" || host == "www.heitaodj.com":
 		return sourceHeitao
+	case host == "youzidj.com" || host == "www.youzidj.com":
+		return sourceYouzi
 	default:
 		return ""
 	}
@@ -170,6 +174,9 @@ func (d *Downloader) resolveProviderMedia(ctx context.Context, task Task) (provi
 	}
 	if chapter.Source == providerSlugHanxiaoquan || strings.HasPrefix(chapter.VideoURL, "hanxiaoquan-play://") {
 		return d.resolveHanxiaoquanMedia(ctx, task)
+	}
+	if chapter.Source == sourceYouzi {
+		return d.resolveYouziMedia(ctx, task)
 	}
 	if strings.HasPrefix(chapter.VideoURL, "hongguo-cenc://") {
 		return d.resolveHongguoMedia(ctx, task)

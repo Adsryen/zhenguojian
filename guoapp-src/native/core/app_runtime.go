@@ -593,7 +593,7 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		result.HasMore = more
 		return result, nil
 	}
-	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao || source == providerSlugGuipian || source == providerSlugHanxiaoquan || source == sourceHuangguoAI) {
+	if query != "" && (source == sourceYeguo || source == sourceDSD || source == sourceJinguo || source == sourceJinguoDuanju || source == sourceHeitao || source == providerSlugGuipian || source == providerSlugHanxiaoquan || source == sourceHuangguoAI || source == sourceCloudFront || source == sourceYouzi || source == sourceHuangguoVideo) {
 		var items []Drama
 		var more bool
 		var err error
@@ -612,6 +612,12 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 			items, more, err = d.searchHanxiaoquan(ctx, page, query)
 		case sourceHuangguoAI:
 			items, more, err = d.searchHuangguoAI(ctx, page, query)
+		case sourceCloudFront:
+			items, more, err = d.searchLegacy(ctx, page, query)
+		case sourceYouzi:
+			items, more, err = d.fetchYouziCatalogPage(ctx, page, "", query)
+		case sourceHuangguoVideo:
+			items, more, err = d.searchHuangguoVideo(ctx, page, query)
 		default:
 			items, more, err = d.fetchJinguoCatalogPage(ctx, page, "", query)
 		}
@@ -628,6 +634,18 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		engine.mu.Lock()
 		items := append([]nativeDrama{}, engine.catalogs[source]...)
 		engine.mu.Unlock()
+		if len(items) == 0 && source == sourceHuangdou {
+			// 黄豆实网确认无服务端关键词搜索（证据链见
+			// .trellis/tasks/11-08-q8-search-all/notes.md）：缓存为空时先深抓
+			// 前几页目录入缓存，再做本地匹配（PRD 兜底第 5 条）。
+			// 黄果视频曾有同款兜底，2026-11-08 实网发现 /search?q= 在线端点后已转在线分支。
+			if _, warning := engine.warmLocalCatalogForSearch(ctx, source); warning != "" {
+				result.Warning = warning
+			}
+			engine.mu.Lock()
+			items = append([]nativeDrama{}, engine.catalogs[source]...)
+			engine.mu.Unlock()
+		}
 		for _, item := range items {
 			text := hongguoSearchText(item.Title + " " + item.Description + " " + strings.Join(item.Tags, " "))
 			matches := true
@@ -708,6 +726,8 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 		items, result.HasMore, err = d.fetchGuipianCatalogPage(ctx, page, category, "")
 	case providerSlugHanxiaoquan:
 		items, result.HasMore, err = d.fetchHanxiaoquanCatalogPage(ctx, page, category, "")
+	case sourceYouzi:
+		items, result.HasMore, err = d.fetchYouziCatalogPage(ctx, page, category, "")
 	case sourceHuangguoVideo:
 		address := fmt.Sprintf("%s/videos?page=%d", d.providerBaseURL(source), page)
 		if category != "" {
@@ -741,6 +761,35 @@ func (engine *nativeEngine) nativeCatalog(ctx context.Context, input nativeInput
 	}
 	engine.saveCatalogCache(cacheKey, &result)
 	return result, nil
+}
+
+// deepLocalSearchPages 是无在线搜索站源（黄豆）做本地关键词匹配前
+// 允许自动深抓的目录页数上限。
+const deepLocalSearchPages = 3
+
+// warmLocalCatalogForSearch 在搜索前把该站源根目录（Category=""，缓存键即
+// source 本身）force 抓取最多 deepLocalSearchPages 页入缓存，供 nativeCatalog
+// 的本地匹配分支读取。返回实际抓取页数与面向用户的 Warning 文案；
+// 一页都没抓到返回 (0, "")。
+func (engine *nativeEngine) warmLocalCatalogForSearch(ctx context.Context, source string) (int, string) {
+	fetched := 0
+	for page := 1; page <= deepLocalSearchPages; page++ {
+		res, err := engine.nativeCatalog(ctx, nativeInput{Source: source, Page: page, Force: true})
+		if err != nil {
+			if page == 1 {
+				return 0, "该站源暂无在线关键词搜索，且目录抓取失败，请稍后重试"
+			}
+			break
+		}
+		fetched = page
+		if !res.HasMore {
+			break
+		}
+	}
+	if fetched == 0 {
+		return 0, ""
+	}
+	return fetched, fmt.Sprintf("该站源暂无在线关键词搜索，已自动抓取前 %d 页目录进行本地匹配", fetched)
 }
 
 func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama) (any, error) {
@@ -777,6 +826,8 @@ func (engine *nativeEngine) nativeDetail(ctx context.Context, drama nativeDrama)
 		raw, chapters, err = engine.downloader.fetchGuipianDetail(ctx, sourceID)
 	case providerSlugHanxiaoquan:
 		raw, chapters, err = engine.downloader.fetchHanxiaoquanDetail(ctx, sourceID)
+	case sourceYouzi:
+		raw, chapters, err = engine.downloader.fetchYouziDetail(ctx, sourceID)
 	default:
 		title, chapters, err = engine.downloader.GetHuangguoChapters(ctx, source, sourceID)
 	}
