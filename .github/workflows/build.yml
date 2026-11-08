@@ -35,7 +35,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import json, os
-          core = os.path.abspath("../guoapp-src/native/core")
+          core = os.path.abspath("../../guoapp-src/native/core")
           overlay = {"Replace": {
               os.path.join(core, "sidecar_overlay_discovery.go"): os.path.abspath("core_overlay/discovery.go"),
               os.path.join(core, "sidecar_overlay_poster_metadata.go"): os.path.abspath("core_overlay/poster_metadata.go"),
@@ -44,7 +44,8 @@ jobs:
               json.dump(overlay, fh)
           PY
           mkdir -p dist-linux
-          go build -overlay sidecar-overlay.json -o dist-linux/sidecar.exe .
+          # -mod=mod：仓库里跟踪的 sidecar/vendor 是快照，vendor 模式会绕过 overlay 与 replace
+          go build -mod=mod -overlay sidecar-overlay.json -o dist-linux/sidecar.exe .
 
       - name: UI import smoke (offscreen)
         run: |
@@ -108,7 +109,7 @@ jobs:
           "@ | Set-Content "$env:RUNNER_TEMP\make-overlay.py" -Encoding UTF8
           python "$env:RUNNER_TEMP\make-overlay.py"
           New-Item -ItemType Directory -Force ..\..\dist\runtime | Out-Null
-          go build -overlay "$env:RUNNER_TEMP\core-overlay-ci.json" -trimpath -ldflags "-s -w" -o ..\..\dist\runtime\sidecar.exe .
+          go build -mod=mod -overlay "$env:RUNNER_TEMP\core-overlay-ci.json" -trimpath -ldflags "-s -w" -o ..\..\dist\runtime\sidecar.exe .
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - name: Download ffmpeg
@@ -175,8 +176,9 @@ jobs:
 
       - name: Selftest (informational)
         run: |
-          .\dist\真果鉴\真果鉴.exe --selftest
-          if ($LASTEXITCODE -ne 0) { Write-Warning "selftest failed (上游可能对 CI 机房 IP 敏感)，不阻断打包" }
+          # windowed exe 属 GUI 子系统，直接调用会立即返回；-Wait 拿真实退出码
+          $p = Start-Process -FilePath ".\dist\真果鉴\真果鉴.exe" -ArgumentList "--selftest" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { Write-Warning "selftest failed (上游可能对 CI 机房 IP 敏感)，不阻断打包 (exit=$($p.ExitCode))" } else { Write-Host "selftest OK" }
 
       - name: Package zip
         run: |
