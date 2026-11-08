@@ -2,8 +2,10 @@
 """Built-in self check: exercises the real pipeline from inside the frozen exe.
 
 Run with:  真果鉴.exe --selftest
-It proves resource discovery, the core API, playback, downloading and merging
-all work in the packaged layout, and prints a machine-readable PASS/FAIL report.
+It proves resource discovery, the core API, stream resolution, downloading and
+merging all work in the packaged layout, and prints a machine-readable
+PASS/FAIL report. Real on-screen playback is intentionally not part of the
+check (it used to pop an mpv window mid-build); verify it manually.
 """
 from __future__ import annotations
 
@@ -124,42 +126,9 @@ def _detail(state):
             "episodes": len(chapters)}
 
 
-@step("play")
-def _play(state):
-    """Drive mpv headless through the real IPC pipe and confirm it decodes."""
-    from zhenguojian import tools
-    from zhenguojian.player import MpvSession
-    plan = state["core"].resolve(state["drama"], state["chapters"][0], 1)
-    session = MpvSession(tools.mpv_path(), plan["url"],
-                         headers=plan.get("headers") or {},
-                         decryption_key=plan.get("decryptionKey") or "",
-                         on_event=None, wid=None)
-    session.observe("time-pos", "duration")
-    duration = 0.0
-    position = 0.0
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        try:
-            duration = float(session.get("duration", 0.0) or 0.0)
-            position = float(session.get("time-pos", 0.0) or 0.0)
-        except (TypeError, ValueError):
-            duration = position = 0.0
-        # 位置真的在走才算通过：顺带验证 property-change 事件确实送达
-        if duration > 0 and position > 0.5:
-            break
-        time.sleep(0.3)
-    alive = session.alive()
-    session.stop()
-    try:
-        state["core"].release(plan.get("session"))
-    except Exception:
-        pass
-    if not alive:
-        raise RuntimeError("mpv died during playback")
-    if duration <= 0:
-        raise RuntimeError("playback never reported a duration")
-    return {"duration": round(duration, 1), "time_pos": round(position, 2),
-            "alive": alive}
+# 曾有一个 "play" 步骤：起真实 mpv 走 IPC 验证解码。wid=None 时 mpv 在
+# Windows 上会弹出可见播放窗口并播一段视频，自检期间观感突兀；取流与
+# 解密链路已由 resolve/preload/download/decrypt/merge 覆盖，故移除该步骤。
 
 
 @step("preload")

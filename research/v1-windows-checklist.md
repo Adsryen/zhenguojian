@@ -2,13 +2,15 @@
 
 本机 Linux 已完成：逐源协议冒烟（14 源目录/详情/取流，见 `.trellis` v1 notes）、UI 离屏冒烟与截图合集、D1 归档目录实测、soraniAccount 行协议。以下项目只有 Windows 打包环境能覆盖，请按序执行：
 
-## 1. 打包自检（9 步）
+## 1. 打包自检（9 步，原 10 步去掉 play）
 ```bat
 python build\build.py
 python build\package.py
 ```
-resources / library / search / detail / play / preload / download / decrypt / merge 全绿；
+resources / library / newseries / search / detail / preload / download / decrypt / merge 全绿；
 任一环节失败先对照 `AI_BUILD.md` 的取流告警（签名/请求改动后必须复测 1080P）。
+原 `play` 步已移除：它会在自检中途弹出 mpv 窗口播一段视频，观感突兀；
+取流链路已由 detail/preload/download/decrypt/merge 覆盖，真实播放在第 2 节人工验证。
 
 ## 2. 逐源真播放抽样（每源 1 部随机剧第 1 集）
 - 红果：在线播放 + 弹幕显示 + 切集（验证 P1 右栏与预缓冲在真机不遮挡视频）
