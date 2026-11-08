@@ -20,6 +20,7 @@ type ProviderDef struct {
 	Seasons          bool     // search merges "第N季" seasons
 	CatalogKinds     []string // hardcoded catalog kind ids (empty = remote or single list)
 	EnabledByDefault bool     // factory enablement when the user has no preference
+	Adult            bool     // 18+ source: UI shows a badge and it ships disabled
 	Domains          []string // extra alias keys (domains) normalizing to Slug
 	Implemented      bool     // provider code exists in this build
 }
@@ -71,7 +72,12 @@ func registerProviderSource(def ProviderDef) {
 	}
 	merged.Lanes = merged.Lanes || def.Lanes
 	merged.Seasons = merged.Seasons || def.Seasons
-	merged.EnabledByDefault = merged.EnabledByDefault || def.EnabledByDefault
+	merged.Adult = merged.Adult || def.Adult
+	// EnabledByDefault follows the implementation registration: placeholders
+	// start false and only the real provider file flips it, so a sticky OR
+	// would let a stale placeholder silently re-enable a source the
+	// implementation deliberately ships disabled (18+ sources).
+	merged.EnabledByDefault = def.EnabledByDefault
 	merged.Implemented = merged.Implemented || def.Implemented
 	merged.CatalogKinds = appendUniqueStrings(merged.CatalogKinds, def.CatalogKinds)
 	merged.Domains = appendUniqueStrings(merged.Domains, def.Domains)
@@ -248,6 +254,10 @@ func init() {
 		Slug: "hanxiaoquan", DisplayName: "韩小圈", SearchKind: providerSearchOnline, Lanes: true,
 		EnabledByDefault: true, Domains: []string{"jennyhow.com", "www.jennyhow.com"},
 	})
+	registerProviderSource(ProviderDef{
+		Slug: "youzi", DisplayName: "柚子", SearchKind: providerSearchOnline,
+		EnabledByDefault: false, Adult: true, Domains: []string{"youzidj.com"},
+	})
 }
 
 // nativeSourcePrefsFile is the on-disk shape of source_prefs.json, stored
@@ -272,6 +282,7 @@ type nativeSourceListItem struct {
 	Slug             string   `json:"slug"`
 	DisplayName      string   `json:"displayName"`
 	SearchKind       string   `json:"searchKind"`
+	Adult            bool     `json:"adult"`
 	Lanes            bool     `json:"lanes"`
 	Seasons          bool     `json:"seasons"`
 	CatalogKinds     []string `json:"catalogKinds"`
@@ -320,6 +331,7 @@ func NativeSourcesCommand(raw string) string {
 			}
 			items = append(items, nativeSourceListItem{
 				Slug: def.Slug, DisplayName: def.DisplayName, SearchKind: def.SearchKind,
+				Adult: def.Adult,
 				Lanes: def.Lanes, Seasons: def.Seasons,
 				CatalogKinds: kinds, EnabledByDefault: def.EnabledByDefault,
 				Implemented: def.Implemented, Enabled: providerSourceEnabled(def.Slug),
