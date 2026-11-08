@@ -600,6 +600,20 @@ def build_stylesheet():
         "QStatusBar { background: %(surface2)s; color: %(muted)s; }"
         "QStatusBar::item { border: none; }"
         "QMessageBox { background: %(surface2)s; }"
+        # ==================== M2 详情覆盖层 / 返回按钮 / 播放窗（append-only 段） ====================
+        # 覆盖页容器与顶栏：底色跟窗口走，顶栏用细边框和正文分隔。
+        "QWidget#detailOverlay { background: %(bg)s; }"
+        "QWidget#detailOverlayBar { background: %(bg)s; border-bottom: 1px solid %(border)s; }"
+        # 左上角返回按钮：← 字形 + 「返回」文字，透明描边起步，hover 亮 accent。
+        "QPushButton#detailBackButton { background: transparent; border: 1px solid transparent;"
+        "  color: %(text)s; border-radius: %(radius)s; padding: 4px 14px; font-weight: bold; }"
+        "QPushButton#detailBackButton:hover { background: %(surface3)s; border-color: %(accent)s;"
+        "  color: %(accent)s; }"
+        "QPushButton#detailBackButton:pressed { background: %(surface2)s; color: %(accent_pressed)s; }"
+        "QLabel[role=\"detailOverlayTitle\"] { color: %(text)s; font-size: 15px; font-weight: bold; }"
+        # 播放窗本体：跟随 QDialog 全局底色即可，仅补一个圆角无关的容器规则占位，
+        # 全屏黑底由 main.py 的 immersive 内联样式负责（换主题时会重建）。
+        "QDialog#playbackDialog { background: %(bg)s; }"
         % d
     )
 

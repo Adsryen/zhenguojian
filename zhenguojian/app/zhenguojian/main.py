@@ -10,7 +10,8 @@ import traceback
 
 from PyQt5.QtCore import QEvent, QLockFile, QSettings, Qt, QTimer, QTranslator, QLibraryInfo, pyqtSignal
 from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
-from PyQt5.QtWidgets import (QAbstractSpinBox, QAction, QApplication, QCheckBox, QComboBox, QFileDialog,
+from PyQt5.QtWidgets import (QAbstractScrollArea, QAbstractSpinBox, QAction, QApplication, QCheckBox,
+                             QComboBox, QFileDialog,
                              QFrame, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem,
                              QMainWindow, QMenu, QMessageBox, QPushButton, QShortcut, QSplashScreen,
                              QSplitter, QStatusBar, QSystemTrayIcon, QTabWidget, QTextEdit,
@@ -27,6 +28,8 @@ from .flow_layout import FlowLayout
 from .creators import CastStrip, CreatorPage, RoundedPoster, AvatarLoader
 from .detail_episodes import DetailEpisodeList
 from .detail_layout import DetailSummary
+from .detail_overlay import DetailOverlay
+from .playback_dialog import DEFAULT_TITLE, PlaybackDialog
 from .rank_list import RankList
 from .recommendation_panel import RecommendationPanel
 from .scroll_loader import ScrollLoader
@@ -170,7 +173,7 @@ class Poster(QFrame):
         self.play_first.setProperty("role", "accent")
         self.follow_button = QPushButton("＋ 加入追剧")
         self.reserve_button = QPushButton("☆ 预约")
-        self.reserve_button.setToolTip("预约更新/下一季，上线后在「追更/预约」页提醒")
+        self.reserve_button.setToolTip("预约更新/下一季，上线后在「追更预约」页提醒")
         self.season_button = QPushButton("")
         self.season_button.setToolTip("同系列的其它季，点开直接切换")
         self.season_button.setVisible(False)
@@ -611,8 +614,10 @@ class MainWindow(QMainWindow):
         self._video_fullscreen = False
         self._fullscreen_was_maximized = False
         self._pending_play = None
-        self._auto_paused = False     # 离开播放页时替用户按的那个暂停
         self._tab_index = 0
+        # M2 详情覆盖页的"回去"现场：打开覆盖页时记住的页签序号与滚动位置快照。
+        self._overlay_return_tab = 0
+        self._overlay_return_scroll = []
         self._watch = WatchStore(self)
         self._watch_last_save = 0.0
         # 弹幕：每换一集就发一个新编号，晚到的抓取结果按编号丢弃
@@ -644,33 +649,46 @@ class MainWindow(QMainWindow):
         self._titlebar_applied = False
         self.resize(1180, 780)
 
+        # M2 导航改造：页签从 10 个缩到 8 个。「在线播放」独立成非模态窗口
+        # （self.playback），「剧集详情」改成内容区覆盖页（self.detail_overlay），
+        # 两者都不再占页签位；顺序按 剧库推荐/找剧/搜索/新剧预约/追更预约/
+        # 观看历史/下载与合并/设置 重排。
         self.tabs = QTabWidget()
         self.tabs.currentChanged.connect(self._on_tab)
         self.tabs.blockSignals(True)
         self.library_page = self._build_library()
         self.browse_page = self._build_browse()
         self.search_page = self._build_search()
-        self.player_page = self._build_player()
+        self.calendar_page = self._build_calendar()
+        self.watch_page = self._build_watch()
+        self.history_page = self._build_history()
+        self.downloads_page = self._build_downloads()
+        self._build_detail()                  # 详情本体随后由覆盖页托管，不进页签
+        self.playback = self._build_player()  # 播放页整体装进独立窗口；PlayerPane 生命周期仍归 main
         self.tabs.addTab(self.library_page, "剧库推荐")
         self.tabs.addTab(self.browse_page, "找剧")
         self.tabs.addTab(self.search_page, "搜索")
-        self.tabs.addTab(self._build_detail(), "剧集详情")
-        self.tabs.addTab(self.player_page, "在线播放")
-        self.tabs.addTab(self._build_watch(), "追更/预约")
-        self.tabs.addTab(self._build_history(), "观看历史")
-        self.downloads_page = self._build_downloads()
+        self.tabs.addTab(self.calendar_page, "新剧预约")
+        self.tabs.addTab(self.watch_page, "追更预约")
+        self.tabs.addTab(self.history_page, "观看历史")
         self.tabs.addTab(self.downloads_page, "下载与合并")
-        self.tabs.addTab(self._build_calendar(), "新剧预约")
         self.settings_page = QWidget()  # M1e：首次进入才挂 SettingsPanel，失败留占位
         self.tabs.addTab(self.settings_page, "设置")
         self.tabs.blockSignals(False)
-        # 视觉壳微调（只动 main.py 侧，不改 ui.py）：10 个页签不再平铺拉宽，
+        # 视觉壳微调（只动 main.py 侧，不改 ui.py）：页签不再平铺拉宽，
         # 放不下时出滚动箭头；guoRole 留给后续 ui.py 主题迭代做样式钩子。
         self.tabs.setProperty("guoRole", "mainTabs")
         self.tabs.tabBar().setExpanding(False)
         self.tabs.tabBar().setUsesScrollButtons(True)
         self.tabs.tabBar().setCursor(Qt.PointingHandCursor)
-        self.setCentralWidget(self.tabs)
+        # M2：内容区两层栈——页签组在底，详情覆盖页在顶。打开详情不动页签，
+        # 返回时底下的页签（含选中项）原样露出来；滚动位置由我们显式快照还原。
+        self.detail_overlay = DetailOverlay(self.detail, self)
+        self.detail_overlay.backRequested.connect(self._close_detail_overlay)
+        self.content_stack = QStackedWidget()
+        self.content_stack.addWidget(self.tabs)            # index 0
+        self.content_stack.addWidget(self.detail_overlay)  # index 1
+        self.setCentralWidget(self.content_stack)
         # 建页签时信号是屏蔽的，currentChanged 一次都没发：剧库页在首屏，
         # 榜单得自己起一次加载，否则左边整列是空的。
         self._load_boards()
@@ -743,15 +761,15 @@ class MainWindow(QMainWindow):
         count = self._watch.unseen_arrivals()
         index = self.tabs.indexOf(self.follow_panel)
         if index >= 0:
-            self.tabs.setTabText(index, "追更/预约" + (" (%d)" % count if count else ""))
+            self.tabs.setTabText(index, "追更预约" + (" (%d)" % count if count else ""))
         previous = int(getattr(self, "_watch_alert_count", 0))
         if count > previous:
             QApplication.alert(self, 0)
             self.statusBar().showMessage(
-                "有 %d 部追剧有新内容，去「追更/预约」页看看" % count, 8000)
+                "有 %d 部追剧有新内容，去「追更预约」页看看" % count, 8000)
             if self._tray is not None:
                 self._tray.showMessage("追剧更新",
-                                       "有 %d 部追剧有新内容，可在「追更/预约」页查看" % count,
+                                       "有 %d 部追剧有新内容，可在「追更预约」页查看" % count,
                                        QSystemTrayIcon.Information, 8000)
         self._watch_alert_count = count
 
@@ -1515,7 +1533,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_follow(self, drama):
         added = self._watch.toggle_follow(drama)
-        self.statusBar().showMessage("已加入追剧，可在「追更/预约」页查看" if added
+        self.statusBar().showMessage("已加入追剧，可在「追更预约」页查看" if added
                                      else "已取消追剧", 5000)
 
     def _toggle_reserve(self, drama):
@@ -1525,7 +1543,7 @@ class MainWindow(QMainWindow):
             return
         self._watch.reserve_drama(drama)
         self.statusBar().showMessage(
-            "已预约；应用运行期间每 30 分钟检查一次，上线/更新后会在「追更/预约」页提示", 7000)
+            "已预约；应用运行期间每 30 分钟检查一次，上线/更新后会在「追更预约」页提示", 7000)
 
     def _load_series(self, drama):
         """进详情页顺手查一次同系列；命中就显示「全 N 季」。
@@ -1569,10 +1587,55 @@ class MainWindow(QMainWindow):
 
         self._runner.run(work, on_success=done, on_error=error)
 
+    # ---------------------------------------------------------- detail overlay (M2)
+    def _capture_tab_scroll(self):
+        """给当前页签里的滚动位置拍快照：只记真有滚动余量的滚动区。"""
+        shots = []
+        page = self.tabs.currentWidget()
+        if page is None:
+            return shots
+        for area in page.findChildren(QAbstractScrollArea):
+            try:
+                bar = area.verticalScrollBar()
+                if bar is not None and bar.maximum() > 0:
+                    shots.append((area, bar.value()))
+            except RuntimeError:
+                continue
+        return shots
+
+    def _restore_tab_scroll(self, shots):
+        """还原快照；覆盖页开着时底下页签可能重建过子控件，坏的直接跳过。"""
+        for area, value in shots or []:
+            try:
+                area.verticalScrollBar().setValue(value)
+            except Exception:
+                continue
+
+    def _show_detail_overlay(self, drama):
+        """详情覆盖页打开：只在从页签层进入时记现场（覆盖页里切剧不重记）。"""
+        if self.content_stack.currentIndex() == 0:
+            self._overlay_return_tab = self.tabs.currentIndex()
+            self._overlay_return_scroll = self._capture_tab_scroll()
+        self.detail_overlay.set_title((drama or {}).get("title") or "")
+        self.detail.refresh_marks()   # 下载完了再进详情，「已下载」角标要对得上
+        self.content_stack.setCurrentIndex(1)
+
+    def _close_detail_overlay(self, restore_tab=True):
+        """返回：揭开覆盖页，页签与滚动位置回到打开详情前的样子。"""
+        if self.content_stack.currentIndex() == 0:
+            return
+        self.content_stack.setCurrentIndex(0)
+        if not restore_tab:
+            return
+        index = getattr(self, "_overlay_return_tab", 0)
+        if 0 <= index < self.tabs.count() and self.tabs.currentIndex() != index:
+            self.tabs.setCurrentIndex(index)
+        self._restore_tab_scroll(getattr(self, "_overlay_return_scroll", None))
+
     def open_detail(self, drama):
         self._detail_token += 1
         token = self._detail_token
-        self.tabs.setCurrentWidget(self.detail)
+        self._show_detail_overlay(drama)
         self.detail.show_drama(drama)
         self._load_series(drama)
 
@@ -1598,6 +1661,8 @@ class MainWindow(QMainWindow):
             result = result or {}
             loaded = result.get("drama", drama)
             self.detail.set_chapters(loaded, result.get("chapters", []))
+            # 覆盖页标题跟着补全后的剧名走（列表数据里标题可能缺字）
+            self.detail_overlay.set_title(loaded.get("title") or "")
             self._watch.observe_drama(loaded)
             if result.get("warning"):
                 self.statusBar().showMessage(result["warning"], 6000)
@@ -1692,22 +1757,44 @@ class MainWindow(QMainWindow):
         # 全屏时要把这圈边距收掉，否则画面四周留一圈底色
         self._player_layout = layout
 
-        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._exit_video_fullscreen)
-        QShortcut(QKeySequence(Qt.Key_Left), self, activated=lambda: self._seek_by_keys(-5))
-        QShortcut(QKeySequence(Qt.Key_Right), self, activated=lambda: self._seek_by_keys(5))
-        QShortcut(QKeySequence(Qt.Key_Space), self, activated=self._toggle_pause_by_keys)
-        QShortcut(QKeySequence(Qt.Key_D), self, activated=self._toggle_danmaku_by_keys)
-        return page
+        # M2：播放页不再是页签——整块搬进独立非模态窗口。快捷键跟着窗口走：
+        # 注册在 PlaybackDialog 上（WindowShortcut 按窗口隔离，和主窗口的 Esc
+        # 互不干扰；同一个窗口内绝不同键序双注册——Qt5 判 AMBIGUOUS 会双双吞键，
+        # PlayerPane 只吃 ↑↓F M ?，空格/←/→/D 由这里接管，P1 约定不回退）。
+        dialog = PlaybackDialog(self, page, parent=self)
+        QShortcut(QKeySequence(Qt.Key_Escape), dialog, activated=self._on_playback_esc)
+        QShortcut(QKeySequence(Qt.Key_Left), dialog, activated=lambda: self._seek_by_keys(-5))
+        QShortcut(QKeySequence(Qt.Key_Right), dialog, activated=lambda: self._seek_by_keys(5))
+        QShortcut(QKeySequence(Qt.Key_Space), dialog, activated=self._toggle_pause_by_keys)
+        QShortcut(QKeySequence(Qt.Key_D), dialog, activated=self._toggle_danmaku_by_keys)
+        # 主窗口的 Esc 从此只管一件事：详情覆盖页开着就返回。
+        QShortcut(QKeySequence(Qt.Key_Escape), self, activated=self._on_main_esc)
+        return dialog
+
+    def _on_playback_esc(self):
+        """播放窗获得焦点时的 Esc：全屏先退全屏，否则关窗（关窗即停播）。"""
+        if self._video_fullscreen:
+            self._set_video_fullscreen(False)
+            return
+        self.playback.close()
+
+    def _on_main_esc(self):
+        """主窗口这边按 Esc：仅当详情覆盖页开着时=返回；播放器不参与。"""
+        if self.content_stack.currentIndex() == 1:
+            self._close_detail_overlay()
 
     def _player_keys_allowed(self):
-        """空格 / 方向键只在看视频时生效，而且不能抢输入框的按键。
+        """空格 / 方向键只在播放窗真正开着时生效，而且不能抢输入框的按键。
 
         这里**不**排除按钮：快捷键会先吃掉这次按键（按钮本来也收不到空格），
         早先因为「焦点在按钮上就不响应」导致点过播放按钮之后空格就失灵了。
+        焦点在别的顶层窗口（主窗口各页签里打字）时同样不响应。
         """
-        if self.tabs.currentWidget() is not self.player_page:
+        if not self.playback.isVisible():
             return False
         focus = QApplication.focusWidget()
+        if focus is not None and focus.window() is not self.playback:
+            return False
         if isinstance(focus, (QLineEdit, QTextEdit, QComboBox, QAbstractSpinBox)):
             return False
         return True
@@ -2052,60 +2139,40 @@ class MainWindow(QMainWindow):
             % (ui.DESIGN["surface2"], ui.DESIGN["border"]))
 
     def _set_video_fullscreen(self, on):
-        """Immersive fullscreen: only the video (and its controls) stays."""
+        """Immersive fullscreen — M2 起作用于播放窗本身，主窗口不再陪绑。
+
+        以前是把整个主窗口铺满（页签/菜单/状态栏一起收），现在 PlayerPane
+        住在 PlaybackDialog 里，全屏只动这个窗口：黑底、边距归零、侧栏隐藏。
+        """
         if on == self._video_fullscreen:
             return
         self._video_fullscreen = on
         self.player.set_fullscreen(on)
-        # 全屏时去掉 QTabWidget 的页签容器边框；浅色主题下它就是那条白边。
-        # QTabWidget 不是 QFrame，Qt5 没有 frameShape 可设；documentMode 会
-        # 去掉 pane 的画框，再把内部 layout 的 frameWidth 边距清零，画面才能
-        # 真正铺到屏幕四边。
-        self.tabs.setProperty("immersive", "true" if on else "false")
-        if on:
-            if not hasattr(self, "_tabs_document_mode"):
-                self._tabs_document_mode = self.tabs.documentMode()
-            if not hasattr(self, "_tabs_layout_margins"):
-                layout = self.tabs.layout()
-                self._tabs_layout_margins = layout.contentsMargins() if layout is not None else None
-            self.tabs.setDocumentMode(True)
-            layout = self.tabs.layout()
-            if layout is not None:
-                layout.setContentsMargins(0, 0, 0, 0)
-        else:
-            self.tabs.setDocumentMode(getattr(self, "_tabs_document_mode", False))
-            layout = self.tabs.layout()
-            margins = getattr(self, "_tabs_layout_margins", None)
-            if layout is not None and margins is not None:
-                layout.setContentsMargins(margins)
-        self.tabs.style().unpolish(self.tabs)
-        self.tabs.style().polish(self.tabs)
-        self.tabs.update()
+        dialog = self.playback
         self.player.setProperty("immersive", "true" if on else "false")
         self._apply_fullscreen_player_style(on)
-        self.tabs.setStyleSheet(
-            "QTabWidget::pane { border: 0; border-radius: 0; }" if on else "")
+        # 窗口本体在深色主题下本来就是 video_bg 附近色，浅色主题会露出 bg，
+        # 所以全屏时直接把 QDialog 底色压成黑；退出还原跟随全局样式表。
+        dialog.setStyleSheet(
+            "QDialog#playbackDialog { background: %s; }" % ui.DESIGN["video_bg"] if on else "")
+        dialog.style().unpolish(dialog)
+        dialog.style().polish(dialog)
+        dialog.update()
         self.player.style().unpolish(self.player)
         self.player.style().polish(self.player)
         self.player.update()
         # 全屏就把页面边距收掉，画面直接顶到屏幕边
         self._player_layout.setContentsMargins(*((0, 0, 0, 0) if on else (10, 10, 10, 10)))
         if on:
-            self._fullscreen_was_maximized = self.isMaximized()
-            self.menuBar().hide()
-            self.statusBar().hide()
-            self.tabs.tabBar().hide()
+            self._fullscreen_was_maximized = dialog.isMaximized()
             self.player_side.hide()
-            self.showFullScreen()
+            dialog.showFullScreen()
         else:
-            self.menuBar().show()
-            self.statusBar().show()
-            self.tabs.tabBar().show()
             self.player_side.show()
             if self._fullscreen_was_maximized:
-                self.showMaximized()
+                dialog.showMaximized()
             else:
-                self.showNormal()
+                dialog.showNormal()
 
     def _exit_video_fullscreen(self):
         if self._video_fullscreen:
@@ -2154,10 +2221,9 @@ class MainWindow(QMainWindow):
         if callable(cur_setter):
             cur_setter(position)
         self.player.set_neighbours(position > 0, position + 1 < len(chapters))
-        # 这里马上要开新的一集：清掉「切走时替用户按的暂停」，免得回到播放页时
-        # 去继续那个正在被替换掉的旧会话
-        self._auto_paused = False
-        self.tabs.setCurrentWidget(self.player_page)
+        # M2：起播统一唤起独立播放窗（原「切到在线播放页签」）。窗口标题即
+        # 「剧名 - 第N集」；解析失败回退旧会话时标题保持不动（旧集还在播）。
+        self.playback.open_for("%s - 第 %d 集" % (drama.get("title", "短剧"), position + 1))
         self.play_title.setText("正在解析 %s 第 %d 集…" % (drama.get("title", ""), position + 1))
 
         # 这一集如果已经预热过，直接播它：省掉解析往返和首段下载等待。
@@ -2397,12 +2463,21 @@ class MainWindow(QMainWindow):
         self.enqueue_downloads(playback["drama"], [playback["position"]],
                                chapters=playback.get("chapters"))
 
+    def on_playback_window_close(self):
+        """M2：PlaybackDialog 关闭回调——关窗必须停掉 mpv 会话并 release。
+
+        沿用 stop_playback 现有路径（存进度、清预热、release 会话）；窗口本身
+        只 hide 不销毁，PlayerPane 生命周期仍归 MainWindow。
+        """
+        self.stop_playback()
+
     def stop_playback(self):
         playback = getattr(self, "_playback", None)
         self._remember_progress()
         self._play_request += 1
         self.player.stop()
         self.play_title.setText("未在播放")
+        self.playback.setWindowTitle(DEFAULT_TITLE)   # 窗口标题回到待机态
         self._clear_preloads()
         try:
             self._watch.flush()   # 停止播放时立刻落盘，不等节流窗口
@@ -2546,8 +2621,8 @@ class MainWindow(QMainWindow):
                           "chapters": []}
         self._watch_last_save = time.time()
         self._watch.save_local_watch(path, float(resume or 0.0), 0.0, False)
-        self._auto_paused = False
-        self.tabs.setCurrentWidget(self.player_page)
+        # M2：本地文件同样走独立播放窗，标题用文件名（没有分集概念）
+        self.playback.open_for(os.path.basename(path))
         # A local file has no season: clear the episode strip so it cannot
         # look like the previous drama's chapters are still selectable.
         self._player_episodes_for = None
@@ -2637,6 +2712,9 @@ class MainWindow(QMainWindow):
         except media.MediaError as exc:
             self.statusBar().showMessage(str(exc), 12000)
             return
+        # M2：从详情覆盖页里点下载，等价于原来「详情页签→下载页签」的跳转：
+        # 揭开覆盖层直达下载页，不做「返回现场」（用户主动换目的地了）。
+        self._close_detail_overlay(restore_tab=False)
         self.tabs.setCurrentWidget(self.downloads_page)
         self.downloads.refresh()
 
@@ -2658,23 +2736,17 @@ class MainWindow(QMainWindow):
                          on_error=lambda m: self.statusBar().showMessage("加入下载失败：%s" % m, 8000))
 
     def _on_tab(self, index):
-        previous = getattr(self, "_tab_index", index)
+        # M2：播放窗独立于页签——原「离开播放页自动暂停 / 回来自动继续」整段
+        # 取消（切页签不再打断播放）；详情页也不是页签了，角标刷新挪到
+        # _show_detail_overlay 里做。
         self._tab_index = index
         current = self.tabs.widget(index)
-        before = self.tabs.widget(previous) if previous != index else current
-        # 离开播放页临时暂停、回来接着放；不让视频在后台自己跑
-        if before is self.player_page and current is not self.player_page:
-            self._pause_in_background()
-        elif current is self.player_page and before is not self.player_page:
-            self._resume_in_background()
         if current is self.downloads_page:
             self.downloads.refresh()
         elif current is self.calendar_panel:
             self.calendar_panel.refresh()
         elif current is self.library_page and not self.board_box.count():
             self._load_boards()
-        elif current is self.detail:
-            self.detail.refresh_marks()      # 下载完了切回来，「已下载」角标要对得上
         elif current is self.follow_panel:
             self._watch.mark_arrivals_seen()
             self._sync_watch_tab()
@@ -2683,23 +2755,6 @@ class MainWindow(QMainWindow):
             self.history_panel.refresh()
         elif current is self.settings_page:
             self._ensure_settings_panel()
-
-    def _pause_in_background(self):
-        """切到别的页签就暂停，不用用户先手动暂停再走。"""
-        if not self.player.is_playing() or self.player.is_paused():
-            self._auto_paused = False
-            return
-        self._auto_paused = self.player.set_paused(True)
-        if self._auto_paused:
-            self.statusBar().showMessage("已自动暂停，回到「在线播放」页会自动继续", 6000)
-
-    def _resume_in_background(self):
-        """只有「因为切走才暂停的」才自动继续，用户自己按的暂停不动。"""
-        if not self._auto_paused:
-            return
-        self._auto_paused = False
-        if self.player.set_paused(False):
-            self.statusBar().showMessage("继续播放", 3000)
 
     def _request_covers(self, dramas):
         """Queue poster loads for a list of dramas (skips known ids)."""
@@ -2736,6 +2791,12 @@ class MainWindow(QMainWindow):
             return
         self._closed = True
         self._clear_preloads()
+        # M2：先收播放窗——它的 closeEvent 负责记几何并走 stop_playback 的
+        # 既有停播路径；随后的 player.stop(blocking=True) 只是兜底。
+        try:
+            self.playback.close()
+        except Exception:
+            pass
         try:
             self.downloads.shutdown()
         except Exception:
