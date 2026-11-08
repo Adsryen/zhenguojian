@@ -41,34 +41,40 @@ FALLBACK_SOURCES = (
     ("jinguo", "禁果"), ("heitao", "黑桃"),
     ("huangguo-video", "黄果·视频"), ("huangguoai", "黄果·AI"),
     ("cloudfront", "黄果·旧版"),
+    ("youzi", "柚子", True, True),
 )
 
 
 def _normalise_sources(raw):
-    """把 sources 注入格式统一为 [{"slug","name","implemented"}]。
+    """把 sources 注入格式统一为 [{"slug","name","implemented","adult"}]。
 
-    接受 list[dict{slug,name[,implemented]}] 或 list[(slug,name[,ok])]，
-    容忍 dict 缺 name（回落 slug）、空 slug、重复 slug。
+    接受 list[dict{slug,name[,implemented[,adult]]}] 或
+    list[(slug,name[,ok[,adult]])]，容忍 dict 缺 name（回落 slug）、空 slug、
+    重复 slug。
     """
     out, seen = [], set()
     for entry in raw or ():
         implemented = True
+        adult = False
         if isinstance(entry, dict):
             slug = str(entry.get("slug") or "")
             name = str(entry.get("name") or slug)
             implemented = bool(entry.get("implemented", True))
+            adult = bool(entry.get("adult", False))
         elif isinstance(entry, (list, tuple)):
             if not entry:
                 continue
             slug = str(entry[0] or "")
             name = str(entry[1]) if len(entry) > 1 and entry[1] else slug
             implemented = bool(entry[2]) if len(entry) > 2 else True
+            adult = bool(entry[3]) if len(entry) > 3 else False
         else:
             slug = name = str(entry or "")
         if not slug or slug in seen:
             continue
         seen.add(slug)
-        out.append({"slug": slug, "name": name, "implemented": implemented})
+        out.append({"slug": slug, "name": name, "implemented": implemented,
+                    "adult": adult})
     return out
 
 
@@ -268,7 +274,10 @@ class BrowsePanel(QWidget):
         checked = self._source_display_slug()
         for entry in self._sources:
             slug = entry["slug"]
-            button = QPushButton(entry["name"])
+            text = entry["name"]
+            if entry.get("adult"):
+                text += " 18+"
+            button = QPushButton(text)
             button.setProperty("role","filterChip");button.setCheckable(True);button.setChecked(slug == checked)
             button.setCursor(Qt.PointingHandCursor)
             button._source_slug = slug

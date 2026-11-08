@@ -63,7 +63,11 @@ FALLBACK_SOURCES = (
     ("huangguo-video", "黄果·视频", True),
     ("huangguoai", "黄果·AI", True),
     ("cloudfront", "黄果·旧版", True),
+    ("youzi", "柚子", True),
 )
+
+# 18+ 站源：UI 加徽章、出厂默认停用（与注册表 adult 字段双保险，回退表也标注）。
+ADULT_SOURCES = {"youzi"}
 
 # org/app 与 player.py 的 QSettings 约定保持一致，站源开关(S1)等键互通。
 SETTINGS_ORG = "zhenguojian"
@@ -923,7 +927,8 @@ class MainWindow(QMainWindow):
 
     # ------------------------------------------------------------ M1 站源上下文
     def _fallback_sources(self):
-        return [{"slug": slug, "name": name, "implemented": ok}
+        return [{"slug": slug, "name": name, "implemented": ok,
+                 "adult": slug in ADULT_SOURCES}
                 for slug, name, ok in FALLBACK_SOURCES]
 
     def _restore_current_source(self):
@@ -978,6 +983,10 @@ class MainWindow(QMainWindow):
             name = str(item.get("name") or item.get("displayName") or item.get("DisplayName")
                        or item.get("label") or names.get(slug) or slug)
             entry = {"slug": slug, "name": name, "implemented": True}
+            if isinstance(item.get("adult"), bool):
+                entry["adult"] = item["adult"]
+            elif slug in ADULT_SOURCES:
+                entry["adult"] = True
             for key in ("enabled", "Enabled"):
                 if isinstance(item.get(key), bool):
                     entry["enabled"] = item[key]

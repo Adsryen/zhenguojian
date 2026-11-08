@@ -532,6 +532,9 @@ def build_stylesheet():
         "QWidget[guoRole=\"sourceRow\"][hover=\"true\"] { background: %(guo_accent_soft)s; }"
         "QLabel[guoRole=\"sourceName\"] { background: transparent; color: %(guo_text)s; padding: 6px 8px; }"
         "QLabel[guoRole=\"sourceName\"][current=\"true\"] { color: %(guo_accent)s; font-weight: bold; }"
+        # 18+ 徽章：站源行/设置行/筛选芯片共用（danger 语义色，红果式角标质感）
+        "QLabel[guoRole=\"adultBadge\"] { background: %(danger)s; color: %(on_accent)s;"
+        "  border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: bold; }"
         # 控制条浮层（压在画面区上的半透明圆角条）
         "QWidget[guoRole=\"controlOverlay\"] { background: %(guo_player_scrim)s;"
         "  border: 1px solid %(guo_border)s; border-radius: %(guo_radius_lg)s; }"

@@ -69,30 +69,24 @@ except Exception:  # pragma: no cover
 FALLBACK_SOURCES = [
     {"slug": "hongguo",        "name": "红果",      "implemented": True,
      "note": "主源，恒可用。"},
-    {"slug": "hanxiaoquan",    "name": "韩小圈",    "implemented": False,
-     "note": "本地缺失：无任何 provider 实现；搜索有 JS cookie 挑战（source-map ①/②）。"},
-    {"slug": "guipian",        "name": "鬼片",      "implemented": False,
-     "note": "本地缺失：无 provider_guipian.go；HTML 403 / RSS 通（source-map ①/②）。"},
+    {"slug": "hanxiaoquan",    "name": "韩小圈",    "implemented": True, "note": ""},
+    {"slug": "guipian",        "name": "鬼片",      "implemented": True, "note": ""},
     {"slug": "sorani",         "name": "青空",      "implemented": True,
-     "note": "已有；缺账号登录/captcha 模块（source-map ①）。"},
+     "note": "播放需登录：设置 > 站源 > 站源账号。"},
     {"slug": "huangdou",       "name": "黄豆",      "implemented": True, "note": ""},
     {"slug": "huangju",        "name": "剧果",      "implemented": True, "note": ""},
-    {"slug": "yeguo",          "name": "野果",      "implemented": True,
-     "note": "已有；本地 client 与 ref 分叉约 343 行（source-map ①）。"},
+    {"slug": "yeguo",          "name": "野果",      "implemented": True, "note": ""},
     {"slug": "dsd",            "name": "帝果",      "implemented": True,
-     "note": "已有；连通性：443 timeout 暂不可达（source-map ①）。"},
-    {"slug": "jinguoduanju",   "name": "禁果短剧",  "implemented": False,
-     "note": "本地缺失：无 provider 实现（source-map ②）。"},
-    {"slug": "jinguo",         "name": "禁果",      "implemented": False,
-     "note": "本地缺失；注意本地 cloudfront slug 不对应禁果（source-map ①）。"},
-    {"slug": "heitao",         "name": "黑桃",      "implemented": False,
-     "note": "本地缺失：无 provider 实现（source-map ②）。"},
+     "note": "上游连通性不稳定，失败时稍后重试。"},
+    {"slug": "jinguoduanju",   "name": "禁果短剧",  "implemented": True, "note": ""},
+    {"slug": "jinguo",         "name": "禁果",      "implemented": True, "note": ""},
+    {"slug": "heitao",         "name": "黑桃",      "implemented": True, "note": ""},
     {"slug": "huangguo-video", "name": "黄果·视频", "implemented": True,
-     "note": "黄果组变体①；连通性：huangguo.video timeout（source-map ①）。"},
-    {"slug": "huangguoai",     "name": "黄果·AI",   "implemented": True,
-     "note": "黄果组变体②；本地实现落后 ref（source-map ①）。"},
-    {"slug": "cloudfront",     "name": "黄果·旧版", "implemented": True,
-     "note": "黄果组变体③（source-map ①）。"},
+     "note": "上游连通性不稳定，失败时稍后重试。"},
+    {"slug": "huangguoai",     "name": "黄果·AI",   "implemented": True, "note": ""},
+    {"slug": "cloudfront",     "name": "黄果·旧版", "implemented": True, "note": ""},
+    {"slug": "youzi",          "name": "柚子",      "implemented": True, "adult": True,
+     "note": "18+ 内容，出厂默认停用，需手动打开。"},
 ]
 
 _BOUND_CORE = None
@@ -227,6 +221,12 @@ class _SourceRow(QWidget):
         self.name = QLabel(info["name"])
         self.name.setProperty("guoRole", "sourceName")
         lay.addWidget(self.name)
+
+        # 18+ 徽章：注册表 adult 字段驱动，与弹层/筛选芯片同款样式。
+        if info.get("adult"):
+            badge = QLabel("18+")
+            badge.setProperty("guoRole", "adultBadge")
+            lay.addWidget(badge)
 
         # 同步失败行内提示（红字，与行样式同一 guoRole 段体系）：默认隐藏，
         # reject_toggle 填文案显示，clear_error/下次成功同步后收起。
@@ -589,6 +589,9 @@ class SettingsPanel(QWidget):
             enabled = data.get("enabled")
             if enabled is None:
                 enabled = bool(implemented)
+            adult = data.get("adult")
+            if adult is None:
+                adult = (known or {}).get("adult", False)
             rows.append({
                 "slug": slug,
                 "name": str(data.get("name") or data.get("display_name")
@@ -596,6 +599,7 @@ class SettingsPanel(QWidget):
                 "implemented": bool(implemented),
                 "enabled": bool(enabled),
                 "available": bool(available),
+                "adult": bool(adult),
                 "note": str(data.get("note") or (known or {}).get("note") or ""),
             })
         return rows

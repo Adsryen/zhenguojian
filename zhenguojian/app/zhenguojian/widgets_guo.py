@@ -648,12 +648,12 @@ class EpisodeGrid(QWidget):
 
 # ============================================================== 站源切换
 class _SourceRow(QWidget):
-    """下拉里的一行：名称 + 当前高亮 + 可选 enabled 复选；整行可点。"""
+    """下拉里的一行：名称 + 可选 18+ 徽章 + 当前高亮 + 可选 enabled 复选；整行可点。"""
 
     clicked = pyqtSignal()
     toggled = pyqtSignal(bool)
 
-    def __init__(self, name, is_current=False, enabled=None, parent=None):
+    def __init__(self, name, is_current=False, enabled=None, adult=False, parent=None):
         super().__init__(parent)
         self.setProperty("guoRole", "sourceRow")
         lay = QHBoxLayout(self)
@@ -664,6 +664,10 @@ class _SourceRow(QWidget):
         if is_current:
             self._label.setProperty("current", "true")
         lay.addWidget(self._label, 1)
+        if adult:
+            badge = QLabel("18+", self)
+            badge.setProperty("guoRole", "adultBadge")
+            lay.addWidget(badge)
         if enabled is not None:
             box = QCheckBox(self)
             box.setChecked(bool(enabled))
@@ -748,7 +752,8 @@ class SourceSwitchPopup(QWidget):
         for s in self._sources:
             row = _SourceRow(s.get("name") or s.get("slug", ""),
                              is_current=(s.get("slug") == self._current),
-                             enabled=s.get("enabled"))
+                             enabled=s.get("enabled"),
+                             adult=bool(s.get("adult")))
             action = QWidgetAction(menu)
             action.setDefaultWidget(row)
             menu.addAction(action)
