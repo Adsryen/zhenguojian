@@ -23,19 +23,27 @@ QSettings sources/enabled 暂存键已随 F1 就绪退役）。
     libraryRootChanged(str)    成品库切换后的下载目录（绝对路径）
 
 样式：全部颜色取 ui.DESIGN token（主题跟随，showEvent 时按签名重刷），
-无任何硬编码色值；开关与行控件的 normal/hover/pressed/disabled 四态齐备。
+无任何硬编码色值。S2 起：开关/站源卡片/自适应栅格拆分到 settings_widgets
+（开关 paintEvent 自绘 + 滑动动画 + 键盘可达；栅格窄 3 列 / 宽 4 列），
+分区统一卡片化版式；行控件的 normal/hover/pressed/disabled 态齐备。
 """
 
 import os
 
-from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
-from PyQt5.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFrame,
+from PyQt5.QtCore import QTimer, Qt, pyqtSignal
+from PyQt5.QtWidgets import (QComboBox, QFileDialog, QFrame,
                              QHBoxLayout, QLabel, QLineEdit, QPushButton,
                              QScrollArea, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import tools, ui
+from .settings_widgets import GuoSwitch, SourceCard, SourceGrid
 from .sorani_login import SoraniAccountDialog
 from .tasks import TaskRunner
+
+# S2 兼容别名：开关与站源行实现移到 settings_widgets（对外类名/读点不变，
+# 探针与旧代码仍可按 _GuoSwitch/_SourceRow 引用）。
+_GuoSwitch = GuoSwitch
+_SourceRow = SourceCard
 
 # ---------------------------------------------------------------- 播放器约定
 # player.py 由 P1 并行开发：这里只消费常量与键名，绝不改动它。import 失败
@@ -85,7 +93,8 @@ FALLBACK_SOURCES = [
      "note": "上游连通性不稳定，失败时稍后重试。"},
     {"slug": "huangguoai",     "name": "黄果·AI",   "implemented": True, "note": ""},
     {"slug": "cloudfront",     "name": "黄果·旧版", "implemented": True, "note": ""},
-    {"slug": "youzi",          "name": "柚子",      "implemented": True, "adult": True,
+    {"slug": "youzi",          "name": "柚子",      "implemented": True,
+     "enabled": False, "adult": True,
      "note": "18+ 内容，出厂默认停用，需手动打开。"},
 ]
 
@@ -134,191 +143,6 @@ def _speed_label(speed):
 def _repolish(widget):
     widget.style().unpolish(widget)
     widget.style().polish(widget)
-
-
-# ------------------------------------------------------------------ 站源行
-class _GuoSwitch(QCheckBox):
-    """TinySwitch 风格药丸开关。
-
-    Qt5 QSS 实测缺陷：同一控件上多条伪状态规则（:checked:hover::indicator、
-    甚至单独的 :disabled::indicator）会互相劫持子控件匹配——禁用色被画到
-    启用行上、checked 完全失效。故不用伪状态，改为动态属性 swState 的
-    显式状态矩阵（off/on/offHover/onHover/offPressed/onPressed/
-    disabled/disabledOn），与 ui.py [hover="true"] 属性选择器同一路线。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setProperty("guoRole", "switch")
-        self._down = False
-        self._hover = False
-        self.setAttribute(Qt.WA_Hover, True)   # QWidget 用 WA_Hover，非 setAcceptHoverEvents
-        self.toggled.connect(self._refresh)
-        self._refresh()
-
-    def changeEvent(self, event):
-        if event.type() == QEvent.EnabledChange:
-            self._refresh()
-        super().changeEvent(event)
-
-    def hoverEnterEvent(self, event):
-        self._hover = True
-        self._refresh()
-        super().hoverEnterEvent(event)
-
-    def hoverLeaveEvent(self, event):
-        self._hover = False
-        self._refresh()
-        super().hoverLeaveEvent(event)
-
-    def mousePressEvent(self, event):
-        self._down = True
-        self._refresh()
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        self._down = False
-        self._refresh()
-        super().mouseReleaseEvent(event)
-
-    def refresh_state(self):
-        """blockSignals 抑制信号后（初始化路径）手动重算 swState。"""
-        self._refresh()
-
-    def _state_name(self):
-        if not self.isEnabled():
-            return "disabledOn" if self.isChecked() else "disabled"
-        if self._down:
-            return "onPressed" if self.isChecked() else "offPressed"
-        if self._hover:
-            return "onHover" if self.isChecked() else "offHover"
-        return "on" if self.isChecked() else "off"
-
-    def _refresh(self, *args):
-        new = self._state_name()
-        if self.property("swState") != new:
-            self.setProperty("swState", new)
-            style = self.style()
-            style.unpolish(self)
-            style.polish(self)
-
-
-class _SourceRow(QWidget):
-    """一行：源名 + 状态 chip + TinySwitch 风格开关（QCheckBox）。"""
-
-    toggled = pyqtSignal(str, bool)
-
-    def __init__(self, info, parent=None):
-        super().__init__(parent)
-        self.slug = info["slug"]
-        self.setProperty("guoRole", "sourceRow")
-        self.setObjectName("s1src_" + self.slug.replace("-", "_"))
-
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(8, 3, 8, 3)
-        lay.setSpacing(8)
-
-        self.name = QLabel(info["name"])
-        self.name.setProperty("guoRole", "sourceName")
-        lay.addWidget(self.name)
-
-        # 18+ 徽章：注册表 adult 字段驱动，与弹层/筛选芯片同款样式。
-        if info.get("adult"):
-            badge = QLabel("18+")
-            badge.setProperty("guoRole", "adultBadge")
-            lay.addWidget(badge)
-
-        # 同步失败行内提示（红字，与行样式同一 guoRole 段体系）：默认隐藏，
-        # reject_toggle 填文案显示，clear_error/下次成功同步后收起。
-        self.error = QLabel("")
-        self.error.setProperty("guoRole", "rowError")
-        self.error.setVisible(False)
-        lay.addWidget(self.error)
-
-        lay.addStretch(1)
-
-        self.chip = QLabel()
-        self.chip.setProperty("guoRole", "chip")
-        self.chip.setAlignment(Qt.AlignCenter)
-        lay.addWidget(self.chip)
-        lay.addSpacing(6)
-
-        self.switch = _GuoSwitch()
-        self.switch.setCursor(Qt.PointingHandCursor)
-        lay.addWidget(self.switch)
-
-        note = info.get("note") or ""
-        tip = "slug: %s" % self.slug
-        if note:
-            tip += "\n" + note
-        self.setToolTip(tip)
-        self.name.setToolTip(tip)
-
-        self.apply_state(info)
-        self.switch.toggled.connect(self._emit)
-
-    def enterEvent(self, event):
-        # sourceRow 的 hover 高亮走 [hover="true"] 属性选择器（非 :hover 伪类）
-        self._set_hover(True)
-        super().enterEvent(event)
-
-    def leaveEvent(self, event):
-        self._set_hover(False)
-        super().leaveEvent(event)
-
-    def _set_hover(self, on):
-        self.setProperty("hover", "true" if on else None)
-        style = self.style()
-        style.unpolish(self)
-        style.polish(self)
-
-    def apply_state(self, info):
-        """implemented/available/enabled → 控件状态。
-
-        - 开发中（!implemented）：开关禁用且未勾选，chip「开发中」（警告色）。
-        - 暂不可用（available=False）：开关禁用（保留勾选态），chip「暂不可用」。
-        - 正常：可交互。
-        """
-        implemented = bool(info.get("implemented", True))
-        available = bool(info.get("available", True))
-        enabled = bool(info.get("enabled", implemented)) and implemented
-        if not implemented:
-            self.chip.setText("开发中")
-            self.chip.setProperty("guoStatus", "dev")
-        elif not available:
-            self.chip.setText("暂不可用")
-            self.chip.setProperty("guoStatus", "unavailable")
-        else:
-            self.chip.setText("已实现")
-            self.chip.setProperty("guoStatus", "ok")
-        self.switch.blockSignals(True)
-        self.switch.setChecked(enabled)
-        self.switch.setEnabled(implemented and available)
-        self.switch.blockSignals(False)
-        self.switch.refresh_state()
-        _repolish(self.chip)
-
-    def _emit(self, checked):
-        self.toggled.emit(self.slug, bool(checked))
-
-    def reject_toggle(self, message):
-        """core 同步失败：回滚开关（不发信号）并在行内显示红字。"""
-        self.switch.blockSignals(True)
-        self.switch.setChecked(not self.switch.isChecked())
-        self.switch.blockSignals(False)
-        self.switch.refresh_state()
-        self._show_error(message)
-
-    def clear_error(self):
-        self._show_error("")
-
-    def _show_error(self, message):
-        text = str(message or "").strip()
-        # 行内只留短句，完整原因进 tooltip；宽度靠 stretch 自然收缩
-        short = text if len(text) <= 40 else text[:39] + "…"
-        self.error.setText(short)
-        self.error.setToolTip(text)
-        self.error.setVisible(bool(text))
 
 
 class _SoraniAccountRow(QWidget):
@@ -411,15 +235,18 @@ class SettingsPanel(QWidget):
     _QSS_TOKENS = ("guo_accent", "guo_accent_hover", "guo_accent_pressed",
                    "guo_accent_soft", "guo_border", "guo_chip_bg",
                    "guo_chip_hover", "guo_chip_pressed", "guo_warning",
-                   "guo_muted", "guo_text", "guo_danger", "surface2",
-                   "surface3", "disabled_text", "disabled_border")
+                   "guo_muted", "guo_text", "guo_danger", "guo_card_bg",
+                   "guo_radius", "guo_radius_lg", "surface", "surface2",
+                   "surface3", "border", "disabled_text", "disabled_border",
+                   "on_accent")
 
     def __init__(self, core=None, parent=None):
         super().__init__(parent)
         self._explicit_core = core
         self._core = None
         self._sources_mode = "fallback"    # core | fallback
-        self._rows = {}                    # slug -> _SourceRow
+        self._rows = {}                    # slug -> SourceCard
+        self._source_grid = None           # 站源卡片栅格（S2）
         self._qss_sig = None
         self._sorani_row = None            # 站源账号行（T1）
         self._sorani_status = None         # 缓存登录态 dict | None=未知
@@ -437,51 +264,105 @@ class SettingsPanel(QWidget):
         return tuple(ui.DESIGN.get(k) for k in self._QSS_TOKENS)
 
     def refresh_qss(self):
-        """面板局部 QSS：颜色全部 %(...)s 插值 ui.DESIGN token，禁硬编码。"""
+        """面板局部 QSS：颜色/圆角全部 %(...)s 插值 ui.DESIGN token，禁硬编码。
+
+        S2 起开关由 settings_widgets.GuoSwitch paintEvent 自绘——面板不再放
+        任何 ::indicator 规则（Qt5 伪状态叠加劫持子控件匹配的历史坑就此绕开，
+        swState 属性仅作状态快照读点保留）。
+        """
         qss = (
-            # TinySwitch 风格药丸开关（36×18）：swState 显式状态矩阵。
-            # 不用伪状态——Qt5 实测 :checked:hover / :disabled 等规则叠加会
-            # 劫持 ::indicator 子控件匹配（详见 _GuoSwitch docstring）。
-            # 每条规则自带几何属性：QSS 子控件规则之间不做属性回退。
+            # 开关容器：禁 QSS 参与绘制，只保证背景透明、无焦点矩形之外残留
             "QCheckBox[guoRole=\"switch\"] {"
-            "  spacing: 0px; background: transparent; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"off\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_border)s; background: %(guo_chip_bg)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"offHover\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_accent)s; background: %(guo_chip_hover)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"offPressed\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_accent)s; background: %(guo_chip_pressed)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"on\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_accent)s; background: %(guo_accent)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"onHover\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_accent_hover)s; background: %(guo_accent_hover)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"onPressed\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(guo_accent_pressed)s; background: %(guo_accent_pressed)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"disabled\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(disabled_border)s; background: %(surface2)s; }"
-            "QCheckBox[guoRole=\"switch\"][swState=\"disabledOn\"]::indicator {"
-            "  width: 36px; height: 18px; border-radius: 9px;"
-            "  border: 1px solid %(disabled_border)s; background: %(surface3)s; }"
-            # 状态 chip：复用全局 guoRole="chip"，只加色不改几何
+            "  spacing: 0px; background: transparent; border: none; }"
+            # 分区卡片化：统一 底色+描边+大圆角+内边距（_section 挂属性）
+            "QWidget[guoRole=\"settingsSection\"] {"
+            "  background: %(guo_card_bg)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius_lg)s; }"
+            # 页头
+            "QLabel[guoRole=\"panelTitle\"] { font-size: 17px; font-weight: 600;"
+            "  color: %(guo_text)s; background: transparent; }"
+            "QLabel[guoRole=\"panelSub\"] { font-size: 12px; color: %(guo_muted)s;"
+            "  background: transparent; }"
+            # 分区头：覆盖全局 sectionHeader 的 muted 小字，提级为 13px 正文色
+            "QLabel[guoRole=\"sectionHeader\"] { color: %(guo_text)s;"
+            "  font-size: 13px; font-weight: 600; background: transparent;"
+            "  padding: 0px 0px 0px 9px; border-left: 3px solid %(guo_accent)s; }"
+            # 状态 chip：复用全局 guoRole="chip"，卡片底上加深一档避免糊底
+            "QLabel[guoRole=\"chip\"] { background: %(surface2)s;"
+            "  border: 1px solid %(border)s; padding: 1px 8px;"
+            "  font-size: 11px; }"
             "QLabel[guoRole=\"chip\"][guoStatus=\"ok\"] {"
-            "  color: %(guo_accent)s; background: %(guo_accent_soft)s; }"
-            "QLabel[guoRole=\"chip\"][guoStatus=\"dev\"] { color: %(guo_warning)s; }"
-            "QLabel[guoRole=\"chip\"][guoStatus=\"unavailable\"] { color: %(disabled_text)s; }"
-            # 表单行标签 + 只读路径框
-            "QLabel[guoRole=\"fieldLabel\"] { color: %(guo_text)s; }"
-            "QLabel[guoRole=\"panelTitle\"] { font-size: 16px; font-weight: 600;"
+            "  color: %(guo_accent)s; background: %(guo_accent_soft)s;"
+            "  border: 1px solid %(guo_accent_soft)s; }"
+            "QLabel[guoRole=\"chip\"][guoStatus=\"dev\"] {"
+            "  color: %(guo_warning)s; background: %(surface2)s; }"
+            "QLabel[guoRole=\"chip\"][guoStatus=\"unavailable\"] {"
+            "  color: %(disabled_text)s; background: %(surface2)s; }"
+            # 站源卡：常态 / hover / 停用态（开发中·暂不可用降饱和）
+            "QWidget[guoRole=\"sourceCard\"] {"
+            "  background: %(guo_chip_bg)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius)s; }"
+            "QWidget[guoRole=\"sourceCard\"][hover=\"true\"] {"
+            "  background: %(guo_chip_hover)s;"
+            "  border-color: %(guo_accent)s; }"
+            "QWidget[guoRole=\"sourceCard\"][cardState=\"dev\"],"
+            "QWidget[guoRole=\"sourceCard\"][cardState=\"unavailable\"] {"
+            "  background: %(surface2)s; border-color: %(border)s; }"
+            "QLabel[guoRole=\"sourceCardName\"] { color: %(guo_text)s;"
+            "  font-weight: 600; background: transparent; }"
+            "QLabel[guoRole=\"sourceCardName\"][dim=\"true\"] {"
+            "  color: %(disabled_text)s; }"
+            "QLabel[guoRole=\"sourceCardNote\"] { color: %(guo_muted)s;"
+            "  font-size: 11px; background: transparent; }"
+            "QLabel[guoRole=\"sourceCardNote\"][dim=\"true\"] {"
+            "  color: %(disabled_text)s; }"
+            # 表单行标签 + 下拉 + 只读路径框 + 按钮，统一一套描边/圆角口径
+            "QLabel[guoRole=\"fieldLabel\"] { color: %(guo_text)s;"
+            "  background: transparent; }"
+            "QComboBox { background: %(guo_chip_bg)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 10px;"
+            "  color: %(guo_text)s; }"
+            "QComboBox:hover, QComboBox:focus, QComboBox:on {"
+            "  border-color: %(guo_accent)s; }"
+            "QComboBox::drop-down { border: none; width: 22px; }"
+            "QComboBox QAbstractItemView { background: %(surface)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius)s;"
+            "  selection-background-color: %(guo_accent)s;"
+            "  selection-color: %(on_accent)s; }"
+            "QLineEdit[guoRole=\"pathBox\"] { background: %(guo_chip_bg)s;"
+            "  border: 1px solid %(guo_border)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 10px;"
             "  color: %(guo_text)s; }"
             "QLineEdit[guoRole=\"pathBox\"]:read-only { color: %(guo_muted)s; }"
+            "QPushButton[role=\"ghost\"] { background: transparent;"
+            "  border: 1px solid %(guo_border)s; color: %(guo_muted)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 12px; }"
+            "QPushButton[role=\"ghost\"]:hover {"
+            "  border-color: %(guo_accent)s; color: %(guo_text)s;"
+            "  background: %(guo_chip_hover)s; }"
+            "QPushButton[role=\"ghost\"]:pressed { background: %(guo_chip_pressed)s; }"
+            "QPushButton[role=\"primary\"] { background: %(guo_accent)s;"
+            "  color: %(on_accent)s; border: 1px solid %(guo_accent)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 14px;"
+            "  font-weight: 600; }"
+            "QPushButton[role=\"primary\"]:hover {"
+            "  background: %(guo_accent_hover)s;"
+            "  border-color: %(guo_accent_hover)s; }"
+            "QPushButton[role=\"primary\"]:pressed {"
+            "  background: %(guo_accent_pressed)s;"
+            "  border-color: %(guo_accent_pressed)s; }"
+            "QPushButton[role=\"danger\"] { background: transparent;"
+            "  border: 1px solid %(guo_danger)s; color: %(guo_danger)s;"
+            "  border-radius: %(guo_radius)s; padding: 4px 14px; }"
+            "QPushButton[role=\"danger\"]:hover { background: %(guo_chip_hover)s; }"
+            "QPushButton[role=\"danger\"]:pressed { background: %(guo_chip_pressed)s; }"
             # 站源行同步失败红字提示（F1 起失败不再落 QSettings 暂存，只行内提示）
             "QLabel[guoRole=\"rowError\"] { color: %(guo_danger)s;"
-            "  font-size: 12px; background: transparent; }"
+            "  font-size: 11px; background: transparent; }"
         ) % ui.DESIGN
         self.setStyleSheet(qss)
         self._qss_sig = self._token_sig()
@@ -494,12 +375,15 @@ class SettingsPanel(QWidget):
     # ------------------------------------------------------------ 骨架
     def _build_ui(self):
         root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 14)
-        root.setSpacing(12)
+        root.setContentsMargins(18, 16, 18, 16)
+        root.setSpacing(10)
 
         title = QLabel("设置")
         title.setProperty("guoRole", "panelTitle")
         root.addWidget(title)
+        sub = QLabel("站源 · 播放默认 · 存储 · 关于")
+        sub.setProperty("guoRole", "panelSub")
+        root.addWidget(sub)
 
         scroll = QScrollArea()
         scroll.setProperty("guoRole", "bare")
@@ -509,8 +393,8 @@ class SettingsPanel(QWidget):
 
         content = QWidget()
         cl = QVBoxLayout(content)
-        cl.setContentsMargins(2, 2, 2, 2)
-        cl.setSpacing(18)
+        cl.setContentsMargins(2, 6, 2, 2)
+        cl.setSpacing(14)
         cl.addWidget(self._build_sources_section())
         cl.addWidget(self._build_playback_section())
         cl.addWidget(self._build_paths_section())
@@ -522,8 +406,9 @@ class SettingsPanel(QWidget):
     def _section(self, object_name, header, hint_text):
         box = QWidget()
         box.setObjectName(object_name)
+        box.setProperty("guoRole", "settingsSection")
         lay = QVBoxLayout(box)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(16, 12, 16, 14)
         lay.setSpacing(6)
         head = QLabel(header)
         head.setProperty("guoRole", "sectionHeader")
@@ -533,8 +418,8 @@ class SettingsPanel(QWidget):
         hint.setWordWrap(True)
         lay.addWidget(hint)
         body = QVBoxLayout()
-        body.setContentsMargins(0, 4, 0, 0)
-        body.setSpacing(2)
+        body.setContentsMargins(0, 2, 0, 0)
+        body.setSpacing(4)
         lay.addLayout(body)
         return box, body, hint
 
@@ -620,26 +505,32 @@ class SettingsPanel(QWidget):
             if rows:
                 self._sources_mode = "core"
         if not rows:
-            # 纯展示兜底：core 完全不可用（断链）时仍列出 14 行内置源表，
-            # 开关按 implemented 置默认态；不做任何暂存。
+            # 纯展示兜底：core 完全不可用（断链）时仍列出内置源表，开关默认态
+            # 取行内显式 enabled（18+ 出厂停用源 enabled=False，与真实核心口径
+            # 一致），缺省按 implemented；不做任何暂存。
             self._sources_mode = "fallback"
             rows = []
             for info in FALLBACK_SOURCES:
                 row = dict(info)
-                row["enabled"] = bool(row["implemented"])
+                row["enabled"] = bool(row.get("enabled", row["implemented"]))
                 rows.append(row)
 
-        # 清旧行后重建
+        # 清旧行后重建：卡片放进 SourceGrid（自适应 3/4 列栅格），栅格本身
+        # 是 _sources_body 里站源区唯一的直接子 widget——青空账号行仍直接挂
+        # _sources_body（test_sorani_login 依赖该布局读点，勿改）。
         while self._sources_body.count():
             item = self._sources_body.takeAt(0)
             w = item.widget()
             if w is not None:
                 w.deleteLater()
         self._rows = {}
+        grid = SourceGrid()
+        self._source_grid = grid
+        self._sources_body.addWidget(grid)
         for row in rows:
             w = _SourceRow(row)
             w.toggled.connect(self._on_source_toggled)
-            self._sources_body.addWidget(w)
+            grid.add_card(w)
             self._rows[row["slug"]] = w
 
         if self._sources_mode == "core":
