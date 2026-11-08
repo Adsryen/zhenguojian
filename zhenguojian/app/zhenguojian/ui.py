@@ -599,3 +599,71 @@ def build_stylesheet():
         "QMessageBox { background: %(surface2)s; }"
         % d
     )
+
+
+# ------------------------------------------------------------ Win11 标题栏
+# 真机反馈（问题 C）：Windows 上默认白/黑标题栏和深色机身不搭。这里走
+# DWM 窗口属性（dwmapi.DwmSetWindowAttribute）微调系统标题栏本身——
+# 深色模式、圆角、caption 底色——不做 frameless 自绘，避开最大化/拖拽/
+# DPI 那一整类风险。Win10 不认 33/35 这两个属性，HRESULT 非 S_OK 就
+# 静默跳过，只剩 Win11 有圆角和底色，两代系统都不报错。
+_DWMWA_USE_IMMERSIVE_DARK_MODE = 20     # 20H1 起；更早的 Win10 内部编号 19
+_DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY = 19
+_DWMWA_WINDOW_CORNER_PREFERENCE = 33    # Win11 起
+_DWMWA_CAPTION_COLOR = 35               # Win11 22523 起
+_DWMWCP_ROUND = 2
+
+
+def _caption_color_ref():
+    """DESIGN["surface"] (#RRGGBB) → DWM COLORREF (0x00BBGGRR)。
+
+    #141821 深色 surface 的 COLORREF 是 0x211814；顺序写反会得到
+    #211814 那种发蓝的黑。浅色主题 surface=#ffffff，正好回到默认白。
+    """
+    raw = str(DESIGN.get("surface") or "#141821").lstrip("#")
+    try:
+        red, green, blue = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    except ValueError:
+        red, green, blue = 0x14, 0x18, 0x21
+    return (blue << 16) | (green << 8) | red
+
+
+def apply_win11_titlebar(window):
+    """给顶层窗口套 Win11 质感标题栏；非 Windows / offscreen 直接返回 False。
+
+    必须在 winId() 已创建之后调用（MainWindow.showEvent 或换主题时），
+    重复调用无害。三项属性互相独立，个别失败不影响其余：
+      - 深色/浅色模式跟随 current_theme()（20，失败回退 19）；
+      - 圆角 DWMWCP_ROUND（33）；
+      - caption 底色取当前调色板 surface（35），和机身 QListWidget/
+        QLineEdit 的底色同一 token，换主题重调一次即跟着变色。
+    """
+    import os
+    import sys
+    if sys.platform != "win32":
+        return False
+    if (os.environ.get("QT_QPA_PLATFORM") or "").lower().startswith("offscreen"):
+        return False
+    try:
+        import ctypes
+        dwm = ctypes.windll.dwmapi
+        hwnd = ctypes.c_void_p(int(window.winId()))
+    except Exception:
+        return False
+
+    def _set(attribute, value):
+        try:
+            holder = ctypes.c_int(value)
+            hr = dwm.DwmSetWindowAttribute(
+                hwnd, ctypes.c_uint(attribute), ctypes.byref(holder),
+                ctypes.c_uint(ctypes.sizeof(holder)))
+            return hr == 0              # 非 S_OK（老系统不认）静默跳过
+        except Exception:
+            return False
+
+    dark = 1 if current_theme() != "light" else 0
+    if not _set(_DWMWA_USE_IMMERSIVE_DARK_MODE, dark):
+        _set(_DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY, dark)
+    _set(_DWMWA_WINDOW_CORNER_PREFERENCE, _DWMWCP_ROUND)
+    _set(_DWMWA_CAPTION_COLOR, _caption_color_ref())
+    return True

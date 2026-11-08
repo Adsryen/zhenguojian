@@ -634,7 +634,10 @@ class MainWindow(QMainWindow):
         self._settings_panel = None
         self._settings_tried = False
 
-        self.setWindowTitle("%s · 红果短剧下载器" % APP_NAME)
+        # 问题 C：标题只留「真果鉴」；长副标题既占 Win11 紧凑标题栏的宽度，
+        # 也和图标/托盘里的名字重复。图标在 main() 里 app.setWindowIcon 设过。
+        self.setWindowTitle(APP_NAME)
+        self._titlebar_applied = False
         self.resize(1180, 780)
 
         self.tabs = QTabWidget()
@@ -854,6 +857,9 @@ class MainWindow(QMainWindow):
         if application is not None:
             application.setStyleSheet(build_stylesheet())
         ui.repaint_all()
+        if self._titlebar_applied:
+            # 标题栏底色/深色开关跟着调色板走（caption 用 surface token）
+            ui.apply_win11_titlebar(self)
         if getattr(self, "_video_fullscreen", False):
             self._apply_fullscreen_player_style(True)
         # Placeholder posters are pre-painted pixmaps; update() cannot
@@ -2675,11 +2681,24 @@ class MainWindow(QMainWindow):
         self.grid.set_pixmap(drama_id, pixmap)
         self.search_grid.set_pixmap(drama_id, pixmap)
         self.detail.set_cover(drama_id, pixmap)
+        # 问题 D：榜单行也会 request 封面，但 loaded 一直没人路由回
+        # rank_list——行里永远是占位底色（黑图）。C1 只接了请求侧
+        # （set_cover_loader），回包侧漏了这两行。
+        self.rank_list.set_pixmap(drama_id, pixmap)
 
     def _on_cover_failed(self, drama_id):
         """A poster that gave up shows the drama's title instead of a hole."""
         self.grid.set_failed(drama_id)
         self.search_grid.set_failed(drama_id)
+        self.rank_list.set_failed(drama_id)
+
+    # ------------------------------------------------------------------ events
+    def showEvent(self, event):
+        """首次真正显示后才碰 DWM：winId() 在这之前可能还没建好窗口句柄。"""
+        super().showEvent(event)
+        if not self._titlebar_applied:
+            self._titlebar_applied = True
+            ui.apply_win11_titlebar(self)
 
     # ------------------------------------------------------------------ close
     def closeEvent(self, event):

@@ -6,8 +6,10 @@
 guoRole=rankBadge QSS 统一处理）+ 右侧剧名 / 热度指标」。
 
 对外 API 不变：无参构造、set_rows/append_rows/count、dramaActivated；
-新增可选 `set_cover_loader(covers, request)` + `set_pixmap/set_failed`
-接线封面（main.py 暂未接，行为与旧版一致，只是多了缩略图位）。
+封面走 `set_cover_loader(covers, request)` 接线：行创建时把缺封面的 drama
+交给 request（main.py 的 _request_covers），封面到位后由 main.py 的
+_on_cover/_on_cover_failed 回调 `set_pixmap/set_failed` 上色——回包侧
+漏接就是 Windows 真机「榜单黑图」的根因（问题 D，2dee813 只接了请求侧）。
 """
 from __future__ import annotations
 
