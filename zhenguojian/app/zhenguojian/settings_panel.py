@@ -9,12 +9,14 @@
 core 解析顺序：构造参数 core → 模块级 bind_core → 沿 parent 链探测
 属性 ``_core`` / ``core``（需具备 list_sources / set_source_enabled /
 sorani_account 任一；T1 站源账号行只依赖 sorani_account）。
-全部环节 hasattr/try 保护，F1（core_client.py 并行新增
-list_sources/set_source_enabled）未就绪时自动走内置回退，不抛错。
+全部环节 hasattr/try 保护；core 不可用时列表退化为内置 FALLBACK_SOURCES
+（纯展示兜底，不是暂存——站源开关唯一落点是 core.set_source_enabled，
+QSettings sources/enabled 暂存键已随 F1 就绪退役）。
 
 信号
 ----
-    sourceToggled(str, bool)   站源 slug、新状态（无论是否同步进 core 都发）
+    sourceToggled(str, bool)   站源 slug、新状态（同步进本地核心成功后才发；
+                               失败时只在行内红字提示，不发信号、不落任何暂存）
     speedChanged(float)        倍速档位变更
     qualityChanged(str)        清晰度 slug 变更
     danmakuChanged(bool)       弹幕开关变更
@@ -24,7 +26,6 @@ list_sources/set_source_enabled）未就绪时自动走内置回退，不抛错�
 无任何硬编码色值；开关与行控件的 normal/hover/pressed/disabled 四态齐备。
 """
 
-import json
 import os
 
 from PyQt5.QtCore import QEvent, QTimer, Qt, pyqtSignal
@@ -54,11 +55,6 @@ SPEED_CHOICES = tuple(getattr(_player, "SPEED_CHOICES",
 QUALITY_CHOICES = tuple(getattr(_player, "QUALITY_CHOICES",
                                 (("auto", "自动"), ("1080p", "1080P"),
                                  ("720p", "720P"), ("540p", "540P"))))
-# 站源开关暂存键（JSON dict {slug: bool}）。
-# TODO(S1/F1)：待 F1 行协议就绪（core_client.list_sources /
-# set_source_enabled 落地）后，本键收敛到 source_prefs.json，由 core 统一
-# 持久化；面板届时只走 core，不再读写此键。
-SOURCES_STAGED_KEY = "sources/enabled"
 
 try:
     from . import __version__ as APP_VERSION
@@ -231,6 +227,14 @@ class _SourceRow(QWidget):
         self.name = QLabel(info["name"])
         self.name.setProperty("guoRole", "sourceName")
         lay.addWidget(self.name)
+
+        # 同步失败行内提示（红字，与行样式同一 guoRole 段体系）：默认隐藏，
+        # reject_toggle 填文案显示，clear_error/下次成功同步后收起。
+        self.error = QLabel("")
+        self.error.setProperty("guoRole", "rowError")
+        self.error.setVisible(False)
+        lay.addWidget(self.error)
+
         lay.addStretch(1)
 
         self.chip = QLabel()
@@ -296,6 +300,25 @@ class _SourceRow(QWidget):
 
     def _emit(self, checked):
         self.toggled.emit(self.slug, bool(checked))
+
+    def reject_toggle(self, message):
+        """core 同步失败：回滚开关（不发信号）并在行内显示红字。"""
+        self.switch.blockSignals(True)
+        self.switch.setChecked(not self.switch.isChecked())
+        self.switch.blockSignals(False)
+        self.switch.refresh_state()
+        self._show_error(message)
+
+    def clear_error(self):
+        self._show_error("")
+
+    def _show_error(self, message):
+        text = str(message or "").strip()
+        # 行内只留短句，完整原因进 tooltip；宽度靠 stretch 自然收缩
+        short = text if len(text) <= 40 else text[:39] + "…"
+        self.error.setText(short)
+        self.error.setToolTip(text)
+        self.error.setVisible(bool(text))
 
 
 class _SoraniAccountRow(QWidget):
@@ -388,14 +411,14 @@ class SettingsPanel(QWidget):
     _QSS_TOKENS = ("guo_accent", "guo_accent_hover", "guo_accent_pressed",
                    "guo_accent_soft", "guo_border", "guo_chip_bg",
                    "guo_chip_hover", "guo_chip_pressed", "guo_warning",
-                   "guo_muted", "guo_text", "surface2", "surface3",
-                   "disabled_text", "disabled_border")
+                   "guo_muted", "guo_text", "guo_danger", "surface2",
+                   "surface3", "disabled_text", "disabled_border")
 
     def __init__(self, core=None, parent=None):
         super().__init__(parent)
         self._explicit_core = core
         self._core = None
-        self._sources_mode = "staged"      # core | staged
+        self._sources_mode = "fallback"    # core | fallback
         self._rows = {}                    # slug -> _SourceRow
         self._qss_sig = None
         self._sorani_row = None            # 站源账号行（T1）
@@ -456,6 +479,9 @@ class SettingsPanel(QWidget):
             "QLabel[guoRole=\"panelTitle\"] { font-size: 16px; font-weight: 600;"
             "  color: %(guo_text)s; }"
             "QLineEdit[guoRole=\"pathBox\"]:read-only { color: %(guo_muted)s; }"
+            # 站源行同步失败红字提示（F1 起失败不再落 QSettings 暂存，只行内提示）
+            "QLabel[guoRole=\"rowError\"] { color: %(guo_danger)s;"
+            "  font-size: 12px; background: transparent; }"
         ) % ui.DESIGN
         self.setStyleSheet(qss)
         self._qss_sig = self._token_sig()
@@ -574,23 +600,6 @@ class SettingsPanel(QWidget):
             })
         return rows
 
-    def _staged_overrides(self):
-        raw = _qsettings().value(SOURCES_STAGED_KEY, "") or ""
-        try:
-            data = json.loads(raw) if raw else {}
-        except (TypeError, ValueError):
-            data = {}
-        return data if isinstance(data, dict) else {}
-
-    def _write_staged(self, mapping):
-        s = _qsettings()
-        if mapping:
-            s.setValue(SOURCES_STAGED_KEY,
-                       json.dumps(mapping, ensure_ascii=False, sort_keys=True))
-        else:
-            s.remove(SOURCES_STAGED_KEY)
-        s.sync()   # 立即落盘：验收要求重启后 prefs 持久
-
     def _populate_sources(self):
         core = self._resolve_core()
         self._core = core
@@ -607,15 +616,13 @@ class SettingsPanel(QWidget):
             if rows:
                 self._sources_mode = "core"
         if not rows:
-            self._sources_mode = "staged"
-            staged = self._staged_overrides()
+            # 纯展示兜底：core 完全不可用（断链）时仍列出 14 行内置源表，
+            # 开关按 implemented 置默认态；不做任何暂存。
+            self._sources_mode = "fallback"
             rows = []
             for info in FALLBACK_SOURCES:
                 row = dict(info)
-                if row["implemented"]:
-                    row["enabled"] = bool(staged.get(row["slug"], True))
-                else:
-                    row["enabled"] = False
+                row["enabled"] = bool(row["implemented"])
                 rows.append(row)
 
         # 清旧行后重建
@@ -636,8 +643,8 @@ class SettingsPanel(QWidget):
         else:
             self._sources_hint.setText(
                 failure +
-                "数据来源：内置源表回退（本地核心未连接）；"
-                "开关先记在本地，连接核心后自动同步。")
+                "数据来源：内置源表回退（本地核心未连接，仅供查看）；"
+                "此状态下的开关不会保存，切换将在行内提示失败。")
 
         self._mount_sorani_row()
 
@@ -705,33 +712,43 @@ class SettingsPanel(QWidget):
         self.make_sorani_dialog().exec_()
 
     def _on_source_toggled(self, slug, checked):
-        synced = False
-        err = ""
+        """开关唯一落点：core.set_source_enabled（F1 → Go 侧 source_prefs.json）。
+
+        失败只回滚行内开关并红字提示——不写 QSettings 暂存、不发信号；
+        成功才 clear_error + 更新提示 + 发 sourceToggled。"""
+        row = self._rows.get(slug)
         core = self._core
+        err = "本地核心未连接，开关不会保存"
         if core is not None and callable(getattr(core, "set_source_enabled", None)):
             try:
-                # TODO(S1/F1)：set_source_enabled 必须“快写本地 prefs、不阻塞
-                # GUI”（同步 RPC 走 180s 超时不可接受）。就绪后本面板切换即
-                # 持久化到 source_prefs.json，QSettings 暂存键退役。
-                core.set_source_enabled(slug, bool(checked))
-                synced = True
+                result = core.set_source_enabled(slug, bool(checked))
             except Exception as exc:
                 err = str(getattr(exc, "message", None) or exc)
-        staged = self._staged_overrides()
-        if synced:
-            if slug in staged:
-                staged.pop(slug, None)
-                self._write_staged(staged)
-            self._sources_hint.setText("已同步到本地核心：%s → %s"
-                                       % (slug, "开" if checked else "关"))
-        else:
-            # 本地核心不可用：意图先落 QSettings（JSON dict），重启不丢。
-            staged[slug] = bool(checked)
-            self._write_staged(staged)
-            tail = ("（核心调用失败：%s）" % err) if err else ""
-            self._sources_hint.setText("已暂存本地：%s → %s%s"
-                                       % (slug, "开" if checked else "关", tail))
+            else:
+                err = self._call_error(result)
+        if err:
+            if row is not None:
+                row.reject_toggle(err)
+            return
+        if row is not None:
+            row.clear_error()
+        self._sources_hint.setText("已同步到本地核心：%s → %s"
+                                   % (slug, "开" if checked else "关"))
         self.sourceToggled.emit(slug, bool(checked))
+
+    @staticmethod
+    def _call_error(result):
+        """core 行协议的返回值失败形态：信封 error 字段或 ok=False
+        （异常形态由调用方 except 处理）。返回错误文本，空串=成功。"""
+        if isinstance(result, dict):
+            error = result.get("error")
+            if error:
+                if isinstance(error, dict):
+                    error = error.get("message") or str(error)
+                return str(error)
+            if result.get("ok") is False:
+                return str(result.get("message") or "核心未确认本次修改")
+        return ""
 
     # ------------------------------------------------------------ ② 播放默认
     def _build_playback_section(self):
@@ -949,15 +966,14 @@ class SettingsPanel(QWidget):
         if core_version:
             self._about_core.setText(str(core_version))
         else:
-            self._about_core.setText("待 F1 接入后显示（当前：本地核心未连接）")
+            self._about_core.setText("本地核心未连接")
         try:
             self._about_data.setText(tools.data_dir())
         except Exception:  # pragma: no cover
             self._about_data.setText("")
         self._about_store.setText(
-            "播放默认 → QSettings player/*；站源暂存 → QSettings %s（待 F1 行协议"
-            "就绪后收敛到 source_prefs.json）；成品库 → app-settings.json libraryRoot。"
-            % SOURCES_STAGED_KEY)
+            "播放默认 → QSettings player/*；站源开关 → 本地核心 source_prefs.json"
+            "（面板不落 QSettings）；成品库 → app-settings.json libraryRoot。")
 
 
 __all__ = ["SettingsPanel", "bind_core", "FALLBACK_SOURCES"]

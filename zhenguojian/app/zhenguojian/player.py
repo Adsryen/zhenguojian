@@ -35,6 +35,10 @@ CONTROLS_HIDE_DELAY = 5000
 # P1b：鼠标离开画面、也不在悬停控制条上这么久，控制条自动收起
 OVERLAY_HIDE_DELAY = 2000
 
+# P1e：快捷键说明浮层无操作自动收起（毫秒）。刻意设短，避免遮罩长时间挡住
+# 原生视频交互（Linux 下 mpv 是 X 子窗，鼠标未必经过 Qt 遮罩）。
+HOTKEY_HELP_AUTO_HIDE_MS = 8000
+
 # P1a：右侧选集停靠栏的展开宽度 / 折叠后细条宽度
 DOCK_WIDTH = 300
 DOCK_RAIL_WIDTH = 36
@@ -816,11 +820,25 @@ class ControlOverlay(QWidget):
         self.volume_slider.setToolTip("音量（↑↓ 每档 5）")
         self.volume_slider.valueChanged.connect(pane.set_volume)
 
+        # P1e：快捷键说明入口。先用 ⌨（U+2328），本机 fc-list charset=2328
+        # 为空、截图渲染成豆腐块（YaHei/DejaVu 均缺字形），按 EpisodeDock
+        # 折叠按钮的先例换 ASCII「?」——兼作快捷键提示。
+        self.hotkey_button = QPushButton("?")
+        self.hotkey_button.setProperty("guoRole", "ctrlBtn")
+        self.hotkey_button.setFixedSize(28, 26)
+        # ctrlBtn 全局 padding 会把 28px 宽里的单字符挤掉（同折叠按钮先例：
+        # 只覆内边距，不碰颜色），字号随主题默认。
+        self.hotkey_button.setStyleSheet("padding: 2px 4px;")
+        self.hotkey_button.setToolTip("快捷键说明（? 或 Esc）")
+        self.hotkey_button.setCursor(Qt.PointingHandCursor)
+        self.hotkey_button.clicked.connect(pane.toggle_hotkey_help)
+
         row.addWidget(self.quality_button)
         row.addWidget(self.speed_button)
         row.addStretch(1)
         row.addWidget(self.mute_button)
         row.addWidget(self.volume_slider)
+        row.addWidget(self.hotkey_button)
         self.hide()
 
     def mouseMoveEvent(self, event):
@@ -838,6 +856,160 @@ class ControlOverlay(QWidget):
         width = max(10, stage.width() - 2 * margin)
         self.setGeometry(margin, max(0, stage.height() - height - margin),
                          width, height)
+
+
+class HotkeyHelpOverlay(QWidget):
+    """P1e：快捷键说明浮层（悬停控制条 ⌨ 按钮或 ? 键唤出）。
+
+    整画面半透明遮罩（guo_player_scrim）+ 居中卡片（surface2 底、border
+    描边、guo_radius 圆角，全部 ui.py DESIGN token，每次 show 重建局部 QSS
+    跟随主题）。点击遮罩任意处关闭；?/Esc 再按一次关闭；8 秒无操作自动收起
+    ——刻意不常驻，免得遮罩挡住原生视频交互。
+
+    Esc/? 用 WidgetWithChildrenShortcut 注册在本浮层上：浮层持有焦点时它俩
+    优先于 main.py 的窗口级 Esc（退出全屏）与 player 的 ↑↓F M，关帮助不会
+    顺带退出全屏；浮层收起后焦点离开，快捷键随之失效。
+    """
+
+    ROWS = (
+        ("空格", "播放 / 暂停"),
+        ("← / →", "快退 / 快进 5 秒"),
+        ("↑ / ↓", "音量 ±5"),
+        ("F", "进入 / 退出全屏"),
+        ("M", "静音 / 取消静音"),
+        ("? / Esc", "打开 / 关闭本帮助"),
+    )
+
+    def __init__(self, pane, parent=None):
+        super().__init__(parent)
+        self._pane = pane
+        self.setObjectName("hotkeyHelpOverlay")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = QFrame(self)
+        card.setObjectName("hotkeyHelpCard")
+        outer.addWidget(card, 0, Qt.AlignCenter)
+
+        body = QVBoxLayout(card)
+        body.setContentsMargins(24, 16, 24, 12)
+        body.setSpacing(8)
+
+        title = QLabel("快捷键")
+        title.setObjectName("hotkeyHelpTitle")
+        title.setAlignment(Qt.AlignCenter)
+        body.addWidget(title)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(6)
+        body.addLayout(grid)
+        for index, (keys, desc) in enumerate(self.ROWS):
+            key_label = QLabel(keys)
+            key_label.setObjectName("hotkeyHelpKey")
+            key_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            desc_label = QLabel(desc)
+            desc_label.setObjectName("hotkeyHelpDesc")
+            desc_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+            grid.addWidget(key_label, index, 0)
+            grid.addWidget(desc_label, index, 1)
+
+        tip = QLabel("点击任意处关闭 · 8 秒后自动收起")
+        tip.setObjectName("hotkeyHelpTip")
+        tip.setAlignment(Qt.AlignCenter)
+        body.addWidget(tip)
+
+        self._auto_hide = QTimer(self)
+        self._auto_hide.setInterval(HOTKEY_HELP_AUTO_HIDE_MS)
+        self._auto_hide.setSingleShot(True)
+        self._auto_hide.timeout.connect(self.hide)
+
+        self._close_shortcuts = []
+        for key in (Qt.Key_Escape, Qt.Key_Question):
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.hide)
+            self._close_shortcuts.append(shortcut)
+        self._silenced_shortcuts = []
+
+    _CONFLICT_SEQUENCES = (QKeySequence(Qt.Key_Escape), QKeySequence(Qt.Key_Question))
+
+    def _silence_conflicting_shortcuts(self):
+        # Qt5 快捷键图里「同键序列 + 不同上下文」会判 ambiguous、两边都不触发
+        # （offscreen 实测：窗口级 Esc/浮层 WWC Esc 同键时双双被吞）。浮层可见
+        # 期间把同窗口其他 Esc/? 快捷键临时停用，让浮层成为唯一响应者；
+        # 收起时在 _unsilence 原样恢复。
+        mine = set(self._close_shortcuts)
+        window = self.window()
+        for shortcut in window.findChildren(QShortcut):
+            if shortcut in mine or not shortcut.isEnabled():
+                continue
+            if shortcut.key() in self._CONFLICT_SEQUENCES:
+                self._silenced_shortcuts.append(shortcut)
+                shortcut.setEnabled(False)
+
+    def _unsilence_conflicting_shortcuts(self):
+        for shortcut in self._silenced_shortcuts:
+            shortcut.setEnabled(True)
+        self._silenced_shortcuts = []
+
+    def sync_geometry(self):
+        """铺满 stage（画面区）整块遮罩；stage 尺寸变化时重铺。"""
+        stage = self.parentWidget()
+        if stage is None:
+            return
+        self.setGeometry(0, 0, max(1, stage.width()), max(1, stage.height()))
+
+    def _apply_qss(self):
+        self.setStyleSheet((
+            "QWidget#hotkeyHelpOverlay { background: %(guo_player_scrim)s; }"
+            "QFrame#hotkeyHelpCard { background: %(surface2)s;"
+            "  border: 1px solid %(border)s; border-radius: %(guo_radius)s; }"
+            "QLabel#hotkeyHelpTitle { color: %(text)s; font-size: 15px;"
+            "  font-weight: 600; }"
+            "QLabel#hotkeyHelpKey { color: %(text)s; font-size: 13px;"
+            "  font-weight: 600; }"
+            "QLabel#hotkeyHelpDesc { color: %(muted)s; font-size: 13px; }"
+            "QLabel#hotkeyHelpTip { color: %(muted2)s; font-size: 12px; }"
+        ) % ui.DESIGN)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._apply_qss()
+        self._silence_conflicting_shortcuts()
+        self._auto_hide.start()
+        self.setFocus()
+
+    def hideEvent(self, event):
+        self._auto_hide.stop()
+        self._unsilence_conflicting_shortcuts()
+        super().hideEvent(event)
+
+    def mousePressEvent(self, event):
+        # 遮罩任意位置（含卡片空白）左键都收起：帮助卡内没有可交互控件
+        if event.button() == Qt.LeftButton:
+            self.hide()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        # 浮层持焦时 Esc/? 归本帮助。上面注册的 WidgetWithChildrenShortcut 在
+        # 多数平台会先于窗口级快捷键命中；但 Qt5 的快捷键图在「同键序列 + 不同
+        # 上下文」（此处与本窗口的 WindowShortcut ?/Esc 并存）时会判定 ambiguous
+        # 把两边一起压掉（offscreen 实测：两个都不触发）。事件没被快捷键吃掉时
+        # 会正常落到这里，故兜底在按键处理里收起，行为与快捷键一致。
+        if event.key() in (Qt.Key_Escape, Qt.Key_Question):
+            self.hide()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        # 鼠标还在动就续期，别在用户阅读时突然收掉
+        self._auto_hide.start()
+        super().mouseMoveEvent(event)
 
 
 class EpisodeDock(QWidget):
@@ -1125,6 +1297,10 @@ class PlayerPane(QWidget):
         self._overlay_timer.setSingleShot(True)
         self._overlay_timer.timeout.connect(self._hide_overlay)
 
+        # P1e：快捷键说明浮层（同样挂在 stage 上，晚于覆盖条创建→层级更高）
+        self.hotkeys_overlay = HotkeyHelpOverlay(self, self.stage)
+        self.hotkeys_overlay.hide()
+
         # P1c/P1d：倍速扩成常用档；三枚偏好键在构造期恢复（只读盘不写盘）。
         self.set_speeds = list(SPEED_CHOICES)
         self._speed_index = self._nearest_speed_index(self._prefs["speed"])
@@ -1138,13 +1314,15 @@ class PlayerPane(QWidget):
         self._sync_quality_ui()
         self._sync_volume_ui()
 
-        # P1c：只新增 main.py 未占用的按键——空格/←/→ 已由主窗口绑定走
-        # toggle_pause/seek_relative，这里再绑会双重触发；↑↓/F/M 是空位。
+        # P1c/P1d/P1e：只新增 main.py 未占用的按键——空格/←/→ 已由主窗口绑定
+        # 走 toggle_pause/seek_relative，这里再绑会双重触发；↑↓/F/M/? 是空位
+        # （? 即 Shift+/，main.py 全仓 grep 无绑定）。
         self._shortcuts = []
         for key, handler in ((Qt.Key_Up, lambda: self.change_volume(5)),
                              (Qt.Key_Down, lambda: self.change_volume(-5)),
                              (Qt.Key_F, self.toggle_fullscreen),
-                             (Qt.Key_M, self.toggle_mute)):
+                             (Qt.Key_M, self.toggle_mute),
+                             (Qt.Key_Question, self.toggle_hotkey_help)):
             shortcut = QShortcut(QKeySequence(key), self)
             shortcut.setContext(Qt.WindowShortcut)
             shortcut.activated.connect(lambda h=handler: self._run_player_shortcut(h))
@@ -1618,6 +1796,8 @@ class PlayerPane(QWidget):
             elif etype == QEvent.Resize:
                 if self.overlay.isVisible():
                     self.overlay.sync_geometry()
+                if self.hotkeys_overlay.isVisible():
+                    self.hotkeys_overlay.sync_geometry()
         return super().eventFilter(watched, event)
 
     def hover_activity(self):
@@ -1848,6 +2028,23 @@ class PlayerPane(QWidget):
                               QAbstractSpinBox, QAbstractSlider)):
             return False
         return True
+
+    # ----------------------------------------------------------------- hotkey help
+    def show_hotkey_help(self):
+        """打开快捷键说明浮层：铺满画面区、置顶并夺焦（Esc/? 优先被浮层吸收，
+        不会顺带触发 main.py 的窗口级 Esc 退全屏）。"""
+        self.hotkeys_overlay.sync_geometry()
+        self.hotkeys_overlay.show()
+        self.hotkeys_overlay.raise_()
+
+    def toggle_hotkey_help(self):
+        """⌨ 按钮与 ? 快捷键共用入口；输入控件（弹幕框等）聚焦时不弹出。"""
+        if self.hotkeys_overlay.isVisible():
+            self.hotkeys_overlay.hide()
+            return
+        if not self._player_shortcuts_allowed():
+            return
+        self.show_hotkey_help()
 
     # ----------------------------------------------------------------- danmaku
     def danmaku_enabled(self):
