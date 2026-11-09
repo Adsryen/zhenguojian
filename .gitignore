@@ -19,3 +19,4 @@ client-v2/build/bin/
 # v2 desktop shell build outputs
 client-v2/*.exe
 client-v2/build/bin/
+client-v2/build/*.json

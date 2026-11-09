@@ -1,0 +1,67 @@
+# 真果鉴 v2（Wails 壳）Windows 构建：纯 go build 管线（不依赖 wails CLI，
+# 本机 v2.17 CLI 编 v2.10 库工程有 x/tools 兼容坑），discovery 通道走
+# -tags v2overlay + -overlay 注入（对齐 v1 sidecar 构建的 overlay 机制）。
+name: build-v2
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v2.*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Frontend
+        working-directory: client-v2/frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Overlay + build (v2overlay)
+        working-directory: client-v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p "$env:RUNNER_TEMP/ov"
+          python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
+          go vet -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
+          go build -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
+
+      - name: Build info
+        working-directory: client-v2
+        run: |
+          $sha = git rev-parse HEAD
+          $iso = (git log -1 --format=%cI).Trim()
+          $mod = if ((git status --porcelain | Measure-Object -Line).Lines -gt 0) { "true" } else { "false" }
+          @{ revision = $sha; commitTime = $iso; modified = ($mod -eq "true") } | ConvertTo-Json -Compressed | Set-Content -Encoding utf8 build/bin/build-info.json
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'push'
+        with:
+          name: v2-windows-x64
+          path: client-v2/build/bin/client-v2.exe
+
+      - name: Release (tag v2.*)
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            client-v2/build/bin/client-v2.exe
+            client-v2/build/bin/build-info.json
