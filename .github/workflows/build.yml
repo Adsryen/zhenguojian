@@ -155,6 +155,7 @@ jobs:
         run: |
           python -m PyInstaller --noconfirm --clean --windowed `
             --name "真果鉴" --onedir --contents-directory . `
+            --icon "zhenguojian\app.ico" `
             --paths . --distpath ..\..\dist-app --workpath ..\..\build-work --specpath ..\..\build-work `
             run.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
