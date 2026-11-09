@@ -20,6 +20,19 @@ export interface Drama {
   adult?: boolean
 }
 
+/** 引擎 chapters[] 单集形状（红果实测：无逐集 vip 字段，drama.vip 整剧标志优先；
+   兼容 v1 widgets._episode_number / detail_episodes._chapter_vip 读过的字段名） */
+export interface Chapter {
+  currentEpisode?: number | string
+  title?: string
+  duration?: number | string
+  /** 逐集 VIP 兜底字段（部分源用） */
+  vip?: boolean | number | string
+  type?: string
+  is_vip?: boolean | number | string
+  [key: string]: unknown
+}
+
 export interface CatalogResult {
   items: Drama[]
   hasMore: boolean
@@ -67,6 +80,69 @@ export interface BrowseFiltersResult {
   groups: FilterGroup[]
 }
 
+/** App.Detail(dramaJSON) 返回：drama 字段并集 + chapters[] */
+export interface DetailResult {
+  drama?: Drama
+  chapters?: Chapter[]
+  warning?: string
+  [key: string]: unknown
+}
+
+/** App.Resolve(dramaJSON, chapterJSON, index, quality) 返回的播放/下载 plan（v1 平铺字段） */
+export interface ResolvePlan {
+  url?: string
+  headers?: Record<string, string>
+  quality?: number | string
+  qualities?: { quality: number; name?: string }[]
+  session?: string
+  routeIndex?: number
+  routeCount?: number
+  [key: string]: unknown
+}
+
+/** 上新日历行（v1 calendar_panel._calendar_drama 的输入形状） */
+export interface CalendarItem {
+  date?: string
+  online?: boolean
+  hint?: string
+  drama?: Drama
+  [key: string]: unknown
+}
+
+/** 弹幕条目（core danmaku/danmakuAll 应答 items[] 形状，同 internal/danmaku.Item） */
+export interface DanmakuItem {
+  id: string
+  timeMs: number
+  text: string
+  color?: string
+  mode?: number
+  durationMs?: number
+}
+
+/** App.DanmakuWindow/DanmakuAll(session) 返回 */
+export interface DanmakuWindowResult {
+  items: DanmakuItem[]
+  startMs?: number
+  nextMs?: number
+  total?: number
+  windows?: Record<string, number>
+}
+
+/** App.State() 快照（internal/player.Service.State） */
+export interface PlayerState {
+  running: boolean
+  opened: boolean
+  danmakuOn: boolean
+  ep: number
+  title: string
+  position?: number
+  duration?: number
+  paused?: boolean
+  speed?: number
+  volume?: number
+  eof?: boolean
+}
+
 /** 适配层统一接口：wails 实现与 mock 实现同签名 */
 export interface NativeApi {
   ping(): Promise<string>
@@ -74,8 +150,23 @@ export interface NativeApi {
   listSources(): Promise<SourceListItem[]>
   setSourceEnabled(slug: string, enabled: boolean): Promise<void>
   catalog(params: CatalogParams): Promise<CatalogResult>
-  detail(drama: Drama): Promise<Record<string, any>>
+  detail(drama: Drama): Promise<DetailResult>
   browseFilters(source: string): Promise<BrowseFiltersResult>
+  resolve(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<ResolvePlan>
+  // ── V2-3b 播放内核桥（internal/player.Service；事件走 wails EventsOn，见 stores/player.ts）──
+  openVideo(videoJSON: string): Promise<void>
+  pauseVideo(): Promise<void>
+  resumeVideo(): Promise<void>
+  seekVideo(positionMs: number): Promise<void>
+  setSpeed(v: number): Promise<void>
+  setVolume(v: number): Promise<void>
+  closeVideo(): Promise<void>
+  playerState(): Promise<PlayerState>
+  setDanmaku(on: boolean): Promise<void>
+  reportViewport(w: number, h: number): Promise<void>
+  danmakuAll(session: string): Promise<DanmakuWindowResult>
+  // TODO V2-3 接线（依赖请求已发主代理）：Follow/Unfollow/FollowList/HistoryList（watchstore 绑定）
+  // TODO V2-4 接线：Reservations(calendar date 页) —— 缺绑定时 ReserveView 走 fixtures
 }
 
 /** 带协议 code 的错误（discovery_unavailable / source_blocked 等） */

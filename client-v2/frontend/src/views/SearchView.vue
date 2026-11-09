@@ -2,13 +2,16 @@
 /* Search —— 搜索：输入 + 按钮 + 最近搜索(localStorage 每源≤10) + 结果 PosterGrid
    走 catalog source=当前源 query=… lane=search（同 lane 新搜索自动取消旧搜索，v1 语义）。 */
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/services/api'
 import type { Drama } from '@/services/types'
+import { detailRoute } from '@/services/dramaRef'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 
 const store = useAppStore()
+const router = useRouter()
 
 const query = ref('')
 const active = ref('')
@@ -151,7 +154,7 @@ onMounted(async () => {
     :loading="loading"
     :loading-more="loadingMore"
     @load-more="loadMore"
-    @select="() => {}"
+    @select="(d) => router.push(detailRoute(d))"
   />
 </template>
 

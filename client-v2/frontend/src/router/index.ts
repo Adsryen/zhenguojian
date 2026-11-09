@@ -16,6 +16,27 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '搜索' }
   },
   {
+    // V2-2：详情页。query.d = 紧凑 Drama JSON（Detail 绑定入参），兜底 ?source=&title=
+    path: '/detail/:id',
+    name: 'detail',
+    component: () => import('@/views/DetailView.vue'),
+    meta: { title: '详情' }
+  },
+  {
+    // V2-3b：播放页本体已接入（参数 d/ep/pos/c 沿用 dramaRef.playerRoute 约定）
+    path: '/player',
+    name: 'player',
+    component: () => import('@/views/PlayerView.vue'),
+    meta: { title: '播放页', phase: 'V2-3b' }
+  },
+  {
+    // V2-2：新剧预约 + 追更预约（?tab=follow）
+    path: '/reserve',
+    name: 'reserve',
+    component: () => import('@/views/ReserveView.vue'),
+    meta: { title: '预约' }
+  },
+  {
     path: '/library',
     name: 'library',
     component: () => import('@/views/PlaceholderView.vue'),
@@ -36,8 +57,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/history',
     name: 'history',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { title: '观看历史', phase: 'V2-3' }
+    component: () => import('@/views/HistoryView.vue'),
+    meta: { title: '观看历史' }
   },
   {
     path: '/downloads',
@@ -48,7 +69,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/settings',
     name: 'settings',
-    component: () => import('@/views/PlaceholderView.vue'),
+    component: () => import('@/views/SettingsView.vue'),
     meta: { title: '设置', phase: 'V2-4' }
   }
 ]

@@ -6,11 +6,16 @@ import {
   type BrowseFiltersResult,
   type CatalogParams,
   type CatalogResult,
+  type Chapter,
+  type DetailResult,
   type Drama,
   type NativeApi,
+  type PlayerState,
+  type DanmakuWindowResult,
+  type ResolvePlan,
   type SourceListItem
 } from './types'
-import { MOCK_SOURCES, mockCatalog } from './fixtures'
+import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockResolvePlan } from './fixtures'
 
 const isMock = import.meta.env.VITE_MOCK === '1'
 
@@ -68,9 +73,59 @@ const realApi: NativeApi = {
       p.force ?? false
     ),
   // Detail 绑定是 dramaJSON 位置参数
-  detail: (drama: Drama) => callGo<Record<string, any>>('Detail', JSON.stringify(drama)),
+  detail: (drama: Drama) => callGo<DetailResult>('Detail', JSON.stringify(drama)),
+  resolve: (drama: Drama, chapter: Chapter, index: number, quality: number) =>
+    callGo<ResolvePlan>('Resolve', JSON.stringify(drama), JSON.stringify(chapter), index, quality),
   // BrowseFilters 绑定是 (source, category) 位置参数
-  browseFilters: (source: string) => callGo<BrowseFiltersResult>('BrowseFilters', source, '')
+  browseFilters: (source: string) => callGo<BrowseFiltersResult>('BrowseFilters', source, ''),
+  // ── V2-3b 播放内核：App.{Open,Pause,Resume,Seek,SetSpeed,SetVolume,Close,State,SetDanmaku,ReportViewport,DanmakuAll} ──
+  openVideo: async (videoJSON: string) => {
+    await callGo('Open', videoJSON)
+  },
+  pauseVideo: async () => { await callGo('Pause') },
+  resumeVideo: async () => { await callGo('Resume') },
+  seekVideo: async (positionMs: number) => { await callGo('Seek', positionMs) },
+  setSpeed: async (v: number) => { await callGo('SetSpeed', v) },
+  setVolume: async (v: number) => { await callGo('SetVolume', v) },
+  closeVideo: async () => { await callGo('Close') },
+  playerState: () => callGo<PlayerState>('State'),
+  setDanmaku: async (on: boolean) => { await callGo('SetDanmaku', on) },
+  reportViewport: async (w: number, h: number) => { await callGo('ReportViewport', w, h) },
+  danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session)
+}
+
+/* mock 播放内核：500ms 模拟 tick（与真实事件源同频），stores/player.ts 轮询消费 */
+const mockPlayer: PlayerState & { position: number; duration: number; timer?: ReturnType<typeof setInterval>; lastTs: number } = {
+  running: false,
+  opened: false,
+  danmakuOn: true,
+  ep: 0,
+  title: '',
+  position: 0,
+  duration: 180,
+  paused: false,
+  speed: 1,
+  volume: 100,
+  eof: false,
+  lastTs: 0
+}
+
+function mockSimStart() {
+  if (mockPlayer.timer) clearInterval(mockPlayer.timer)
+  mockPlayer.lastTs = Date.now()
+  mockPlayer.timer = setInterval(() => {
+    if (!mockPlayer.opened || mockPlayer.paused || mockPlayer.eof) {
+      mockPlayer.lastTs = Date.now()
+      return
+    }
+    const now = Date.now()
+    mockPlayer.position = Math.min(mockPlayer.duration, mockPlayer.position + ((now - mockPlayer.lastTs) / 1000) * (mockPlayer.speed ?? 1))
+    mockPlayer.lastTs = now
+    if (mockPlayer.position >= mockPlayer.duration) {
+      mockPlayer.eof = true
+      mockPlayer.paused = true
+    }
+  }, 500)
 }
 
 const mockApi: NativeApi = {
@@ -89,11 +144,66 @@ const mockApi: NativeApi = {
     await delay(300 + Math.random() * 350)
     return mockCatalog(p.source, p.query ?? '', p.page ?? 1)
   },
-  detail: async (drama: Drama) => ({ id: drama.id, chapters: [], mock: true }),
+  detail: async (drama: Drama) => {
+    await delay(250 + Math.random() * 300)
+    return mockDetail(drama)
+  },
+  resolve: async (drama: Drama, chapter: Chapter, index: number) => {
+    await delay(150)
+    return mockResolvePlan(drama, chapter, index)
+  },
   browseFilters: async () => {
     await delay(120)
     // 与默认构建（无 overlay）一致：模拟 discovery_unavailable，触发前端兜底 chips
     throw new ApiError('筛选墙通道未启用（mock 与默认构建一致）', 'discovery_unavailable')
+  },
+  openVideo: async (videoJSON: string) => {
+    await delay(150)
+    try {
+      const v = JSON.parse(videoJSON) as { url?: string; title?: string; ep?: number; durationSec?: number }
+      mockPlayer.title = v.title ?? ''
+      mockPlayer.ep = v.ep ?? 0
+      mockPlayer.duration = v.durationSec && v.durationSec > 0 ? v.durationSec : 180
+      mockPlayer.position = 0
+      mockPlayer.eof = false
+      mockPlayer.paused = false
+      mockPlayer.opened = true
+      mockPlayer.running = true
+      mockSimStart()
+    } catch {
+      throw new ApiError('播放参数解析失败 [bad_video]', 'bad_video')
+    }
+  },
+  pauseVideo: async () => { mockPlayer.paused = true },
+  resumeVideo: async () => {
+    mockPlayer.paused = false
+    mockPlayer.eof = false
+    mockPlayer.lastTs = Date.now()
+  },
+  seekVideo: async (positionMs: number) => {
+    mockPlayer.position = Math.max(0, Math.min(mockPlayer.duration, positionMs / 1000))
+    mockPlayer.lastTs = Date.now()
+    if (mockPlayer.position < mockPlayer.duration) mockPlayer.eof = false
+  },
+  setSpeed: async (v: number) => { mockPlayer.speed = Math.max(0.5, Math.min(3, v)) },
+  setVolume: async (v: number) => { mockPlayer.volume = Math.max(0, Math.min(100, v)) },
+  closeVideo: async () => {
+    if (mockPlayer.timer) clearInterval(mockPlayer.timer)
+    mockPlayer.timer = undefined
+    mockPlayer.opened = false
+    mockPlayer.running = false
+    mockPlayer.position = 0
+    mockPlayer.eof = false
+  },
+  playerState: async () => {
+    const { timer: _t, lastTs: _l, ...rest } = mockPlayer
+    return { ...rest } as PlayerState
+  },
+  setDanmaku: async (on: boolean) => { mockPlayer.danmakuOn = on },
+  reportViewport: async () => undefined,
+  danmakuAll: async (session: string) => {
+    await delay(200)
+    return mockDanmakuAll(session)
   }
 }
 

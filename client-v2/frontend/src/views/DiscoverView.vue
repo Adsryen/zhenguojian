@@ -3,9 +3,11 @@
    分类来源：browseFilters(groups[key=category])；默认构建无 overlay → 兜底 hongguo 三分类
    （值取自 guoapp-src core/provider_hongguo_catalog.go hongguoAppGenres）。 */
 import { onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api, MOCK_MODE } from '@/services/api'
 import { ApiError, type Drama } from '@/services/types'
+import { detailRoute } from '@/services/dramaRef'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 
@@ -15,6 +17,7 @@ interface Chip {
 }
 
 const store = useAppStore()
+const router = useRouter()
 
 const items = ref<Drama[]>([])
 const page = ref(0)
@@ -189,7 +192,7 @@ onMounted(async () => {
     :loading="loading"
     :loading-more="loadingMore"
     @load-more="loadMore"
-    @select="(d) => showToast(`《${d.title}》 详情页将在 V2-2 接入`)"
+    @select="(d) => router.push(detailRoute(d))"
   />
 
   <div v-if="toast" class="toast">{{ toast }}</div>
