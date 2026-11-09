@@ -32,8 +32,11 @@ import {
   readFollows,
   readHistory,
   readReservations,
+  readWatched,
   toggleFollow,
-  toggleReservation
+  toggleReservation,
+  toggleWatched,
+  WATCHED_KEY
 } from './local'
 
 const isMock = import.meta.env.VITE_MOCK === '1'
@@ -127,6 +130,10 @@ const realApi: NativeApi = {
     callGo<{ ok: boolean }>('SaveWatch', JSON.stringify(drama), ep, pos, dur, fin),
   removeHistory: (id) => callGo<{ ok: boolean }>('RemoveHistory', id),
   clearHistory: () => callGo<{ ok: boolean }>('ClearHistory'),
+  // ── 看过标记：App.SeenList/ToggleSeen/ImportSeen（bindings_seen.go，值=epoch 秒）──
+  seenList: () => callGo<Record<string, number>>('SeenList'),
+  toggleSeen: (id) => callGo<{ on: boolean }>('ToggleSeen', id),
+  importSeen: (entriesJSON) => callGo<{ added: number }>('ImportSeen', entriesJSON),
   calendar: (date, offset, gender) => callGo<CalendarPayload>('Calendar', date, offset, gender),
   resourceSettings: () => callGo<ResourceSettingsSnapshot>('GetResourceSettings'),
   saveResourceSettings: (patch) => callGo<unknown>('SaveResourceSettings', JSON.stringify(patch)),
@@ -375,6 +382,30 @@ const mockApi: NativeApi = {
   clearHistory: async () => {
     clearHistoryLocal()
     return { ok: true }
+  },
+  // mock：看过标记落 local.ts（mock/降级与真实桥同语义；值归一为 epoch 秒对齐 Go SeenList 契约）
+  seenList: async () => {
+    const out: Record<string, number> = {}
+    for (const [k, v] of Object.entries(readWatched())) out[k] = v > 1e11 ? v / 1000 : v
+    return out
+  },
+  toggleSeen: async (id) => ({ on: toggleWatched(id) }),
+  importSeen: async (entriesJSON) => {
+    let entries: Record<string, number>
+    try {
+      entries = JSON.parse(entriesJSON) as Record<string, number>
+    } catch {
+      return { added: 0 }
+    }
+    const cur = readWatched()
+    let added = 0
+    for (const [k, v] of Object.entries(entries)) {
+      if (!k || Object.prototype.hasOwnProperty.call(cur, k)) continue // 已有 id 不覆盖（Go 真值优先）
+      cur[k] = v
+      added++
+    }
+    if (added) localStorage.setItem(WATCHED_KEY, JSON.stringify(cur))
+    return { added }
   },
   calendar: async (date) => mockCalendarPage(date || ''),
   // ── V2-3 下载与合并 mock（fixtures 有状态模拟，tick 1s；轮询消费见 stores/downloads.ts）──

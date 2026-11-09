@@ -1473,3 +1473,206 @@ func (s *Store) SaveLocalWatch(dramaID, title, path string, position, duration f
 	s.mu.Unlock()
 	s.emitChanged()
 }
+
+// ---------------------------------------------------------------------------
+// 「看过」标记（v2-only 兄弟文件；绑定见 bindings_seen.go；范围 A：自
+// localStorage `${NS}.watched` 迁移的真值源）。
+//
+// 为什么不复用 watch-library.json 既有字段：v1 对「看过」的最近锚点是 follow 行
+// marked（watchstore.py:330-346 → 本文件 MarkWatched），但 marked 带进度同步副作用
+// （read=known/newEpisodes=0/arrived=false）且只存在于有进度的追剧行；v2 详情页
+// 「看过」按钮（local.ts 注释：不改变播放进度；不限已追剧）与其语义不等。
+// 在 follow 行上加新字段同样不行：commit 顶层只写 {follows,history}（v1 save
+// 同），v2 新顶层键会被 v1 回写丢弃；为未追剧的行创建 follow 行会混进 v1 追剧
+// 网格（watch.py 全量渲染不过滤 followed）；poster_wall.py:756 的 drama["watched"]
+// 在 v1 侧是无生产者死键。故真值 = 同目录独立文件 seen-library.json，v1 不读不写，
+// watch-library.json 一字不动（v1 round-trip 兼容天然成立）。
+//
+// 形状 = { "<dramaID>": epoch 秒 }，落盘格式跟 commit 同款 house style
+// （缩进 1 空格、不转义 HTML、无尾换行）。缺文件 = 空标记；文件损坏按空处理
+// （非 v1 兼容资产，不做 .corrupt 备份）。持久化失败如实返回给调用方
+// （前端需要该信号做乐观回滚），与既有 void 变更方法不同。
+// ---------------------------------------------------------------------------
+
+// SeenFileName is the seen-library file inside the data directory.
+const SeenFileName = "seen-library.json"
+
+// seenFile resolves the sibling path from the watch-library file.
+func (s *Store) seenFile() string {
+	return filepath.Join(filepath.Dir(s.file), SeenFileName)
+}
+
+// loadSeenLocked decodes seen-library.json into dramaID→epoch-seconds.
+// Missing/corrupt file → empty map.  Callers must hold s.mu.
+func (s *Store) loadSeenLocked() obj {
+	out := obj{}
+	raw, err := os.ReadFile(s.seenFile())
+	if err != nil || len(bytes.TrimSpace(raw)) == 0 {
+		return out
+	}
+	root := obj{}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	if err := dec.Decode(&root); err != nil {
+		return out
+	}
+	for k, v := range root {
+		out[k] = toFloat(v)
+	}
+	return out
+}
+
+// writeSeenLocked atomically replaces the seen file (tmp+rename in the same
+// directory, mirroring commit; no dirty-retry — the binding layer opens the
+// store fresh per call, disk is the only truth).  Callers must hold s.mu.
+func (s *Store) writeSeenLocked(seen obj) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", " ")
+	if err := enc.Encode(seen); err != nil {
+		return err
+	}
+	payload := bytes.TrimRight(buf.Bytes(), "\n")
+	dir := filepath.Dir(s.file)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".seen-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(payload); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Rename(tmpName, s.seenFile()); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
+}
+
+// setSeenLocked applies one mark transition and persists it.  Returns
+// (resulting state, changed, err): no-op (no write) when the state already
+// matches; on write failure the previous state stays on disk and is
+// returned with the error.  Callers must hold s.mu and fire emitChanged
+// themselves AFTER releasing it — emitChanged re-acquires the lock and
+// sync.Mutex is not reentrant (v1 pattern: unlock-then-emit).
+func (s *Store) setSeenLocked(dramaID string, on bool) (bool, bool, error) {
+	seen := s.loadSeenLocked()
+	_, had := seen[dramaID]
+	if on == had {
+		return had, false, nil
+	}
+	if on {
+		seen[dramaID] = s.now()
+	} else {
+		delete(seen, dramaID)
+	}
+	if err := s.writeSeenLocked(seen); err != nil {
+		return had, false, err
+	}
+	return on, true, nil
+}
+
+// SeenMarks returns every drama-level seen mark (dramaID → epoch seconds).
+func (s *Store) SeenMarks() obj {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.loadSeenLocked()
+}
+
+// IsSeen reports whether dramaID carries a seen mark.
+func (s *Store) IsSeen(dramaID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if dramaID == "" {
+		return false
+	}
+	_, ok := s.loadSeenLocked()[dramaID]
+	return ok
+}
+
+// SetSeen writes (on=true) or clears (on=false) one mark; returns the
+// resulting state, or the persist error with the previous state (the old
+// file stays untouched — callers roll back their optimistic view).
+func (s *Store) SetSeen(dramaID string, on bool) (bool, error) {
+	if dramaID == "" {
+		return false, os.ErrInvalid
+	}
+	s.mu.Lock()
+	state, changed, err := s.setSeenLocked(dramaID, on)
+	s.mu.Unlock()
+	if changed {
+		s.emitChanged()
+	}
+	return state, err
+}
+
+// ToggleSeen flips the mark for dramaID and persists.  Returns new state.
+func (s *Store) ToggleSeen(dramaID string) (bool, error) {
+	if dramaID == "" {
+		return false, os.ErrInvalid
+	}
+	s.mu.Lock()
+	_, had := s.loadSeenLocked()[dramaID]
+	state, changed, err := s.setSeenLocked(dramaID, !had)
+	s.mu.Unlock()
+	if changed {
+		s.emitChanged()
+	}
+	return state, err
+}
+
+// ImportSeenJSON merges a one-off migration payload — a JSON object of
+// dramaID → timestamp (seconds; values > 1e11 are treated as milliseconds,
+// the same tolerance as v1 normTs / services/local.ts).  Existing ids are
+// kept untouched (Go truth wins); returns the number of ids added.
+// Malformed JSON errors out; an empty payload is a no-op.
+func (s *Store) ImportSeenJSON(entriesJSON string) (int, error) {
+	trimmed := strings.TrimSpace(entriesJSON)
+	if trimmed == "" {
+		return 0, nil
+	}
+	root := obj{}
+	dec := json.NewDecoder(strings.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&root); err != nil {
+		return 0, err
+	}
+	s.mu.Lock()
+	seen := s.loadSeenLocked()
+	added := 0
+	for k, v := range root {
+		if k == "" {
+			continue
+		}
+		if _, had := seen[k]; had {
+			continue
+		}
+		f := toFloat(v)
+		if f > 1e11 { // 毫秒载荷 → 秒
+			f /= 1000
+		}
+		seen[k] = f
+		added++
+	}
+	if added == 0 {
+		s.mu.Unlock()
+		return 0, nil
+	}
+	err := s.writeSeenLocked(seen)
+	s.mu.Unlock()
+	if err != nil {
+		return 0, err
+	}
+	s.emitChanged()
+	return added, nil
+}

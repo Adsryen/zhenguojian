@@ -1,6 +1,8 @@
-/* watch store —— 观看历史 / 追剧·预约（真值源 = Go watchstore 绑定）。
+/* watch store —— 观看历史 / 追剧·预约 / 看过标记（真值源 = Go watchstore 绑定）。
    数据面：api.watchlist()/historyList()（bindings_watchstore.go，camelCase 行 JSON，
-   updated/added 为 epoch 秒，position/duration 为秒）。
+   updated/added 为 epoch 秒，position/duration 为秒）；
+   看过标记 api.seenList()/toggleSeen()（bindings_seen.go → seen-library.json，epoch 秒；
+   真实桥首载时把 localStorage 存量标记一次性 ImportSeen 上传后清本地键）。
    localStorage（services/local.ts）仅保留为「无桥降级缓存」：
    - MOCK / DEGRADED（api.ts 判定：VITE_MOCK=1 或启动即无桥）：读写直接走 local.ts；
    - 真实桥竞态抛 bridge_missing：写操作回落 local.ts 同名函数重试一次。
@@ -10,6 +12,7 @@ import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import {
   clearHistory as clearHistoryLocal,
+  clearWatchedMarks,
   deleteHistoryEntry,
   HISTORY_KEY,
   historyKey,
@@ -17,9 +20,11 @@ import {
   readFollows,
   readHistory,
   readReservations,
+  readWatched,
   splitHistoryKey,
   toggleFollow as toggleFollowLocal,
-  toggleReservation as toggleReservationLocal
+  toggleReservation as toggleReservationLocal,
+  toggleWatched as toggleWatchedLocal
 } from '@/services/local'
 
 /** 桥不可用类错误（api.ts wailsApp/callGoRaw 抛出形状） */
@@ -152,20 +157,38 @@ function reconcileReserve(rows: WatchRow[], drama: Drama, reserved: boolean): Wa
   return rows.filter((r) => r.id !== drama.id)
 }
 
+/* ---------------------------------------------------------------- 看过标记辅助
+   seen 表值统一 epoch 秒（Go SeenMarks 契约）；local.ts 历史写法为 ms，
+   读取处归一（normTs 同口径：>1e11 判毫秒）。 */
+
+function seenToSec(v: number): number {
+  return v > 1e11 ? v / 1000 : v
+}
+
+function localSeenMap(): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const [k, v] of Object.entries(readWatched())) out[k] = seenToSec(Number(v) || 0)
+  return out
+}
+
 /* ---------------------------------------------------------------- store */
 
 export const useWatchStore = defineStore('watch', {
   state: () => ({
     follows: [] as WatchRow[],
     history: [] as HistoryRow[],
+    /** 看过标记 { dramaId: epoch 秒 }；真值 = Go seen-library.json，降级面 = local.ts */
+    seen: {} as Record<string, number>,
     loading: false,
     error: '',
     /** 已首载标志（视图用它避免重复拉取；核心四字段之外的唯一扩展位） */
-    loaded: false
+    loaded: false,
+    seenLoaded: false
   }),
   getters: {
     /** 追更列表（v1：followed 行；预约行 Go FollowList 也返回，标志位区分） */
-    followedRows: (s) => s.follows.filter((r) => r.followed)
+    followedRows: (s) => s.follows.filter((r) => r.followed),
+    isSeen: (s) => (dramaId: string): boolean => !!dramaId && s.seen[dramaId] !== undefined
   },
   actions: {
     /** 是否走降级缓存面（与 api.ts DEGRADED/mock 判定同风格） */
@@ -205,6 +228,63 @@ export const useWatchStore = defineStore('watch', {
 
     ensureLoaded() {
       return this.load(false)
+    },
+
+    /** 看过标记首载（详情页按钮/角标消费前调用；seenLoaded 幂等）。
+        真实桥路径附带一次性迁移：localStorage 存量 ImportSeen 上传 → 清本地键。 */
+    async loadSeen(force = false) {
+      if (this.seenLoaded && !force) return
+      try {
+        if (this.useLocalLayer()) {
+          this.seen = localSeenMap()
+        } else {
+          const goMap = await api.seenList()
+          this.seen = goMap ?? {}
+          const local = localSeenMap()
+          const pending = Object.keys(local).filter((k) => this.seen[k] === undefined)
+          if (pending.length) {
+            try {
+              await api.importSeen(JSON.stringify(local))
+              clearWatchedMarks()
+              for (const k of pending) this.seen[k] = local[k]
+            } catch {
+              /* 上传失败：localStorage 键保留待下次迁移，本会话按 local 并集显示 */
+              for (const k of pending) this.seen[k] = local[k]
+            }
+          }
+        }
+        this.seenLoaded = true
+      } catch (e) {
+        this.seen = localSeenMap() // 桥读失败 → 降级缓存面（下次 force 重试）
+        this.error = errText(e, '读取看过标记')
+      }
+    },
+
+    /** 看过开关（详情页按钮；纯标记，不改播放进度——v1 MarkWatched 的进度副作用刻意不采用）。
+        返回切换后的真值。 */
+    async toggleSeen(dramaId: string): Promise<boolean> {
+      if (!dramaId) return false
+      const prev = this.seen[dramaId]
+      const had = prev !== undefined
+      const will = !had
+      if (had) delete this.seen[dramaId]
+      else this.seen[dramaId] = Date.now() / 1000
+      try {
+        const res = await this.callBridge(
+          () => api.toggleSeen(dramaId),
+          () => ({ on: toggleWatchedLocal(dramaId) })
+        )
+        const on = !!res.on
+        if (on === will) return on
+        if (on) this.seen[dramaId] = Date.now() / 1000
+        else delete this.seen[dramaId]
+        return on
+      } catch (e) {
+        if (had) this.seen[dramaId] = prev
+        else delete this.seen[dramaId]
+        this.error = errText(e, '看过标记')
+        throw e
+      }
     },
 
     /** 追剧开关（详情页按钮）。返回切换后的 followed 真值。 */

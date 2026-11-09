@@ -1,6 +1,8 @@
 /* 本地兜底存储：追剧/预约/历史 已切换为 stores/watch → Go watchstore 真值，
    本模块仅保留为 DEGRADED（无桥）降级缓存层（watch.ts 在 MOCK/DEGRADED/桥竞态时回落此处同名函数）；
-   看过标记与下载队列仍以 localStorage 为主存储。
+   看过标记主存储已迁 Go seen-library.json（watch.ts loadSeen 首载时一次性上传本地存量并清键，
+   localStorage 同名键降级为迁移源/缓存）；下载队列草稿仍以 localStorage 为主存储
+   （UI 暂存态：plan 已 resolve、尚未投引擎，V2-3 接通真实下载后废弃）。
    —— 历史依赖请求见 V2-2 终报：需要 Go 端提供 Follows/History/Watched/Reservations 绑定后切换。 */
 import type { Drama } from './types'
 
@@ -139,6 +141,20 @@ export function toggleFollow(drama: Drama): boolean {
 
 export function isWatched(dramaId: string): boolean {
   return !!readJson<Record<string, number>>(WATCHED_KEY, {})[dramaId]
+}
+
+/** 全量读过标记表（watch.ts 降级面读取 + 一次性迁移上传用） */
+export function readWatched(): Record<string, number> {
+  return readJson<Record<string, number>>(WATCHED_KEY, {})
+}
+
+/** 迁移上传成功后清本地键（watch.ts 调用；降级面不再写入后不留双真值） */
+export function clearWatchedMarks(): void {
+  try {
+    localStorage.removeItem(WATCHED_KEY)
+  } catch {
+    /* 隐私模式 removeItem 抛错仅忽略 */
+  }
 }
 
 export function toggleWatched(dramaId: string): boolean {

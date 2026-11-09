@@ -231,6 +231,10 @@ export interface NativeApi {
   saveWatch(drama: Drama, episode: number, position: number, duration: number, finished: boolean): Promise<{ ok: boolean }>
   removeHistory(dramaId: string): Promise<{ ok: boolean }>
   clearHistory(): Promise<{ ok: boolean }>
+  // ── 看过标记（范围 A：Go bindings_seen.go / seen-library.json，值=epoch 秒）──
+  seenList(): Promise<Record<string, number>>
+  toggleSeen(dramaId: string): Promise<{ on: boolean }>
+  importSeen(entriesJSON: string): Promise<{ added: number }>
   calendar(date: string, offset: number, gender: number): Promise<CalendarPayload>
   // ── V2-4 设置/指纹 ──
   resourceSettings(): Promise<ResourceSettingsSnapshot>

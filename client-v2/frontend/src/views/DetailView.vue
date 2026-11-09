@@ -3,14 +3,15 @@
    版式照 v1 detail_layout.py：模糊封面铺头区 + 150x225 封面 + 标题/简介/热度/标签；
    选集照 v1 detail_episodes.py：GROUP_SIZE=30 分组 + 44px 网格 + 当前集高亮/未播变淡/VIP 角标。
    操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(Resolve→plan→localStorage
-   'downloads.queue'，V2-3 才接下载引擎)、追剧(stores/watch → Go watchstore)、看过(localStorage 兜底)。
-   追剧真值与「看到第 N 集」锚点已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。 */
+    'downloads.queue'，V2-3 才接下载引擎)、追剧(stores/watch → Go watchstore)、看过(stores/watch →
+    Go seen-library.json，范围 A 迁移；localStorage 仅降级/一次性迁移源)。
+    追剧真值、「看到第 N 集」锚点与看过标记已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, DetailResult, Drama } from '@/services/types'
 import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
-import { enqueueDownloads, isWatched, queueLength, toggleWatched } from '@/services/local'
+import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 
@@ -33,7 +34,11 @@ const followed = computed(() => {
   const id = drama.value?.id
   return !!id && !!watchStore.follows.find((r) => r.id === id)?.followed
 })
-const watched = ref(false)
+/** 看过态 = watchStore.seen（Go seen-library 真值；loadSeen 首载后响应式生效） */
+const watched = computed(() => {
+  const id = drama.value?.id
+  return !!id && watchStore.isSeen(id)
+})
 const played = ref<number[]>([])
 const anchorPos = ref(0)
 const downloading = ref(false)
@@ -79,7 +84,7 @@ async function loadDetail() {
     error.value = e?.message ?? String(e)
   } finally {
     loading.value = false
-    await watchStore.ensureLoaded()
+    await Promise.all([watchStore.ensureLoaded(), watchStore.loadSeen()])
     resetAnchor()
   }
 }
@@ -154,11 +159,16 @@ async function onFollow() {
   }
 }
 
-function onWatchedMark() {
+async function onWatchedMark() {
   const d = drama.value
   if (!d) return
-  watched.value = toggleWatched(d.id)
-  showToast(watched.value ? '已标记看过' : '已取消看过标记')
+  // stores/watch：真值 Go ToggleSeen（bindings_seen.go；无桥降级 localStorage 同名键）
+  try {
+    const on = await watchStore.toggleSeen(d.id)
+    showToast(on ? '已标记看过' : '已取消看过标记')
+  } catch (e: any) {
+    showToast(e?.message ?? '看过标记失败')
+  }
 }
 
 /* ---------- 头像区数据 ---------- */
@@ -195,7 +205,6 @@ watch(
     drama.value = raw ? dramaFromQuery(decodeURIComponent(raw), route.query) : null
     detail.value = null
     if (drama.value) {
-      watched.value = isWatched(drama.value.id)
       loadDetail()
     }
   }
@@ -205,7 +214,6 @@ onMounted(() => {
   const raw = String(route.params.id ?? '')
   drama.value = raw ? dramaFromQuery(decodeURIComponent(raw), route.query) : null
   if (drama.value) {
-    watched.value = isWatched(drama.value.id)
     loadDetail()
   } else {
     error.value = '缺少剧目参数（路由应为 /detail/:id）'
