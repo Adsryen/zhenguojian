@@ -56,6 +56,8 @@ resources / library / newseries / search / detail / preload / download / decrypt
    格式无效」均可能），属上游限制，两个汉字以上的常规关键词应正常。
 
 ## GitHub CI 与 Release（2026-11-08 增补）
+> 更新（2026-11-09，v1.0.1）：Windows 产物改**单文件 真果鉴.exe（带图标）**，runtime/README/build-info.json 与其同级；onedir 版 v1.0.0 已下线。zip 资产名固定 ASCII zhenGuoJian-windows-x64.zip（中文前缀曾被 gh 裁成 -windows-x64.zip）。CI 内 selftest 九步（含真机下载/解密/合并）全过。若下载 release 报 504/404 属 GitHub 资产 CDN 间歇事故（状态页 investigating），重试或换网络即可，与包无关。
+
 
 1. 官方产物改为私有仓库 Release：https://github.com/Adsryen/zhenguojian/releases/tag/v1.0.0
    下载 zhenGuoJian-windows-x64.zip，解压后运行 真果鉴\真果鉴.exe（同目录已带 runtime：
