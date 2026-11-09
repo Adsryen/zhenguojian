@@ -57,8 +57,9 @@ jobs:
           }
           $sha = git rev-parse HEAD
           $iso = (git log -1 --format=%cI).Trim()
-          $mod = if ((git status --porcelain | Measure-Object -Line).Lines -gt 0) { "true" } else { "false" }
-          @{ revision = $sha; commitTime = $iso; modified = ($mod -eq "true") } | ConvertTo-Json -Compressed | Set-Content -Encoding utf8 build/bin/build-info.json
+          $sha = $sha.Trim()
+          $iso = $iso.Trim()
+          @{ revision = $sha; commitTime = $iso; modified = $false } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 build/bin/build-info.json
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'push'
