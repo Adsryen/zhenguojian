@@ -29,7 +29,7 @@ jobs:
       - name: Frontend
         working-directory: client-v2/frontend
         run: |
-          npm ci
+          npm ci --registry=https://registry.npmmirror.com || (Write-Host "::notice::npmmirror failed, retrying official" ; Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue ; npm ci)
           npm run build
 
       - name: Overlay + build (v2overlay)

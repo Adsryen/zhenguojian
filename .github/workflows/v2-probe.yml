@@ -30,7 +30,8 @@ jobs:
 
       - name: Frontend deps (wails build 前必须，-s 只跳过它自己的 install)
         working-directory: client-v2/frontend
-        run: npm ci
+        run: |
+          npm ci --registry=https://registry.npmmirror.com || (Write-Host "::notice::npmmirror failed, retrying official" ; Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue ; npm ci)
 
       - name: Build windows/amd64 (正式壳：纯 Go 交叉编译，绕开 wails CLI 本机兼容坑)
         working-directory: client-v2
