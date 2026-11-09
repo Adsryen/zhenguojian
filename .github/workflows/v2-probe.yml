@@ -1,0 +1,43 @@
+# v2-probe: Wails v2 windows/amd64 CI 可行性验证（技术 spike 专用，非发布通道）
+# 结论预期：本仓库 spike 已实测 Linux 本机即可 `wails build -platform windows/amd64`
+# （纯 Go WebView2Loader，无 cgo/mingw 依赖）；此 workflow 用于验证 CI 路径 +
+# 产出可在真 Windows 上冒烟的 exe 工件。
+name: v2-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24" # 与 zhenguojian/sidecar/go.mod、guoapp-src/native/go.mod 一致
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          # 如需国内源可放开：registry-url: "https://registry.npmmirror.com"
+
+      - name: Install Wails CLI
+        # 固定 v2.10.1：@latest(v2.17.1) 的库 go.mod 要求 go>=1.26.0，与本 job 的 go 1.24
+        # (对齐 sidecar) 冲突；且项目 hello/go.mod 的 wails 库也 pin 在 v2.10.1，CLI/库版本须一致。
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
+
+      - name: Frontend deps (wails build 前必须，-s 只跳过它自己的 install)
+        working-directory: client-v2/spike/hello/frontend
+        run: npm install
+
+      - name: Build windows/amd64
+        working-directory: client-v2/spike/hello
+        run: wails build -platform windows/amd64 -s
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hello-windows-amd64
+          path: client-v2/spike/hello/build/bin/hello.exe
+          if-no-files-found: error
