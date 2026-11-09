@@ -5,11 +5,15 @@
    播完「下一集」（player:ended → playNext，v1 player.py:1185 语义）、关闭=PlayerClosePlayer+返回。
    数据由 player:tick / player:ended / player:error / danmaku:stats 事件驱动（stores/player.ts）；
    旧 ReportViewport 已随契约移除——Go 侧不再收视口，ASS 缩放由服务内部处理。
-   弹幕由 mpv ASS 渲染，本组件 DOM 不画弹幕（任务定案）。 */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+   弹幕由 mpv ASS 渲染，本组件 DOM 不画弹幕（任务定案）。
+   V2-4 画面内嵌：attach（spawn 前）→ PlayerSetBounds 上报 .pl-stage 物理像素矩形；
+   加载/出错/播完/未开播上报零尺寸让位 DOM 覆盖层；离开 detach 隐藏。
+   mock/无桥/回退开关下 attach 返回 embedded:false，本组件零特殊分支（reportBounds 直通短路）。 */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, SPEED_CHOICES } from '@/stores/player'
 import { dramaFromQuery } from '@/services/dramaRef'
+import { embedApi } from '@/services/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -17,6 +21,38 @@ const store = usePlayerStore()
 
 const dragging = ref(false)
 const dragPos = ref(0)
+
+/* ── V2-4 内嵌几何上报 ── */
+const stageEl = ref<HTMLElement | null>(null)
+let embedActive = false
+let stageRO: ResizeObserver | undefined
+
+function videoShouldShow(): boolean {
+  // 仅在实际出画面期间占据视频矩形；其余状态让位给 DOM 覆盖层（原生子窗盖在 DOM 之上）。
+  return store.running && !store.loading && !store.error && !store.eof
+}
+
+async function reportBounds() {
+  if (!embedActive) return
+  const el = stageEl.value
+  if (!el || !videoShouldShow()) {
+    await embedApi.setBounds(0, 0, 0, 0)
+    return
+  }
+  const r = el.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  await embedApi.setBounds(
+    Math.round(r.left * dpr),
+    Math.round(r.top * dpr),
+    Math.round(r.width * dpr),
+    Math.round(r.height * dpr)
+  )
+}
+
+watch(
+  () => [store.running, store.loading, store.error, store.eof],
+  () => void reportBounds()
+)
 
 const sliderValue = computed({
   get: () => (dragging.value ? dragPos.value : store.position),
@@ -49,11 +85,31 @@ async function closePlayer() {
   else router.push('/')
 }
 
+function onStageResize() {
+  void reportBounds()
+}
+
 onMounted(async () => {
+  // attach 必须先于 bootFromQuery→PlayerOpen：mpv spawn 时 --wid 才已就位。
+  const attach = await embedApi.attach()
+  embedActive = attach.embedded
+  if (embedActive) {
+    if (stageEl.value) {
+      stageRO = new ResizeObserver(() => void reportBounds())
+      stageRO.observe(stageEl.value)
+    }
+    window.addEventListener('resize', onStageResize)
+  }
+  void reportBounds() // 隐藏态起手（running 尚未翻转，防陈旧矩形残留）
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
+  void reportBounds()
 })
 
 onBeforeUnmount(() => {
+  stageRO?.disconnect()
+  stageRO = undefined
+  window.removeEventListener('resize', onStageResize)
+  if (embedActive) void embedApi.detach()
   void store.shutdown()
 })
 </script>
@@ -71,7 +127,7 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div class="pl-stage" @click="store.togglePlay()">
+    <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
       <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
       <div v-else-if="store.error" class="pl-hint err">{{ store.error }}</div>
       <div v-else class="pl-stage-inner">

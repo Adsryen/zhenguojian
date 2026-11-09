@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"zhenguojian/client-v2/internal/downloadsvc"
+	"zhenguojian/client-v2/internal/mpv"
 	"zhenguojian/client-v2/internal/native"
 	"zhenguojian/client-v2/internal/player"
 )
@@ -24,6 +26,9 @@ type App struct {
 	playerSvc *player.Service
 	// V2-3：下载与合并服务（轮询事件 + 合并队列；绑定见 bindings_download.go）。
 	downloadSvc *downloadsvc.Service
+	// V2-4：播放画面内嵌宿主（ZgjVideoHost 子窗）；embedMu 串行化 attach/bounds/detach。
+	embedMu sync.Mutex
+	embed   *mpv.EmbedHost
 }
 
 func NewApp() *App {
@@ -45,7 +50,8 @@ func NewApp() *App {
 				runtime.EventsEmit(a.ctx, event, payload)
 			}
 		},
-		// 窗口内嵌句柄：现有壳无 HWND 管线，0 = mpv 独立窗口（真机遗留项）。
+		// 窗口内嵌句柄：初值 0 = mpv 独立窗（回退态）；进入播放页时
+		// PlayerAttach 惰性建 ZgjVideoHost 子窗并经 SetWid 翻转（V2-4）。
 		Wid: 0,
 	})
 	a.downloadSvc = downloadsvc.New(downloadsvc.Options{
@@ -253,6 +259,57 @@ func (a *App) PlayerVolume(v int) (string, error)    { return "", a.playerSvc.Se
 func (a *App) PlayerDanmaku(on bool) (string, error) { return "", a.playerSvc.SetDanmakuEnabled(on) }
 func (a *App) PlayerState() (string, error)          { return marshalJSON(a.playerSvc.State()) }
 func (a *App) PlayerClosePlayer() (string, error)    { return "", a.playerSvc.Close() }
+
+// ---------- V2-4 播放画面内嵌（PlayerAttach/PlayerSetBounds/PlayerDetach） ----------
+//
+// 时序契约（PlayerView.vue 保证）：进入播放页 → PlayerAttach →（spawn 前
+// SetWid 生效）→ PlayerOpen → 每次容器几何变化/状态切换 PlayerSetBounds →
+// 离开页面 PlayerDetach（隐藏子窗，实例留复用）。ZHENGUO_NO_EMBED=1 或
+// 非 Windows 平台 attach 返回 embedded:false，播放链路整体退化为现行独立窗。
+
+// PlayerAttach 建立/复用视频承载子窗并把其 HWND 交给播放服务。
+// 返回 JSON {embedded bool, reason string}；失败不报 error——回退是正常分支。
+func (a *App) PlayerAttach() (string, error) {
+	if !mpv.EmbedAllowed(os.Getenv) {
+		return marshalJSON(map[string]any{"embedded": false, "reason": mpv.EnvNoEmbed})
+	}
+	a.embedMu.Lock()
+	defer a.embedMu.Unlock()
+	if a.embed == nil {
+		host, err := mpv.NewEmbedHost()
+		if err != nil {
+			return marshalJSON(map[string]any{"embedded": false, "reason": err.Error()})
+		}
+		a.embed = host
+	}
+	a.playerSvc.SetWid(a.embed.HWND())
+	return marshalJSON(map[string]any{"embedded": true})
+}
+
+// PlayerSetBounds 按视频容器矩形移动/显隐子窗（物理像素，相对主窗客户区；
+// W/H <1 表示隐藏画面，让位给 DOM 覆盖层）。
+func (a *App) PlayerSetBounds(x, y, w, h int) (string, error) {
+	a.embedMu.Lock()
+	defer a.embedMu.Unlock()
+	if a.embed == nil {
+		return marshalJSON(map[string]any{"ok": false})
+	}
+	if err := a.embed.ApplyBounds(mpv.Bounds{X: x, Y: y, W: w, H: h}); err != nil {
+		return "", err
+	}
+	return marshalJSON(map[string]any{"ok": true})
+}
+
+// PlayerDetach 离开播放页：隐藏子窗（含 mpv 子树）。子窗保留复用，
+// 再进播放页 attach 幂等。
+func (a *App) PlayerDetach() (string, error) {
+	a.embedMu.Lock()
+	defer a.embedMu.Unlock()
+	if a.embed != nil {
+		a.embed.Hide()
+	}
+	return marshalJSON(map[string]any{"ok": true})
+}
 
 func marshalJSON(v any) (string, error) {
 	body, err := json.Marshal(v)

@@ -408,3 +408,41 @@ export const bridgeMissing = DEGRADED
 export const api: NativeApi = isMock ? mockApi : hasBridge ? realApi : mockApi
 export { ApiError }
 export const MOCK_MODE = isMock
+
+/* ── V2-4 播放画面内嵌绑定（App.{PlayerAttach,PlayerSetBounds,PlayerDetach}）──
+   不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
+   no-op（attach 返回 embedded:false），PlayerView 无需按模式特判——内嵌不可得
+   时整条播放链路保持现行行为（mpv 独立窗 / 浏览器无画面）。
+   时序契约：PlayerAttach → PlayerOpen（spawn 前 SetWid 生效）→ 几何/状态变化
+   PlayerSetBounds（物理像素，零尺寸=隐藏）→ 离开 PlayerDetach。 */
+export interface AttachResult {
+  embedded: boolean
+  reason?: string
+}
+
+export const embedApi = {
+  attach: async (): Promise<AttachResult> => {
+    if (isMock || !hasBridge) return { embedded: false }
+    try {
+      return (await callGo<AttachResult>('PlayerAttach')) ?? { embedded: false }
+    } catch (err: any) {
+      return { embedded: false, reason: String(err?.message ?? err) }
+    }
+  },
+  setBounds: async (x: number, y: number, w: number, h: number): Promise<void> => {
+    if (isMock || !hasBridge) return
+    try {
+      await callGo('PlayerSetBounds', x, y, w, h)
+    } catch {
+      /* 几何上报失败不干扰播放 UI（窗口销毁竞态等） */
+    }
+  },
+  detach: async (): Promise<void> => {
+    if (isMock || !hasBridge) return
+    try {
+      await callGo('PlayerDetach')
+    } catch {
+      /* 同上 */
+    }
+  }
+}

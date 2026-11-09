@@ -209,6 +209,10 @@ type Service struct {
 	wantSpeed  float64
 	wantVolume int
 
+	// 窗口内嵌：mpv --wid 宿主句柄。初值取 Config.Wid（0=独立窗），
+	// PlayerAttach 经 SetWid 惰性翻转为 ZgjVideoHost 子窗句柄。
+	wid uintptr
+
 	// 弹幕
 	enabled     bool // Config.DanmakuSource 非 nil 时默认开
 	fetcher     *danmaku.Fetcher
@@ -245,6 +249,7 @@ func New(cfg Config) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		cfg:        cfg,
+		wid:        cfg.Wid,
 		ctx:        ctx,
 		cancel:     cancel,
 		wantSpeed:  1.0,
@@ -271,15 +276,25 @@ func (s *Service) emit(event string, payload any) {
 }
 
 // mpvConfig 每次 spawn 用的内核配置（Launcher 为 nil 包装时才真正生效）。
+// Wid 取 s.wid 而非 cfg.Wid：断线重建走同一条路径，内嵌句柄自动延续。
 func (s *Service) mpvConfig() mpv.Config {
 	return mpv.Config{
 		MpvPath:    s.cfg.MpvPath,
 		AppRoot:    s.cfg.AppRoot,
 		SocketPath: s.cfg.MpvSocket,
-		Wid:        s.cfg.Wid,
+		Wid:        s.wid,
 		HWDec:      s.cfg.HWDec,
 		Backend:    s.cfg.Backend,
 	}
+}
+
+// SetWid 切换 mpv --wid 宿主句柄（内嵌接线 PlayerAttach 在进播放页、
+// Open 之前调用）。只影响下一次 spawn：现存实例保持当前窗口语义；
+// 0 = 独立顶层窗（ZHENGUO_NO_EMBED 回退路径）。
+func (s *Service) SetWid(wid uintptr) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.wid = wid
 }
 
 // assDirPath ASS 输出目录：AssDir → DataDir/ass → ""（WriteAss 临时目录默认）。
