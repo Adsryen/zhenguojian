@@ -29,16 +29,19 @@ jobs:
         run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.10.1
 
       - name: Frontend deps (wails build 前必须，-s 只跳过它自己的 install)
-        working-directory: client-v2/spike/hello/frontend
-        run: npm install
+        working-directory: client-v2/frontend
+        run: npm ci
 
-      - name: Build windows/amd64
-        working-directory: client-v2/spike/hello
-        # -no-browser: runner 无默认浏览器，wails 构建成功后自动打开会卡死并拖到超时
-        run: wails build -platform windows/amd64 -s
+      - name: Build windows/amd64 (正式壳：纯 Go 交叉编译，绕开 wails CLI 本机兼容坑)
+        working-directory: client-v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
 
       - uses: actions/upload-artifact@v4
         with:
-          name: hello-windows-amd64
-          path: client-v2/spike/hello/build/bin/hello.exe
+          name: v2-shell-windows
+          path: client-v2/build/bin/client-v2.exe
           if-no-files-found: error
