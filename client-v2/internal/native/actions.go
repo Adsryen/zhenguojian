@@ -96,3 +96,24 @@ func BrowseFiltered(source string, filters map[string]string, offset int, cursor
 	}
 	return Call("browseFiltered", payload)
 }
+
+// DanmakuWindow 按播放会话拉一个时间窗的弹幕（绝对窗尾 endMs，单位毫秒）。
+// 核心 payload 的 durationMs 即绝对窗尾（v1 main.py 弹幕循环同款用法）。
+func DanmakuWindow(session string, startMs, endMs int64) (map[string]any, error) {
+	if session == "" {
+		return nil, fmt.Errorf("弹幕会话不能为空")
+	}
+	return Call("danmaku", map[string]any{
+		"playbackSession": session,
+		"startMs":         startMs,
+		"durationMs":      endMs,
+	})
+}
+
+// DanmakuAll 拉整集弹幕（受核心上限约束），供播放器降级或导出使用。
+func DanmakuAll(session string) (map[string]any, error) {
+	if session == "" {
+		return nil, fmt.Errorf("弹幕会话不能为空")
+	}
+	return Call("danmakuAll", map[string]any{"playbackSession": session})
+}

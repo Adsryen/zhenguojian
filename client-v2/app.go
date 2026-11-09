@@ -121,6 +121,25 @@ func (a *App) BrowseFiltered(source, filtersJSON string, offset int, cursor stri
 
 // ---------- helpers ----------
 
+// DanmakuWindow → JSON: {items[],startMs,nextMs,total}；endMs 为绝对窗尾毫秒。
+// session 来自 Resolve 应答的 playbackSession；同会话连续窗口走核心短缓存。
+func (a *App) DanmakuWindow(session string, startMs, endMs float64) (string, error) {
+	data, err := native.DanmakuWindow(session, int64(startMs), int64(endMs))
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(data)
+}
+
+// DanmakuAll → JSON: 整集弹幕文档（受核心上限约束），供降级与调试。
+func (a *App) DanmakuAll(session string) (string, error) {
+	data, err := native.DanmakuAll(session)
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(data)
+}
+
 func marshalJSON(v any) (string, error) {
 	body, err := json.Marshal(v)
 	if err != nil {

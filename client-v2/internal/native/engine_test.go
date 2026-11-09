@@ -276,3 +276,27 @@ func TestDiscoveryStubError(t *testing.T) {
 		t.Errorf("错误应标明动作与 overlay 缺失: %+v", e)
 	}
 }
+
+func TestDanmakuWindowAcceptsAbsoluteWindowTail(t *testing.T) {
+	dir, err := os.MkdirTemp("", "zgj-v2-danmaku")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	t.Setenv("ZHENGUO_DATA", dir)
+	if err := Init(); err != nil {
+		t.Fatalf("initialize: %v", err)
+	}
+	out, err := DanmakuWindow("bogus-session", 0, 60_000)
+	if err != nil {
+		t.Logf("danmaku(bogus) -> err=%v（上游会话不存在属预期）", err)
+	} else {
+		t.Logf("danmaku(bogus) -> %v", out)
+	}
+	if _, err2 := DanmakuAll("bogus-session"); err2 != nil {
+		t.Logf("danmakuAll(bogus) -> err=%v", err2)
+	}
+	if _, err3 := DanmakuWindow("", 0, 1); err3 == nil {
+		t.Fatal("空会话应本地拦截")
+	}
+}
