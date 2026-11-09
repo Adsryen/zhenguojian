@@ -34,7 +34,8 @@ jobs:
 
       - name: Build windows/amd64
         working-directory: client-v2/spike/hello
-        run: wails build -platform windows/amd64 -s
+        # -no-browser: runner 无默认浏览器，wails 构建成功后自动打开会卡死并拖到超时
+        run: wails build -platform windows/amd64 -s -no-browser
 
       - uses: actions/upload-artifact@v4
         with:
