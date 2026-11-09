@@ -158,6 +158,12 @@ button {
   font-size: 13px;
 }
 
+.banner.warn {
+  border-color: var(--guo-danger);
+  background: color-mix(in srgb, var(--guo-danger) 12%, var(--surface));
+  color: var(--guo-danger);
+}
+
 @keyframes shimmer {
   0% { opacity: 0.55; }
   50% { opacity: 1; }

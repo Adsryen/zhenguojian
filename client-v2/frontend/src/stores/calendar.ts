@@ -108,6 +108,7 @@ export const useCalendarStore = defineStore('calendar', {
     followed: {} as Record<string, boolean>, // 本地 watchstore 追剧态
     reserved: {} as Record<string, boolean>, // 本地 watchstore 预约态
     flagsLoaded: false,
+    actionError: '',
     loadedOnce: false
   }),
   getters: {
@@ -216,23 +217,31 @@ export const useCalendarStore = defineStore('calendar', {
     },
 
     async toggleFollow(row: CalendarRow) {
-      const res = await api.toggleFollow(row.drama)
-      this.followed = { ...this.followed, [row.id]: !!res.followed }
-      // v1 互斥：追剧即取消预约（Go ToggleFollow 对 reserved 行返回 followed=false，
-      // 本地标志随之对齐；绑定返回值即真值）
-      if (res.followed) this.reserved = { ...this.reserved, [row.id]: false }
+      try {
+        const res = await api.toggleFollow(row.drama)
+        this.followed = { ...this.followed, [row.id]: !!res.followed }
+        // v1 互斥：追剧即取消预约（Go ToggleFollow 对 reserved 行返回 followed=false，
+        // 本地标志随之对齐；绑定返回值即真值）
+        if (res.followed) this.reserved = { ...this.reserved, [row.id]: false }
+      } catch (e: any) {
+        this.actionError = `追剧操作失败：${e?.message ?? e}`
+      }
     },
 
     async toggleReserve(row: CalendarRow) {
-      if (this.isReserved(row)) {
-        await api.cancelReservation(row.id)
-        this.reserved = { ...this.reserved, [row.id]: false }
-      } else {
-        const res = await api.reserve(row.drama)
-        const on = res.reserved !== false
-        this.reserved = { ...this.reserved, [row.id]: on }
-        // v1 互斥：预约即取消追剧（Go Reserve 新行 followed:false）
-        if (on) this.followed = { ...this.followed, [row.id]: false }
+      try {
+        if (this.isReserved(row)) {
+          await api.cancelReservation(row.id)
+          this.reserved = { ...this.reserved, [row.id]: false }
+        } else {
+          const res = await api.reserve(row.drama)
+          const on = res.reserved !== false
+          this.reserved = { ...this.reserved, [row.id]: on }
+          // v1 互斥：预约即取消追剧（Go Reserve 新行 followed:false）
+          if (on) this.followed = { ...this.followed, [row.id]: false }
+        }
+      } catch (e: any) {
+        this.actionError = `预约操作失败：${e?.message ?? e}`
       }
     }
   }

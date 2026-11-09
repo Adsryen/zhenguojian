@@ -7,7 +7,7 @@
    条目点击 → 详情（detailRoute）；已上线行的「播放」→ playerRoute 第 1 集
    （PlayerView bootFromQuery 缺 c 时自取 detail 章节，安全）。
    分页：滚动到底 loadMore（v1 _calendar_scrolled）。 */
-import { computed, onMounted, onBeforeUnmount } from 'vue'
+import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
 import { detailRoute, playerRoute } from '@/services/dramaRef'
@@ -15,6 +15,19 @@ import { useCalendarStore, calDateLabel, todayYmd, type CalendarRow } from '@/st
 
 const router = useRouter()
 const store = useCalendarStore()
+
+const actionErrorText = ref('')
+let actionErrorTimer: number | undefined
+watch(
+  () => store.actionError,
+  (msg) => {
+    if (!msg) return
+    actionErrorText.value = msg
+    store.actionError = ''
+    window.clearTimeout(actionErrorTimer)
+    actionErrorTimer = window.setTimeout(() => (actionErrorText.value = ''), 4000)
+  }
+)
 
 const dates = computed(() => (store.dates.length ? store.dates : [store.date || todayYmd()]))
 const onlineRows = computed(() => store.onlineRows)
@@ -63,6 +76,8 @@ onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
   </div>
 
   <div v-if="MOCK_MODE" class="banner">VITE_MOCK 示例数据，非真实引擎结果</div>
+
+  <div v-if="actionErrorText" class="banner warn">{{ actionErrorText }}</div>
 
   <div v-if="store.loading && !store.rows.length" class="state-block">
     <div class="dots">加载上新日历…</div>
