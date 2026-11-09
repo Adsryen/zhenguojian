@@ -68,6 +68,67 @@ jobs:
           $iso = $iso.Trim()
           @{ revision = $sha; commitTime = $iso; modified = $false } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 build/bin/build-info.json
 
+      - name: Download ffmpeg
+        run: |
+          # 与 v1 build.yml 同源配方：gyan.dev 主源 + BtbN/gh-proxy 兜底（GitHub CDN 事故日可用）
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 2; $i++) {
+              curl.exe -fSL --retry 2 -o ffmpeg.zip $u 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Warning "ffmpeg attempt failed: $u"; continue }
+              try { Expand-Archive -Force ffmpeg.zip fftmp; $ok = $true; break }
+              catch { Write-Warning "extract failed: $($_.Exception.Message)"; Remove-Item ffmpeg.zip -ErrorAction SilentlyContinue }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw "ffmpeg download failed from all sources" }
+
+      - name: Download mpv
+        run: |
+          $ErrorActionPreference = "Stop"
+          $rel = Invoke-RestMethod -Headers @{ "User-Agent" = "ci" } https://api.github.com/repos/mpv-player/mpv/releases/latest
+          $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*full*.zip" } | Select-Object -First 1
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*.zip" -and $_.name -notlike "*pdb*" } | Select-Object -First 1 }
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
+          if (-not $asset) { throw "no usable mpv windows asset" }
+          Write-Host ("mpv asset: " + $asset.name)
+          New-Item -ItemType Directory -Force mpvtmp | Out-Null
+          $mpvOk = $false
+          $srcs = @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url))
+          for ($i = 1; $i -le 20; $i++) {
+            $u = $srcs[($i - 1) % 2]
+            curl.exe -fsSL --retry 2 -o mpv.pkg $u 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Get-Item mpv.pkg -ErrorAction SilentlyContinue).Length -gt 1MB) { $mpvOk = $true; break }
+            Write-Warning ("mpv attempt $i failed: $u")
+            Start-Sleep 60
+          }
+          if (-not $mpvOk) { throw "mpv download failed from all sources" }
+          if ($asset.name -like "*.zip") {
+            Expand-Archive -Force mpv.pkg mpvtmp
+          } else {
+            & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.pkg | Out-Null
+          }
+
+      - name: Assemble portable zip
+        run: |
+          # 布局对齐 v1 查找链：exe 同级 runtime\mpv\mpv.exe、runtime\ffmpeg\{ffmpeg,ffprobe}.exe
+          $stage = "dist-v2\真果鉴-v2"
+          Remove-Item -Recurse -Force dist-v2 -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force "$stage\runtime\mpv", "$stage\runtime\ffmpeg" | Out-Null
+          Copy-Item client-v2\build\bin\client-v2.exe "$stage\真果鉴-v2.exe"
+          Copy-Item client-v2\build\bin\build-info.json "$stage\build-info.json"
+          $bin = (Get-ChildItem fftmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
+          Copy-Item "$bin\ffmpeg.exe", "$bin\ffprobe.exe" "$stage\runtime\ffmpeg\"
+          $mpvbin = (Get-ChildItem mpvtmp -Recurse -Filter mpv.exe | Select-Object -First 1).FullName
+          Copy-Item $mpvbin "$stage\runtime\mpv\mpv.exe"
+          Compress-Archive -Path "$stage" -DestinationPath zhenGuoJian-v2-windows-x64.zip -Force
+          Write-Host ("zip size: " + (Get-Item zhenGuoJian-v2-windows-x64.zip).Length)
+
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'push'
         with:
@@ -75,6 +136,7 @@ jobs:
           path: |
             client-v2/build/bin/client-v2.exe
             client-v2/build/bin/build-info.json
+            zhenGuoJian-v2-windows-x64.zip
 
       - name: Release (tag v2.*)
         if: github.event_name == 'push'
@@ -83,3 +145,4 @@ jobs:
           files: |
             client-v2/build/bin/client-v2.exe
             client-v2/build/bin/build-info.json
+            zhenGuoJian-v2-windows-x64.zip
