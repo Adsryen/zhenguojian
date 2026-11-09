@@ -10,3 +10,4 @@ AGENTS.md
 # guoapp 参照源码（仅本地研究用，不分发）
 reference/
 __pycache__/
+dist-win/

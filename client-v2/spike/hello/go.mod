@@ -34,3 +34,5 @@ require (
 )
 
 // replace github.com/wailsapp/wails/v2 v2.17.1 => /home/ryen/go/pkg/mod
+
+replace github.com/wailsapp/go-webview2 v1.0.19 => github.com/wailsapp/go-webview2 v1.0.13
