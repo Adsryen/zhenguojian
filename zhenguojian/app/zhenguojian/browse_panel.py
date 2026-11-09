@@ -22,7 +22,7 @@ from .scroll_loader import ScrollLoader
 from .tasks import TaskRunner
 from .widgets import CoverLoader
 
-FILTER_ORDER = ("genre", "category_dim_theme", "category_dim_role", "category_dim_epoch",
+FILTER_ORDER = ("genre", "category", "category_dim_theme", "category_dim_role", "category_dim_epoch",
                 "sort", "gender", "creation_status", "online_time")
 
 # 分类 Tab 兜底值：与主界面 genre_box（main.py:40 GENRES）及 sidecar

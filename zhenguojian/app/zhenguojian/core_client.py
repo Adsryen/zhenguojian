@@ -442,11 +442,17 @@ class CoreClient:
         return self.call("creatorWorks", creator=creator, tab=tab, subTab=sub_tab,
                          cursor=cursor, sort=sort, timeout=45.0)
 
-    def browse_filters(self, genre=""):
-        return self.call("browseFilters", category=genre, timeout=45.0)
+    def browse_filters(self, genre="", source=""):
+        payload = {"category": genre}
+        if source:
+            payload["source"] = source
+        return self.call("browseFilters", timeout=45.0, **payload)
 
-    def browse_filtered(self, filters, offset=0, cursor=""):
-        return self.call("browseFiltered", filters=filters, offset=offset, cursor=cursor, timeout=45.0)
+    def browse_filtered(self, filters, offset=0, cursor="", source=""):
+        payload = {"filters": filters, "offset": offset, "cursor": cursor}
+        if source:
+            payload["source"] = source
+        return self.call("browseFiltered", timeout=45.0, **payload)
 
     def detail(self, drama):
         return self.call("detail", drama=drama)

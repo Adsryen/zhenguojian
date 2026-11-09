@@ -22,6 +22,7 @@ type discoveryInput struct {
 	Cursor   string            `json:"cursor"`
 	Sort     string            `json:"sort"`
 	Category string            `json:"category"`
+	Source   string            `json:"source"`
 	Offset   int               `json:"offset"`
 	Filters  map[string]string `json:"filters"`
 }
@@ -130,7 +131,7 @@ func NativeDiscovery(payload string) string {
 		case "creatorWorks":
 			result, err = engine.discoveryWorks(ctx, input)
 		case "browseFilters":
-			result, err = engine.discoveryFilters(ctx, input.Category)
+			result, err = engine.discoveryBrowseFilters(ctx, input)
 		case "browseFiltered":
 			result, err = engine.discoveryBrowse(ctx, input)
 		default:
@@ -332,6 +333,24 @@ func discoveryScene(genre string) (string, error) {
 	}
 	return "", errors.New("体裁无效")
 }
+// discoveryBrowseFilters 按站源分发筛选面板：红果沿用服务端 selector 面板，
+// 其余站源用各自的目录分类（nativeCategories）给出一组「分类」芯片。
+func (engine *nativeEngine) discoveryBrowseFilters(ctx context.Context, input discoveryInput) (any, error) {
+	source := canonicalProviderSource(input.Source)
+	if source != "" && source != sourceHongguo {
+		categories, err := engine.nativeCategories(ctx, source, false)
+		if err != nil {
+			return nil, err
+		}
+		options := []any{}
+		for _, item := range categories {
+			options = append(options, map[string]any{"id": item.ID, "name": item.Name})
+		}
+		return map[string]any{"groups": []any{map[string]any{"key": "category", "name": "分类", "options": options}}}, nil
+	}
+	return engine.discoveryFilters(ctx, input.Category)
+}
+
 func (engine *nativeEngine) discoveryFilters(ctx context.Context, genre string) (any, error) {
 	scene, err := discoveryScene(genre)
 	if err != nil {
@@ -356,7 +375,40 @@ func (engine *nativeEngine) discoveryFilters(ctx context.Context, genre string) 
 	groups = append(groups, map[string]any{"key": "creation_status", "name": "状态", "options": []any{map[string]any{"id": "creation_status_0", "name": "已完结"}, map[string]any{"id": "creation_status_1", "name": "连载中"}}})
 	return map[string]any{"groups": groups}, nil
 }
+// discoveryBrowseBySource 把筛选墙的分页语义映射到各站源目录：
+// cursor 携带下一页页码（红果路径用 session_id，这里不复用）。
+func (engine *nativeEngine) discoveryBrowseBySource(ctx context.Context, source string, input discoveryInput) (any, error) {
+	category := strings.TrimSpace(input.Filters["category"])
+	if !validNativeCategory(source, category) {
+		return nil, errors.New("内容分类无效")
+	}
+	page := 1
+	if cursor := strings.TrimSpace(input.Cursor); cursor != "" {
+		if n, cerr := strconv.Atoi(cursor); cerr == nil && n > 0 {
+			page = n
+		}
+	} else if input.Offset > 0 {
+		page = 2
+	}
+	result, err := engine.nativeCatalog(ctx, nativeInput{Source: source, Category: category, Page: page})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"items":      result.Items,
+		"hasMore":    result.HasMore,
+		"nextOffset": input.Offset + len(result.Items),
+		"sessionId":  strconv.Itoa(page + 1),
+		"offset":     strconv.Itoa(input.Offset),
+		"warning":    result.Warning,
+	}, nil
+}
+
 func (engine *nativeEngine) discoveryBrowse(ctx context.Context, input discoveryInput) (any, error) {
+	source := canonicalProviderSource(input.Source)
+	if source != "" && source != sourceHongguo {
+		return engine.discoveryBrowseBySource(ctx, source, input)
+	}
 	scene, err := discoveryScene(input.Filters["genre"])
 	if err != nil {
 		return nil, err
