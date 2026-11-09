@@ -41,9 +41,10 @@ jobs:
         run: |
           mkdir -p "$env:RUNNER_TEMP/ov"
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
-          go vet -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
+          go vet -tags "v2overlay production" -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
           $LASTEXITCODE -eq 0 -or (throw "vet failed")
-          go build -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
+          go build -tags "v2overlay production" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
+          if (-not (Test-Path build/bin/client-v2.exe)) { throw "client-v2.exe 未产出" }
 
       - name: Build info
         working-directory: client-v2

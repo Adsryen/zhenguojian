@@ -20,3 +20,5 @@ client-v2/build/bin/
 client-v2/*.exe
 client-v2/build/bin/
 client-v2/build/*.json
+
+client-v2/.vite/
