@@ -31,13 +31,14 @@ jobs:
       - name: Frontend deps (wails build 前必须，-s 只跳过它自己的 install)
         working-directory: client-v2/frontend
         run: |
-          npm ci --registry=https://registry.npmjs.org --fetch-retries=3
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::notice::official registry failed, retrying npmmirror"
+          $inst = $false
+          foreach ($reg in @("https://registry.npmjs.org", "https://registry.npmmirror.com")) {
+            npm ci --registry=$reg --fetch-retries=3 --fetch-timeout=120000
+            if ($LASTEXITCODE -eq 0) { $inst = $true; break }
+            Write-Host "::notice::npm ci failed against $reg, trying next"
             Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-            npm ci --registry=https://registry.npmmirror.com
-            if ($LASTEXITCODE -ne 0) { exit 1 }
           }
+          if (-not $inst) { exit 1 }
 
       - name: Build windows/amd64 (正式壳：纯 Go 交叉编译，绕开 wails CLI 本机兼容坑)
         working-directory: client-v2
