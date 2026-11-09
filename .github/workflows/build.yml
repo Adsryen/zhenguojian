@@ -114,16 +114,23 @@ jobs:
 
       - name: Download ffmpeg
         run: |
-          # latest 滚动端点时有 504/截断，固定到有日期的不可变 release
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip"
+          # 主用 gyan.dev（自托管，GitHub 资产 CDN 事故日仍可下载）；兜底 BtbN 与 gh-proxy 加速前缀
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip"
+          )
           $ok = $false
-          for ($i = 1; $i -le 3; $i++) {
-            curl.exe -fsSL -o ffmpeg.zip $url
-            if ($LASTEXITCODE -ne 0) { Write-Warning "download attempt $i failed"; Start-Sleep 5; continue }
-            try { Expand-Archive -Force ffmpeg.zip fftmp; $ok = $true; break }
-            catch { Write-Warning "extract attempt $i failed: $($_.Exception.Message)"; Start-Sleep 3 }
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 2; $i++) {
+              curl.exe -fSL --retry 2 -o ffmpeg.zip $u 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Warning "ffmpeg attempt failed: $u"; continue }
+              try { Expand-Archive -Force ffmpeg.zip fftmp; $ok = $true; break }
+              catch { Write-Warning "extract failed: $($_.Exception.Message)"; Remove-Item ffmpeg.zip -ErrorAction SilentlyContinue }
+            }
+            if ($ok) { break }
           }
-          if (-not $ok) { New-Item -ItemType Directory -Force fftmp | Out-Null; tar -C fftmp -xf ffmpeg.zip }
+          if (-not $ok) { throw "ffmpeg download failed from all sources" }
           New-Item -ItemType Directory -Force dist\runtime\ffmpeg | Out-Null
           $bin = (Get-ChildItem fftmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
           Copy-Item "$bin\ffmpeg.exe", "$bin\ffprobe.exe" dist\runtime\ffmpeg\
@@ -140,7 +147,12 @@ jobs:
           if (-not $asset) { throw "no usable mpv windows asset" }
           Write-Host ("mpv asset: " + $asset.name)
           New-Item -ItemType Directory -Force mpvtmp, dist\runtime\mpv | Out-Null
-          curl.exe -fsSL --retry 3 -o mpv.pkg $asset.browser_download_url
+          $mpvOk = $false
+          foreach ($u in @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url), $asset.browser_download_url)) {
+            if (curl.exe -fSL --retry 2 -o mpv.pkg $u 2>$null) { $mpvOk = $true; break }
+            Write-Warning "mpv attempt failed: $u"
+          }
+          if (-not $mpvOk) { throw "mpv download failed from all sources" }
           if ($asset.name -like "*.zip") {
             Expand-Archive -Force mpv.pkg mpvtmp
           } else {
