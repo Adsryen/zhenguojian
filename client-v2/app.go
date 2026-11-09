@@ -6,15 +6,43 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"zhenguojian/client-v2/internal/native"
+	"zhenguojian/client-v2/internal/player"
 )
 
 type App struct {
 	ctx context.Context
+	// V2-3b：播放服务（懒 spawn mpv；生命周期钩子 + 绑定方法均委托它）。
+	playerSvc *player.Service
 }
 
-func NewApp() *App { return &App{} }
+func NewApp() *App {
+	appRoot := ""
+	if exe, err := os.Executable(); err == nil {
+		appRoot = filepath.Dir(exe)
+	}
+	a := &App{}
+	a.playerSvc = player.New(player.Options{
+		AppRoot: appRoot,
+		EventsEmit: func(name string, data ...any) {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, name, data...)
+			}
+		},
+		// 弹幕抓取适配：本壳唯一允许 import native 的注入点（service 包不依赖 native）。
+		DanmakuSource: func(_ context.Context, session string, startMs, endMs int64) (map[string]any, error) {
+			return native.DanmakuWindow(session, startMs, endMs)
+		},
+		// 窗口内嵌句柄：现有壳无 HWND 管线，返回 0 = mpv 独立窗口（真机遗留项）。
+		WidProvider: func() uintptr { return 0 },
+	})
+	return a
+}
 
 // startup 在 wails 窗口就绪前调用；引擎 initialize 幂等且本地很快
 // （spike 实测 0.0s），失败不致命——后续每次绑定调用都会重试 Init。
@@ -24,6 +52,12 @@ func (a *App) startup(ctx context.Context) {
 		// sync.Once 语义：initialize 失败会保持到进程重启（数据目录不可写是硬故障）。
 		println("[zhenguojian] engine initialize 失败: " + err.Error())
 	}
+	a.playerSvc.OnStartup(ctx)
+}
+
+// shutdown 挂 wails OnShutdown：关停播放服务（Quit mpv、停 tick、停弹幕抓取）。
+func (a *App) shutdown(ctx context.Context) {
+	a.playerSvc.OnShutdown(ctx)
 }
 
 // ---------- 绑定方法（全部返回 JSON 字符串；错误走 JS reject） ----------
@@ -139,6 +173,20 @@ func (a *App) DanmakuAll(session string) (string, error) {
 	}
 	return marshalJSON(data)
 }
+
+// ---------- V2-3b 播放绑定（委托 internal/player.Service） ----------
+
+// Open videoJSON = {url,title,session,local,durationSec,headers,ep}（前端组装自 Resolve 应答）。
+func (a *App) Open(videoJSON string) (string, error)   { return a.playerSvc.Open(videoJSON) }
+func (a *App) Pause() (string, error)                  { return a.playerSvc.Pause() }
+func (a *App) Resume() (string, error)                 { return a.playerSvc.Resume() }
+func (a *App) Seek(positionMs float64) (string, error) { return a.playerSvc.Seek(positionMs) }
+func (a *App) SetSpeed(v float64) (string, error)      { return a.playerSvc.SetSpeed(v) }
+func (a *App) SetVolume(v int) (string, error)         { return a.playerSvc.SetVolume(v) }
+func (a *App) SetDanmaku(on bool) (string, error)      { return a.playerSvc.SetDanmaku(on) }
+func (a *App) ReportViewport(w, h int) (string, error) { return a.playerSvc.ReportViewport(w, h) }
+func (a *App) Close() (string, error)                  { return a.playerSvc.Close() }
+func (a *App) State() string                           { return a.playerSvc.State() }
 
 func marshalJSON(v any) (string, error) {
 	body, err := json.Marshal(v)

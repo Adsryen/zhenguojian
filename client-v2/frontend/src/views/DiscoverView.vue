@@ -5,7 +5,7 @@
 import { onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-import { api, MOCK_MODE } from '@/services/api'
+import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { ApiError, type Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
 import SourceSwitch from '@/components/SourceSwitch.vue'
@@ -74,7 +74,7 @@ async function loadFirst(force = false) {
     items.value = res.items ?? []
     page.value = 1
     hasMore.value = !!res.hasMore
-    warning.value = res.warning || (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : '')
+    warning.value = res.warning || (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : DEGRADED ? '原生桥不可用，当前显示本机缓存数据' : '')
     if (!items.value.length && !res.warning) error.value = ''
   } catch (e: any) {
     if (seq !== requestSeq) return

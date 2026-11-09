@@ -2,36 +2,47 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useAppStore } from '@/stores/app'
+import { t } from '@/services/i18n'
 
 const store = useAppStore()
 const route = useRoute()
 
 // 三段语义：发现 / 我的 / 系统（对齐参照项目侧栏；页面命名与 v1 main.py 页签一致）
-const sections = [
+// V2-4：文案进 i18n 字典，locale 翻转即时重渲染（computed 读 locale.value）
+const sections = computed(() => [
   {
-    label: '发现',
+    label: t('nav.section.discover'),
     items: [
-      { to: '/discover', text: '找剧', icon: 'compass' },
-      { to: '/library', text: '剧库推荐', icon: 'library' },
-      { to: '/search', text: '搜索', icon: 'search' },
-      { to: '/calendar', text: '新剧预约', icon: 'calendar' }
+      { to: '/discover', text: t('nav.discover'), icon: 'compass' },
+      { to: '/library', text: t('nav.library'), icon: 'library' },
+      { to: '/search', text: t('nav.search'), icon: 'search' },
+      // V2-2：新剧日历并入 /reserve（旧 /calendar 占位路由保留兜底，避免深层链接 404）
+      { to: '/reserve', text: t('nav.calendar'), icon: 'calendar' }
     ]
   },
   {
-    label: '我的',
+    label: t('nav.section.mine'),
     items: [
-      { to: '/follow', text: '追更预约', icon: 'heart' },
-      { to: '/history', text: '观看历史', icon: 'history' },
-      { to: '/downloads', text: '下载与合并', icon: 'download' }
+      // V2-2：追更预约并入 /reserve?tab=follow（旧 /follow 占位保留兜底）
+      { to: '/reserve?tab=follow', text: t('nav.follow'), icon: 'heart' },
+      { to: '/history', text: t('nav.history'), icon: 'history' },
+      { to: '/downloads', text: t('nav.downloads'), icon: 'download' }
     ]
   },
   {
-    label: '系统',
-    items: [{ to: '/settings', text: '设置', icon: 'settings' }]
+    label: t('nav.section.system'),
+    items: [{ to: '/settings', text: t('nav.settings'), icon: 'settings' }]
   }
-]
+])
 
-const active = computed(() => route.path)
+// V2-2：/reserve 带 tab query，日历项(无 query)命中默认 tab，追更项命中 ?tab=follow
+function isActive(to: string): boolean {
+  const [path, qs] = to.split('?')
+  if (path !== route.path) return false
+  if (!qs) return route.query.tab !== 'follow'
+  const want = new URLSearchParams(qs).get('tab')
+  return route.query.tab === want
+}
 </script>
 
 <template>
@@ -53,7 +64,7 @@ const active = computed(() => route.path)
           :key="item.to"
           :to="item.to"
           class="nav-item"
-          :class="{ active: active === item.to }"
+          :class="{ active: isActive(item.to) }"
           :title="item.text"
         >
           <span class="ico-wrap">
@@ -90,11 +101,11 @@ const active = computed(() => route.path)
       </div>
     </nav>
 
-    <button class="nav-toggle" :title="store.navCollapsed ? '展开导航' : '折叠导航'" @click="store.toggleNav()">
+    <button class="nav-toggle" :title="store.navCollapsed ? t('nav.expand') : t('nav.collapse')" @click="store.toggleNav()">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <path d="M4 6h16M4 12h16M4 18h16" />
       </svg>
-      <span v-if="!store.navCollapsed" class="toggle-text">收起</span>
+      <span v-if="!store.navCollapsed" class="toggle-text">{{ t('nav.collapse') }}</span>
     </button>
   </aside>
 </template>

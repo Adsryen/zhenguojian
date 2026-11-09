@@ -165,8 +165,80 @@ export interface NativeApi {
   setDanmaku(on: boolean): Promise<void>
   reportViewport(w: number, h: number): Promise<void>
   danmakuAll(session: string): Promise<DanmakuWindowResult>
-  // TODO V2-3 接线（依赖请求已发主代理）：Follow/Unfollow/FollowList/HistoryList（watchstore 绑定）
-  // TODO V2-4 接线：Reservations(calendar date 页) —— 缺绑定时 ReserveView 走 fixtures
+  // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
+  watchlist(): Promise<WatchRow[]>
+  historyList(): Promise<HistoryRow[]>
+  toggleFollow(drama: Drama): Promise<{ followed: boolean }>
+  reserve(drama: Drama): Promise<{ reserved: boolean }>
+  cancelReservation(dramaId: string): Promise<{ ok: boolean }>
+  removeFollow(dramaId: string): Promise<{ ok: boolean }>
+  saveWatch(drama: Drama, episode: number, position: number, duration: number, finished: boolean): Promise<{ ok: boolean }>
+  removeHistory(dramaId: string): Promise<{ ok: boolean }>
+  clearHistory(): Promise<{ ok: boolean }>
+  calendar(date: string, offset: number, gender: number): Promise<CalendarPayload>
+  // ── V2-4 设置/指纹 ──
+  resourceSettings(): Promise<ResourceSettingsSnapshot>
+  saveResourceSettings(patch: Partial<ResourceSettingsSnapshot>): Promise<unknown>
+  buildInfo(): Promise<BuildInfo>
+}
+
+/** watchstore 追剧行（v1 follow 行同构子集；字段表见主代理契约） */
+export interface WatchRow {
+  id: string
+  drama: Drama
+  status: string
+  known: number
+  read: number
+  added: number
+  season: number
+  latestSeason?: number
+  newSeason?: boolean
+  followed: boolean
+  reserved: boolean
+  reserveSeason?: number
+  arrived?: boolean
+  newEpisodes?: number
+  updateAt?: number
+  hasUpdate?: boolean
+  badge?: number
+  seenEpisode?: number
+  hasWatched?: boolean
+  nextDrama?: Drama | null
+  nextSeason?: number
+}
+
+/** watchstore 历史行（v1 save_watch 行同构） */
+export interface HistoryRow {
+  drama: Drama
+  episode: number
+  position: number
+  duration: number
+  updated: number
+  localPath?: string
+}
+
+/** 上新日历应答（核心 data 平铺） */
+export interface CalendarPayload {
+  date?: string
+  items?: CalendarItem[]
+  [k: string]: unknown
+}
+
+/** 网络与下载设置快照（字段与核心 nativeResourceSettings 一致） */
+export interface ResourceSettingsSnapshot {
+  proxyMode?: string
+  proxyUrl?: string
+  catalogConcurrency?: number
+  catalogIntervalMs?: number
+  downloadConcurrency?: number
+  downloadBySource?: boolean
+}
+
+/** 打包提交指纹（exe 同级 build-info.json 或构建期 VCS 注入） */
+export interface BuildInfo {
+  revision?: string
+  commitTime?: string
+  modified?: boolean
 }
 
 /** 带协议 code 的错误（discovery_unavailable / source_blocked 等） */

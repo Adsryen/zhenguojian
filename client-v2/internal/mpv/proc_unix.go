@@ -1,4 +1,5 @@
 //go:build !windows
+
 package mpv
 
 import "syscall"

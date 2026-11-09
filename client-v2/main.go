@@ -26,6 +26,7 @@ func main() {
 		// 深色背景对齐 tokens.css --bg #0f1117，避免 WebView2 首帧白闪
 		BackgroundColour: &options.RGBA{R: 15, G: 17, B: 23, A: 255},
 		OnStartup:        app.startup,
+		OnShutdown:       app.shutdown,
 		Bind: []interface{}{
 			app,
 		},
