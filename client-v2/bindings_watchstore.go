@@ -151,16 +151,5 @@ func (a *App) ClearHistory() (string, error) {
 	return `{"ok":true}`, nil
 }
 
-// Calendar 红果上新日历：date=YYYYMMDD（空=今天），gender 2=全部 1=男频 0=女频。
-// 透传核心 data（items 平铺）；错误中文原文走 JS reject。
-func (a *App) Calendar(date string, offset float64, gender float64) (string, error) {
-	payload := map[string]any{"date": date, "offset": int(offset)}
-	if g := int(gender); g != 2 {
-		payload["gender"] = g
-	}
-	data, err := native.Call("calendar", payload)
-	if err != nil {
-		return "", err
-	}
-	return marshalJSON(data)
-}
+// Calendar（追剧日历）已迁至 bindings_calendar.go：日历属独立功能域，
+// 且原实现把 gender 以 number 传核心（string 字段）会整请求失败，见该文件头注释。
