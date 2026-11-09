@@ -192,18 +192,18 @@ jobs:
 
       - name: Package zip
         run: |
-          Compress-Archive -Path "dist\真果鉴" -DestinationPath "真果鉴-windows-x64.zip" -Force
-          (Get-Item "真果鉴-windows-x64.zip").Length
+          Compress-Archive -Path "dist\真果鉴" -DestinationPath "zhenGuoJian-windows-x64.zip" -Force
+          (Get-Item "zhenGuoJian-windows-x64.zip").Length
 
       - uses: actions/upload-artifact@v4
         with:
           name: zhenGuoJian-windows-x64
-          path: 真果鉴-windows-x64.zip
+          path: zhenGuoJian-windows-x64.zip
           retention-days: 30
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: 真果鉴-windows-x64.zip
+          files: zhenGuoJian-windows-x64.zip
           generate_release_notes: true
