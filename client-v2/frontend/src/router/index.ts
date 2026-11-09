@@ -43,10 +43,11 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '剧库推荐', phase: 'V2-2' }
   },
   {
+    // V2-2：追剧日历（Go Calendar 绑定 + 日期轴/分组/预约联动）
     path: '/calendar',
     name: 'calendar',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { title: '新剧预约', phase: 'V2-2' }
+    component: () => import('@/views/CalendarView.vue'),
+    meta: { title: '追剧日历' }
   },
   {
     path: '/follow',
@@ -63,8 +64,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/downloads',
     name: 'downloads',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { title: '下载与合并', phase: 'V2-3' }
+    component: () => import('@/views/DownloadsView.vue'),
+    meta: { title: '下载与合并' }
   },
   {
     path: '/settings',

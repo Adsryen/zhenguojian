@@ -11,16 +11,18 @@ import type {
   Chapter,
   DanmakuWindowResult,
   DetailResult,
+  DownloadSettingsSnapshot,
+  DownloadSnapshot,
   Drama,
   HistoryRow,
   NativeApi,
-  PlayerState,
+  PlayerSnapshot,
   ResolvePlan,
   ResourceSettingsSnapshot,
   SourceListItem,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockResolvePlan, mockCalendarDays } from './fixtures'
+import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDownloadControl, mockDownloadControlAll, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
   deleteHistoryEntry,
@@ -102,19 +104,18 @@ const realApi: NativeApi = {
     callGo<ResolvePlan>('Resolve', JSON.stringify(drama), JSON.stringify(chapter), index, quality),
   // BrowseFilters 绑定是 (source, category) 位置参数
   browseFilters: (source: string) => callGo<BrowseFiltersResult>('BrowseFilters', source, ''),
-  // ── V2-3b 播放内核：App.{Open,Pause,Resume,Seek,SetSpeed,SetVolume,Close,State,SetDanmaku,ReportViewport,DanmakuAll} ──
-  openVideo: async (videoJSON: string) => {
-    await callGo('Open', videoJSON)
-  },
-  pauseVideo: async () => { await callGo('Pause') },
-  resumeVideo: async () => { await callGo('Resume') },
-  seekVideo: async (positionMs: number) => { await callGo('Seek', positionMs) },
-  setSpeed: async (v: number) => { await callGo('SetSpeed', v) },
-  setVolume: async (v: number) => { await callGo('SetVolume', v) },
-  closeVideo: async () => { await callGo('Close') },
-  playerState: () => callGo<PlayerState>('State'),
-  setDanmaku: async (on: boolean) => { await callGo('SetDanmaku', on) },
-  reportViewport: async (w: number, h: number) => { await callGo('ReportViewport', w, h) },
+  // ── V2-3c 播放绑定：App.{PlayerOpen,PlayerPlay,PlayerPause,PlayerSeek,PlayerSpeed,PlayerVolume,PlayerDanmaku,PlayerClosePlayer,PlayerState,DanmakuAll} ──
+  // PlayerOpen 吃 drama/chapter 原样对象 JSON + 1 起始集号，Go 内部走核心 resolve，返回 Snapshot。
+  playerOpen: (drama: Drama, chapter: Chapter, index: number) =>
+    callGo<PlayerSnapshot>('PlayerOpen', JSON.stringify(drama), JSON.stringify(chapter), index),
+  playerPlay: async () => { await callGo('PlayerPlay') },
+  pauseVideo: async () => { await callGo('PlayerPause') },
+  seekVideo: async (positionMs: number) => { await callGo('PlayerSeek', positionMs) },
+  setSpeed: async (v: number) => { await callGo('PlayerSpeed', v) },
+  setVolume: async (v: number) => { await callGo('PlayerVolume', Math.round(v)) },
+  closeVideo: async () => { await callGo('PlayerClosePlayer') },
+  playerState: () => callGo<PlayerSnapshot>('PlayerState'),
+  setDanmaku: async (on: boolean) => { await callGo('PlayerDanmaku', on) },
   danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session),
   watchlist: () => callGo<WatchRow[]>('Watchlist'),
   historyList: () => callGo<HistoryRow[]>('HistoryList'),
@@ -129,39 +130,80 @@ const realApi: NativeApi = {
   calendar: (date, offset, gender) => callGo<CalendarPayload>('Calendar', date, offset, gender),
   resourceSettings: () => callGo<ResourceSettingsSnapshot>('GetResourceSettings'),
   saveResourceSettings: (patch) => callGo<unknown>('SaveResourceSettings', JSON.stringify(patch)),
-  buildInfo: () => callGo<BuildInfo>('GetBuildInfo')
+  buildInfo: () => callGo<BuildInfo>('GetBuildInfo'),
+  // ── V2-3 下载与合并：App.Download*/Merge*（bindings_download.go，JSON 字符串返回）──
+  downloadList: () => callGo<DownloadSnapshot>('DownloadList'),
+  downloadStart: (drama, entries, quality) =>
+    callGo<{ added: number }>('DownloadStart', JSON.stringify(drama), JSON.stringify(entries), quality),
+  downloadPause: (id) => callGo<{ ok: boolean }>('DownloadPause', id),
+  downloadResume: (id) => callGo<{ ok: boolean }>('DownloadResume', id),
+  downloadRetry: (id) => callGo<{ ok: boolean }>('DownloadRetry', id),
+  downloadCancel: (id) => callGo<{ ok: boolean }>('DownloadCancel', id),
+  downloadArchive: (id) => callGo<{ ok: boolean }>('DownloadArchive', id),
+  downloadRestore: (id) => callGo<{ ok: boolean }>('DownloadRestore', id),
+  downloadControlAll: (command) => callGo<{ ok: boolean }>('DownloadControlAll', command),
+  downloadRemoveBatch: (ids) =>
+    callGo<{ completed: string[]; failures: Record<string, string> }>('DownloadRemoveBatch', JSON.stringify(ids)),
+  downloadSettings: () => callGo<DownloadSettingsSnapshot>('DownloadSettings'),
+  saveDownloadSettings: (concurrency, bySource, mergeVerify) =>
+    callGo<DownloadSettingsSnapshot>('SaveDownloadSettings', concurrency, bySource, mergeVerify),
+  mergeStart: (mode, drama, jobIds) =>
+    callGo<{ queued: number; replaced: boolean; episodes: number[] }>(
+      'MergeStart',
+      mode,
+      drama ? JSON.stringify(drama) : '',
+      JSON.stringify(jobIds)
+    ),
+  mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id)
 }
 
-/* mock 播放内核：500ms 模拟 tick（与真实事件源同频），stores/player.ts 轮询消费 */
-const mockPlayer: PlayerState & { position: number; duration: number; timer?: ReturnType<typeof setInterval>; lastTs: number } = {
-  running: false,
-  opened: false,
-  danmakuOn: true,
-  ep: 0,
-  title: '',
-  position: 0,
-  duration: 180,
-  paused: false,
+/* mock 播放内核（V2-3c 契约）：500ms 模拟 tick（与真实事件源同频），
+   内部状态即 player.Snapshot 形状（posMs/durationMs 毫秒制）；
+   stores/player.ts 轮询 playerState() 消费。eof 为 mock 扩展位：
+   真实后端播完靠 player:ended 事件，mock 面无事件总线，由快照带 eof 兜底。 */
+const MOCK_DM_COUNT = 80 // mockDanmakuAll 铺满 180s 的条目数
+const mockSnap: PlayerSnapshot = {
+  playing: false,
+  posMs: 0,
+  durationMs: 0,
   speed: 1,
   volume: 100,
+  danmaku: { enabled: true, count: 0, note: '' },
+  episode: { dramaID: '', title: '', index: 0 }
+}
+const mockPlayer: { opened: boolean; eof: boolean; timer?: ReturnType<typeof setInterval>; lastTs: number } = {
+  opened: false,
   eof: false,
   lastTs: 0
+}
+
+/** 当前快照（含 mock 扩展 eof 位）；轮询面每次给浅拷贝，防外部改内部状态 */
+function mockSnapshotOut(): PlayerSnapshot {
+  return {
+    ...mockSnap,
+    danmaku: { ...mockSnap.danmaku },
+    episode: { ...mockSnap.episode },
+    eof: mockPlayer.eof
+  }
 }
 
 function mockSimStart() {
   if (mockPlayer.timer) clearInterval(mockPlayer.timer)
   mockPlayer.lastTs = Date.now()
   mockPlayer.timer = setInterval(() => {
-    if (!mockPlayer.opened || mockPlayer.paused || mockPlayer.eof) {
+    if (!mockPlayer.opened || !mockSnap.playing || mockPlayer.eof) {
       mockPlayer.lastTs = Date.now()
       return
     }
     const now = Date.now()
-    mockPlayer.position = Math.min(mockPlayer.duration, mockPlayer.position + ((now - mockPlayer.lastTs) / 1000) * (mockPlayer.speed ?? 1))
+    mockSnap.posMs = Math.min(
+      mockSnap.durationMs,
+      mockSnap.posMs + (now - mockPlayer.lastTs) * (mockSnap.speed ?? 1)
+    )
     mockPlayer.lastTs = now
-    if (mockPlayer.position >= mockPlayer.duration) {
+    if (mockSnap.posMs >= mockSnap.durationMs && mockSnap.durationMs > 0) {
       mockPlayer.eof = true
-      mockPlayer.paused = true
+      mockSnap.playing = false
     }
   }, 500)
 }
@@ -195,50 +237,65 @@ const mockApi: NativeApi = {
     // 与默认构建（无 overlay）一致：模拟 discovery_unavailable，触发前端兜底 chips
     throw new ApiError('筛选墙通道未启用（mock 与默认构建一致）', 'discovery_unavailable')
   },
-  openVideo: async (videoJSON: string) => {
+  playerOpen: async (drama: Drama, chapter: Chapter, index: number) => {
     await delay(150)
-    try {
-      const v = JSON.parse(videoJSON) as { url?: string; title?: string; ep?: number; durationSec?: number }
-      mockPlayer.title = v.title ?? ''
-      mockPlayer.ep = v.ep ?? 0
-      mockPlayer.duration = v.durationSec && v.durationSec > 0 ? v.durationSec : 180
-      mockPlayer.position = 0
-      mockPlayer.eof = false
-      mockPlayer.paused = false
-      mockPlayer.opened = true
-      mockPlayer.running = true
-      mockSimStart()
-    } catch {
-      throw new ApiError('播放参数解析失败 [bad_video]', 'bad_video')
+    if (index < 1) throw new ApiError('集号无效', 'bad_video')
+    if (!drama || !drama.id) throw new ApiError('播放参数解析失败', 'bad_video')
+    const durSec = Number(chapter?.duration ?? 0) || 0
+    mockSnap.playing = true
+    mockSnap.posMs = 0
+    mockSnap.durationMs = durSec > 0 ? durSec * 1000 : 180000
+    mockSnap.episode = { dramaID: drama.id, title: drama.title ?? '', index }
+    // 弹幕语义对齐 Go Service：开弹幕即有已抓计数（mock 铺满 80 条），关时保留计数只撤轨
+    mockSnap.danmaku = {
+      enabled: mockSnap.danmaku.enabled,
+      count: mockSnap.danmaku.enabled ? MOCK_DM_COUNT : 0,
+      note: 'VITE_MOCK 示例弹幕'
     }
-  },
-  pauseVideo: async () => { mockPlayer.paused = true },
-  resumeVideo: async () => {
-    mockPlayer.paused = false
+    mockPlayer.opened = true
     mockPlayer.eof = false
+    mockSimStart()
+    return mockSnapshotOut()
+  },
+  playerPlay: async () => {
+    if (!mockPlayer.opened) throw new ApiError('player: 尚未打开播放会话', 'not_open')
+    if (mockPlayer.eof) return // 播完 keep-open：与真实服务一致，需 seek 回片内或换集
+    mockSnap.playing = true
     mockPlayer.lastTs = Date.now()
+  },
+  pauseVideo: async () => {
+    if (!mockPlayer.opened) throw new ApiError('player: 尚未打开播放会话', 'not_open')
+    mockSnap.playing = false
   },
   seekVideo: async (positionMs: number) => {
-    mockPlayer.position = Math.max(0, Math.min(mockPlayer.duration, positionMs / 1000))
+    if (!mockPlayer.opened) throw new ApiError('player: 尚未打开播放会话', 'not_open')
+    mockSnap.posMs = Math.max(0, Math.min(mockSnap.durationMs, positionMs))
     mockPlayer.lastTs = Date.now()
-    if (mockPlayer.position < mockPlayer.duration) mockPlayer.eof = false
+    if (mockSnap.posMs < mockSnap.durationMs) mockPlayer.eof = false
   },
-  setSpeed: async (v: number) => { mockPlayer.speed = Math.max(0.5, Math.min(3, v)) },
-  setVolume: async (v: number) => { mockPlayer.volume = Math.max(0, Math.min(100, v)) },
+  setSpeed: async (v: number) => { mockSnap.speed = Math.max(0.5, Math.min(3, v)) },
+  setVolume: async (v: number) => { mockSnap.volume = Math.max(0, Math.min(130, v)) },
   closeVideo: async () => {
     if (mockPlayer.timer) clearInterval(mockPlayer.timer)
     mockPlayer.timer = undefined
     mockPlayer.opened = false
-    mockPlayer.running = false
-    mockPlayer.position = 0
     mockPlayer.eof = false
+    // 对齐 Go Service.State()：Close 后返回零值骨架（speed/volume 保留播放意图）
+    mockSnap.playing = false
+    mockSnap.posMs = 0
+    mockSnap.durationMs = 0
+    mockSnap.episode = { dramaID: '', title: '', index: 0 }
   },
   playerState: async () => {
-    const { timer: _t, lastTs: _l, ...rest } = mockPlayer
-    return { ...rest } as PlayerState
+    if (!mockPlayer.opened && mockSnap.episode.index === 0) {
+      // Close 之后：零值骨架（真实 Go 侧 Speed/Volume 保留意图）
+      return { ...mockSnapshotOut(), playing: false, posMs: 0, durationMs: 0 }
+    }
+    return mockSnapshotOut()
   },
-  setDanmaku: async (on: boolean) => { mockPlayer.danmakuOn = on },
-  reportViewport: async () => undefined,
+  setDanmaku: async (on: boolean) => {
+    mockSnap.danmaku = { ...mockSnap.danmaku, enabled: on, count: on ? MOCK_DM_COUNT : mockSnap.danmaku.count }
+  },
   danmakuAll: async (session: string) => {
     await delay(200)
     return mockDanmakuAll(session)
@@ -319,7 +376,29 @@ const mockApi: NativeApi = {
     clearHistoryLocal()
     return { ok: true }
   },
-  calendar: async () => ({ items: mockCalendarDays() })
+  calendar: async (date) => mockCalendarPage(date || ''),
+  // ── V2-3 下载与合并 mock（fixtures 有状态模拟，tick 1s；轮询消费见 stores/downloads.ts）──
+  downloadList: async () => {
+    await delay(60)
+    return mockDownloadList()
+  },
+  downloadStart: async (drama, entries, quality) => {
+    await delay(120)
+    return mockDownloadStart(drama, entries, quality)
+  },
+  downloadPause: async (id) => mockDownloadControl(id, 'pause'),
+  downloadResume: async (id) => mockDownloadControl(id, 'resume'),
+  downloadRetry: async (id) => mockDownloadControl(id, 'resume'),
+  downloadCancel: async (id) => mockDownloadControl(id, 'remove'),
+  downloadArchive: async (id) => mockDownloadControl(id, 'archive'),
+  downloadRestore: async (id) => mockDownloadControl(id, 'restore'),
+  downloadControlAll: async (command) => mockDownloadControlAll(command),
+  downloadRemoveBatch: async (ids) => mockDownloadRemoveBatch(ids),
+  downloadSettings: async () => mockDownloadSettings(),
+  saveDownloadSettings: async (concurrency, bySource, mergeVerify) =>
+    mockSaveDownloadSettings(concurrency, bySource, mergeVerify),
+  mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
+  mergeCancel: async (id) => mockMergeCancel(id)
 }
 
 /* 降级策略：真实 exe 里桥必在；若 WebView2 初始化竞态导致 window.go 短暂缺失，

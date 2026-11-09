@@ -6,11 +6,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"zhenguojian/client-v2/internal/downloadsvc"
 	"zhenguojian/client-v2/internal/native"
 	"zhenguojian/client-v2/internal/player"
 )
@@ -19,6 +22,8 @@ type App struct {
 	ctx context.Context
 	// V2-3b：播放服务（懒 spawn mpv；生命周期钩子 + 绑定方法均委托它）。
 	playerSvc *player.Service
+	// V2-3：下载与合并服务（轮询事件 + 合并队列；绑定见 bindings_download.go）。
+	downloadSvc *downloadsvc.Service
 }
 
 func NewApp() *App {
@@ -27,19 +32,30 @@ func NewApp() *App {
 		appRoot = filepath.Dir(exe)
 	}
 	a := &App{}
-	a.playerSvc = player.New(player.Options{
+	dataDir, _ := native.DataDir()
+	a.playerSvc = player.New(player.Config{
 		AppRoot: appRoot,
+		DataDir: dataDir,
+		// 播放计划解析走核心 resolve 动作（同 v1 编排：drama/chapter 原样对象 + 1 起始集号）。
+		Resolver: nativePlayerResolver{},
+		// 弹幕抓取适配：本壳唯一允许 import native 的注入点（service 包不依赖 native）。
+		DanmakuSource: player.NewDanmakuSource(native.DanmakuWindow),
+		Emit: func(event string, payload any) {
+			if a.ctx != nil {
+				runtime.EventsEmit(a.ctx, event, payload)
+			}
+		},
+		// 窗口内嵌句柄：现有壳无 HWND 管线，0 = mpv 独立窗口（真机遗留项）。
+		Wid: 0,
+	})
+	a.downloadSvc = downloadsvc.New(downloadsvc.Options{
+		Call: native.Call,
 		EventsEmit: func(name string, data ...any) {
 			if a.ctx != nil {
 				runtime.EventsEmit(a.ctx, name, data...)
 			}
 		},
-		// 弹幕抓取适配：本壳唯一允许 import native 的注入点（service 包不依赖 native）。
-		DanmakuSource: func(_ context.Context, session string, startMs, endMs int64) (map[string]any, error) {
-			return native.DanmakuWindow(session, startMs, endMs)
-		},
-		// 窗口内嵌句柄：现有壳无 HWND 管线，返回 0 = mpv 独立窗口（真机遗留项）。
-		WidProvider: func() uintptr { return 0 },
+		DataDirFunc: native.DataDir,
 	})
 	return a
 }
@@ -52,12 +68,13 @@ func (a *App) startup(ctx context.Context) {
 		// sync.Once 语义：initialize 失败会保持到进程重启（数据目录不可写是硬故障）。
 		println("[zhenguojian] engine initialize 失败: " + err.Error())
 	}
-	a.playerSvc.OnStartup(ctx)
+	a.downloadSvc.OnStartup(ctx)
 }
 
 // shutdown 挂 wails OnShutdown：关停播放服务（Quit mpv、停 tick、停弹幕抓取）。
 func (a *App) shutdown(ctx context.Context) {
-	a.playerSvc.OnShutdown(ctx)
+	a.downloadSvc.OnShutdown(ctx)
+	_ = a.playerSvc.Close()
 }
 
 // ---------- 绑定方法（全部返回 JSON 字符串；错误走 JS reject） ----------
@@ -174,19 +191,68 @@ func (a *App) DanmakuAll(session string) (string, error) {
 	return marshalJSON(data)
 }
 
-// ---------- V2-3b 播放绑定（委托 internal/player.Service） ----------
+// ---------- V2-3 播放绑定（委托 internal/player.Service，新 Config 契约） ----------
 
-// Open videoJSON = {url,title,session,local,durationSec,headers,ep}（前端组装自 Resolve 应答）。
-func (a *App) Open(videoJSON string) (string, error)   { return a.playerSvc.Open(videoJSON) }
-func (a *App) Pause() (string, error)                  { return a.playerSvc.Pause() }
-func (a *App) Resume() (string, error)                 { return a.playerSvc.Resume() }
-func (a *App) Seek(positionMs float64) (string, error) { return a.playerSvc.Seek(positionMs) }
-func (a *App) SetSpeed(v float64) (string, error)      { return a.playerSvc.SetSpeed(v) }
-func (a *App) SetVolume(v int) (string, error)         { return a.playerSvc.SetVolume(v) }
-func (a *App) SetDanmaku(on bool) (string, error)      { return a.playerSvc.SetDanmaku(on) }
-func (a *App) ReportViewport(w, h int) (string, error) { return a.playerSvc.ReportViewport(w, h) }
-func (a *App) Close() (string, error)                  { return a.playerSvc.Close() }
-func (a *App) State() string                           { return a.playerSvc.State() }
+// nativePlayerResolver 把核心 resolve 应答映射为播放计划。
+// Plan 的 JSON 名已对齐核心 nativePlan（app_runtime.go:145），一次编解码即可。
+type nativePlayerResolver struct{}
+
+func (nativePlayerResolver) Resolve(_ context.Context, req player.Request) (player.Plan, error) {
+	data, err := native.Resolve(req.Drama, req.Chapter, req.Index, 0)
+	if err != nil {
+		return player.Plan{}, err
+	}
+	body, err := json.Marshal(data)
+	if err != nil {
+		return player.Plan{}, err
+	}
+	var plan player.Plan
+	if err := json.Unmarshal(body, &plan); err != nil {
+		return player.Plan{}, err
+	}
+	if strings.TrimSpace(plan.URL) == "" {
+		return player.Plan{}, errors.New("核心未返回可播放地址")
+	}
+	return plan, nil
+}
+
+// PlayerOpen dramaJSON/chapterJSON = 详情页透传的原样对象；index 为 1 起始集号。
+// Go 内部走核心 resolve（同 v1 编排），返回 player.Snapshot 的 JSON。
+func (a *App) PlayerOpen(dramaJSON, chapterJSON string, index int) (string, error) {
+	drama, err := unmarshalObject(dramaJSON)
+	if err != nil {
+		return "", err
+	}
+	chapter, err := unmarshalObject(chapterJSON)
+	if err != nil {
+		return "", err
+	}
+	if index < 1 {
+		return "", errors.New("集号无效")
+	}
+	title, _ := drama["title"].(string)
+	dramaID, _ := drama["id"].(string)
+	err = a.playerSvc.Open(a.ctx, player.Request{
+		DramaID: dramaID,
+		Title:   title,
+		Index:   index,
+		Drama:   drama,
+		Chapter: chapter,
+	})
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(a.playerSvc.State())
+}
+
+func (a *App) PlayerPlay() (string, error)           { return "", a.playerSvc.Play() }
+func (a *App) PlayerPause() (string, error)          { return "", a.playerSvc.Pause() }
+func (a *App) PlayerSeek(ms float64) (string, error) { return "", a.playerSvc.SeekTo(int64(ms)) }
+func (a *App) PlayerSpeed(v float64) (string, error) { return "", a.playerSvc.SetSpeed(v) }
+func (a *App) PlayerVolume(v int) (string, error)    { return "", a.playerSvc.SetVolume(v) }
+func (a *App) PlayerDanmaku(on bool) (string, error) { return "", a.playerSvc.SetDanmakuEnabled(on) }
+func (a *App) PlayerState() (string, error)          { return marshalJSON(a.playerSvc.State()) }
+func (a *App) PlayerClosePlayer() (string, error)    { return "", a.playerSvc.Close() }
 
 func marshalJSON(v any) (string, error) {
 	body, err := json.Marshal(v)

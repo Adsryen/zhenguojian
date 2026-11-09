@@ -109,6 +109,28 @@ export interface CalendarItem {
   [key: string]: unknown
 }
 
+/** 核心日历条目（case "calendar" → hongguoCalendarItem 平铺形状，逐键对照
+    guoapp-src/native/core/provider_hongguo_calendar.go；条目属于所查询日期，无逐条 date） */
+export interface CalendarEntry {
+  seriesId?: string
+  title?: string
+  cover?: string
+  description?: string
+  category?: string
+  tags?: string[]
+  episodeCnt?: number
+  publishAt?: number // ms 时间戳
+  publishText?: string // sub_info 原文（如「今晚18:00 更新」）
+  hint?: string // 未上线：上线时间文案
+  note?: string // 已上线=热度文本；未上线=预计上线文本
+  heat?: string
+  expectedText?: string
+  isOnline?: boolean
+  subscribed?: boolean // 服务端订阅态（账号侧）
+  badge?: string // title_left_icon 角标文案
+  [key: string]: unknown
+}
+
 /** 弹幕条目（core danmaku/danmakuAll 应答 items[] 形状，同 internal/danmaku.Item） */
 export interface DanmakuItem {
   id: string
@@ -128,19 +150,53 @@ export interface DanmakuWindowResult {
   windows?: Record<string, number>
 }
 
-/** App.State() 快照（internal/player.Service.State） */
-export interface PlayerState {
-  running: boolean
-  opened: boolean
-  danmakuOn: boolean
-  ep: number
+/** Snapshot 的弹幕部分（internal/player.DanmakuState） */
+export interface PlayerDanmakuState {
+  enabled: boolean
+  count: number
+  note: string
+}
+
+/** Snapshot 的当前集标识（internal/player.EpisodeRef） */
+export interface PlayerEpisode {
+  dramaID: string
   title: string
-  position?: number
-  duration?: number
-  paused?: boolean
-  speed?: number
-  volume?: number
+  index: number
+}
+
+/**
+ * App.PlayerState() / App.PlayerOpen() 返回值，也是 player:tick 事件 payload
+ * （internal/player.Snapshot；posMs/durationMs 毫秒制）
+ */
+export interface PlayerSnapshot {
+  playing: boolean
+  posMs: number
+  durationMs: number
+  speed: number
+  volume: number
+  danmaku: PlayerDanmakuState
+  episode: PlayerEpisode
+  /**
+   * mock 扩展位：本集播完标记（VITE_MOCK 轮询面无事件总线，靠它感知播完）。
+   * 真实后端不发此字段，播完走 player:ended 事件。
+   */
   eof?: boolean
+}
+
+/** player:ended 事件 payload（service.go markEndedLocked） */
+export interface PlayerEndedPayload {
+  episode: PlayerEpisode
+}
+
+/** player:error 事件 payload（service.go emit player:error） */
+export interface PlayerErrorPayload {
+  message: string
+}
+
+/** danmaku:stats 事件 payload（service.go emitStatsLocked） */
+export interface DanmakuStatsPayload {
+  count: number
+  note: string
 }
 
 /** 适配层统一接口：wails 实现与 mock 实现同签名 */
@@ -153,17 +209,17 @@ export interface NativeApi {
   detail(drama: Drama): Promise<DetailResult>
   browseFilters(source: string): Promise<BrowseFiltersResult>
   resolve(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<ResolvePlan>
-  // ── V2-3b 播放内核桥（internal/player.Service；事件走 wails EventsOn，见 stores/player.ts）──
-  openVideo(videoJSON: string): Promise<void>
+  // ── V2-3c 播放桥（app.go「V2-3c 播放绑定」；事件 player:tick/ended/error + danmaku:stats，见 stores/player.ts）──
+  /** 起播：drama/chapter 原样对象交给 Go，Go 内部走核心 resolve；index 1 起始；返回 Snapshot */
+  playerOpen(drama: Drama, chapter: Chapter, index: number): Promise<PlayerSnapshot>
+  playerPlay(): Promise<void>
   pauseVideo(): Promise<void>
-  resumeVideo(): Promise<void>
   seekVideo(positionMs: number): Promise<void>
   setSpeed(v: number): Promise<void>
   setVolume(v: number): Promise<void>
   closeVideo(): Promise<void>
-  playerState(): Promise<PlayerState>
+  playerState(): Promise<PlayerSnapshot>
   setDanmaku(on: boolean): Promise<void>
-  reportViewport(w: number, h: number): Promise<void>
   danmakuAll(session: string): Promise<DanmakuWindowResult>
   // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
   watchlist(): Promise<WatchRow[]>
@@ -180,6 +236,21 @@ export interface NativeApi {
   resourceSettings(): Promise<ResourceSettingsSnapshot>
   saveResourceSettings(patch: Partial<ResourceSettingsSnapshot>): Promise<unknown>
   buildInfo(): Promise<BuildInfo>
+  // ── V2-3 下载与合并（bindings_download.go；事件 downloads:update）──
+  downloadList(): Promise<DownloadSnapshot>
+  downloadStart(drama: Drama, entries: DownloadEntry[], quality: number): Promise<{ added: number }>
+  downloadPause(id: string): Promise<{ ok: boolean }>
+  downloadResume(id: string): Promise<{ ok: boolean }>
+  downloadRetry(id: string): Promise<{ ok: boolean }>
+  downloadCancel(id: string): Promise<{ ok: boolean }>
+  downloadArchive(id: string): Promise<{ ok: boolean }>
+  downloadRestore(id: string): Promise<{ ok: boolean }>
+  downloadControlAll(command: 'pauseAll' | 'resumeAll'): Promise<{ ok: boolean }>
+  downloadRemoveBatch(ids: string[]): Promise<{ completed: string[]; failures: Record<string, string> }>
+  downloadSettings(): Promise<DownloadSettingsSnapshot>
+  saveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): Promise<DownloadSettingsSnapshot>
+  mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
+  mergeCancel(id: string): Promise<{ ok: boolean }>
 }
 
 /** watchstore 追剧行（v1 follow 行同构子集；字段表见主代理契约） */
@@ -217,10 +288,17 @@ export interface HistoryRow {
   localPath?: string
 }
 
-/** 上新日历应答（核心 data 平铺） */
+/** 上新日历应答（核心 data 平铺；items 兼容 flat CalendarEntry 与 legacy 嵌套 CalendarItem） */
 export interface CalendarPayload {
   date?: string
   items?: CalendarItem[]
+  /** 核心 App.Calendar 透传字段（provider_hongguo_calendar.hongguoCalendarPage） */
+  dates?: string[]
+  defaultDate?: string
+  hasMore?: boolean
+  nextOffset?: number
+  sessionId?: string
+  fetchedAt?: string
   [k: string]: unknown
 }
 
@@ -232,7 +310,65 @@ export interface ResourceSettingsSnapshot {
   catalogIntervalMs?: number
   downloadConcurrency?: number
   downloadBySource?: boolean
+  /** 核心侧提示（如代理不可用），原样透传展示 */
+  warning?: string
 }
+
+/** 下载任务快照行（核心 nativeDownloadJob + Go 侧 speed/eta 补算，对齐 downloadsvc.applyJobsLocked） */
+export interface DownloadJobRow {
+  id: string
+  drama?: Drama
+  chapter?: Chapter
+  index: number
+  quality?: number
+  actualQuality?: number
+  bitrate?: number
+  state: 'queued' | 'downloading' | 'paused' | 'completed' | 'failed' | 'removing'
+  archived?: boolean
+  folder?: string
+  bytes: number
+  total: number
+  progress: number
+  error?: string
+  created?: number
+  revision?: number
+  retryAt?: number
+  resolveRetries?: number
+  speed?: number
+  eta?: number
+}
+
+/** 合并条目行（对齐 downloadsvc.MergeEntry） */
+export interface MergeEntryRow {
+  id: string
+  dramaId: string
+  title: string
+  episodes: number[]
+  count: number
+  state: 'queued' | 'running' | 'done' | 'failed' | 'canceled'
+  stage?: string
+  progress: number
+  detail?: string
+  output?: string
+  bytes?: number
+}
+
+/** App.DownloadList / downloads:update 事件载荷 */
+export interface DownloadSnapshot {
+  jobs: DownloadJobRow[]
+  merges: MergeEntryRow[]
+  status?: string
+  mergeVerify?: boolean
+}
+
+/** App.DownloadStart entries 单元 */
+export interface DownloadEntry {
+  chapter: Chapter
+  index: number
+}
+
+/** App.DownloadSettings：资源设置 + mergeVerify */
+export type DownloadSettingsSnapshot = ResourceSettingsSnapshot & { mergeVerify?: boolean }
 
 /** 打包提交指纹（exe 同级 build-info.json 或构建期 VCS 注入） */
 export interface BuildInfo {

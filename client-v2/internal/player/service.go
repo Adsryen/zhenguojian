@@ -1,21 +1,31 @@
-// Package player 是 wails 壳与 internal/mpv + internal/danmaku 内核之间的服务层（V2-3b）。
+// Package player 是 v2 客户端的播放器服务层：mpv 生命周期编排 + 弹幕管线，
+// 进程内运行，供 app.go 接线、前端 PlayerView.vue 订阅。不含任何 UI。
 //
-// 职责（对齐任务卡）：
-//   - 懒 spawn：Open 才拉起 mpv（--idle + 双 IPC 连接），Close 回收；
-//   - 方法面返回 JSON 字符串，错误沿用壳层「中文消息 [code]」约定；
-//   - 事件只发两路：player:tick（500ms 快照）与 player:state（file-loaded/disconnected/exit，附 why_died）；
-//   - 弹幕编排：Fetcher 由 tick 驱动，version 变化 → BuildAss → WriteAss → sub-add/sub-reload；
-//     本包不 import internal/native——弹幕抓取经注入函数 DanmakuSource 由壳层适配。
+// 前端契约（Emit 出口转发给 runtime.EventsEmit 的事件名与 payload）：
 //
-// v1 语义参照：zhenguojian/app/zhenguojian/player.py（生命周期）、
-// main.py 弹幕循环（Tick 驱动 + 同文件原地重写 + sub-reload）。
+//	player:tick    每 TickInterval（默认 500ms）一次的轻量状态快照：
+//	               {"playing":bool,"posMs":int64,"durationMs":int64,
+//	                "speed":float64,"volume":int,
+//	                "danmaku":{"enabled":bool,"count":int,"note":string},
+//	                "episode":{"dramaID":string,"title":string,"index":int}}
+//	               仅在已 Open（有播放器实例）时发送；前端零轮询。
+//	player:ended   本集播完（end-file reason=eof 或 eof-reached 兜底，每集一次）：
+//	               {"episode":{"dramaID":...,"title":...,"index":...}}
+//	player:error   播放/重建失败等人话错误：{"message":string}
+//	danmaku:stats  弹幕抓取进度或备注变化：{"count":int,"note":string}
+//
+// 会话语义：Service 单实例串行（一把锁），Open 换集复用同一 mpv 进程
+// （loadfile replace），mpv 进程死亡/IPC 断开时自动重建并从上次位置续播，
+// 连续失败超过 MaxRebuilds 次放弃并发 player:error。
 package player
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"strconv"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -23,655 +33,811 @@ import (
 	"zhenguojian/client-v2/internal/mpv"
 )
 
-// DanmakuWindowFunc 弹幕窗口抓取注入点（壳层用 native.DanmakuWindow 适配）。
-// endMs 为绝对窗尾毫秒，返回 map 即核心 danmaku 动作原始应答
-// （{items[],startMs,nextMs,total,windows}）。nil = 无弹幕能力。
-type DanmakuWindowFunc func(ctx context.Context, session string, startMs, endMs int64) (map[string]any, error)
+// ErrNotOpen 表示还没有播放会话就调用了控制方法。
+var ErrNotOpen = errors.New("player: 尚未打开播放会话")
 
-// Options 服务装配参数（单测注入 fake 全部走这里）。
-type Options struct {
-	// Backend 覆盖 mpv 拉起后端（nil = mpv.DefaultBackend()）。
-	Backend mpv.Backend
-	// MpvPath/AppRoot 透传 mpv.Config；留空走内核兜底链。
-	MpvPath    string
-	AppRoot    string
-	HWDec      bool
-	EventsEmit func(name string, data ...any)
-	// DanmakuSource nil = 弹幕链路关闭（SetDanmaku 仍透传 sub-visibility）。
-	DanmakuSource DanmakuWindowFunc
-	// WidProvider 每次 spawn 时取宿主窗口句柄（壳层传 hwnd 提供者）。
-	WidProvider func() uintptr
-	// TickInterval 事件 tick 周期，<=0 用 500ms（v1 _tick 同值）。
-	TickInterval time.Duration
-	// FetcherOpt 弹幕抓取节奏覆盖（单测缩窗用）。
-	FetcherOpt danmaku.FetcherOptions
-	// AssDir ASS 落盘目录；"" = WriteAss 默认 tempdir/zhenguojian-danmaku。
-	AssDir string
-	// AssKeep ASS 目录保留文件数（<=0 用 WriteAss 默认 6）。
-	AssKeep int
+// ErrClosed 表示服务已 Close。
+var ErrClosed = errors.New("player: 服务已关闭")
+
+// Plan 是 Resolver 解析一集给出的播放计划。JSON 名对齐核心 nativePlan
+// （guoapp-src/native/core/app_runtime.go:145）：会话键是 `session`，
+// `playbackSession` 只是核心 danmaku 动作的入参名。核心当前不产出
+// mime/durationSeconds，字段留空即可（时长走 mpv duration 属性兜底）。
+type Plan struct {
+	URL           string            `json:"url"`
+	Headers       map[string]string `json:"headers"`
+	Mime          string            `json:"mime,omitempty"`
+	DecryptionKey string            `json:"decryptionKey,omitempty"`
+	DurationSec   float64           `json:"durationSeconds,omitempty"` // 0 = 未知，以 mpv 实测时长为准
+	Session       string            `json:"session,omitempty"`         // 弹幕抓取会话；空 = 本集无弹幕会话
+	Local         bool              `json:"local,omitempty"`
+	Quality       int               `json:"quality,omitempty"`
 }
 
-// Video Open 的入参（前端组装自 Resolve 应答）。
-type Video struct {
-	URL         string            `json:"url"`
-	Title       string            `json:"title"`
-	Session     string            `json:"session"` // 弹幕 playbackSession，可空=无弹幕
-	Local       bool              `json:"local"`
-	DurationSec float64           `json:"durationSec"`
-	Headers     map[string]string `json:"headers"`
-	Ep          int               `json:"ep"`
+// Request 是一次 Open 的请求：drama/chapter 为详情页透传的原样对象，
+// 由注入的 Resolver 换回 Plan。Index 是 1 起始集号（ASS 文件名 key 用）。
+type Request struct {
+	DramaID string
+	Title   string
+	Index   int
+	Drama   map[string]any
+	Chapter map[string]any
 }
 
-// Service 播放服务。并发模型：单一 mu 串行化所有状态变更与 mpv 命令；
-// tick/事件消费各自 goroutine，经 done 通道随 Close/替换 player 退出。
-type Service struct {
-	opts Options
-
-	mu         sync.Mutex
-	ctx        context.Context // OnStartup 注入；nil 前 Open 报错
-	closing    bool
-	player     *mpv.Player
-	playerDone chan struct{}
-	tickDone   chan struct{}
-	video      Video
-	opened     bool
-	rebuilds   int
-
-	// 弹幕编排状态
-	fetcher      *danmaku.Fetcher
-	dmOn         bool
-	dmVersion    int64
-	subAdded     bool
-	assPath      string
-	assDirty     bool
-	viewW, viewH int
+// Resolver 把 (drama, chapter, index) 解析成播放计划。
+// 生产实现由 app.go 适配 internal/native.Resolve；单测注入假实现。
+type Resolver interface {
+	Resolve(ctx context.Context, req Request) (Plan, error)
 }
 
-// New 构造服务（不拉起任何资源）。
-func New(opts Options) *Service {
-	if opts.TickInterval <= 0 {
-		opts.TickInterval = 500 * time.Millisecond
-	}
-	s := &Service{opts: opts, dmOn: true}
-	if opts.DanmakuSource != nil {
-		s.fetcher = danmaku.NewFetcher(&sourceAdapter{fn: opts.DanmakuSource, svc: s}, opts.FetcherOpt)
-	}
-	return s
+// MpvPlayer 是 Service 用到的 mpv.Player 方法子集（*mpv.Player 天然满足）。
+type MpvPlayer interface {
+	Start(ctx context.Context) error
+	LoadWith(url string, headers map[string]string, title string, opts mpv.LoadOptions) error
+	Play() error
+	Pause() error
+	AbsSeekSmooth(seconds float64) error
+	SetSpeed(rate float64) error
+	SetVolume(level int) error
+	SubAdd(path, title string) error
+	SubReload() error
+	SubRemove() error
+	State() mpv.State
+	Alive() bool
+	Events() <-chan mpv.Event
+	Quit(ctx context.Context) error
 }
 
-// sourceAdapter 把注入的 map 形窗口应答转成 danmaku.Window。
-type sourceAdapter struct {
-	fn  DanmakuWindowFunc
-	svc *Service
+// MpvLauncher 按配置造一个播放器实例（不 Start）。默认包装 mpv.New。
+type MpvLauncher func(cfg mpv.Config) MpvPlayer
+
+// Logger 最小日志接口（*log.Logger 满足）；nil = 静默。
+type Logger interface {
+	Printf(format string, v ...any)
 }
 
-func (a *sourceAdapter) FetchWindow(ctx context.Context, session string, startMs, endMs int64) (danmaku.Window, error) {
-	m, err := a.fn(ctx, session, startMs, endMs)
+// DanmakuWindowFunc 与 internal/native.DanmakuWindow 同形：
+// endMs 是绝对窗尾毫秒（核心 danmaku 动作的 durationMs 语义，同 v1）。
+type DanmakuWindowFunc func(session string, startMs, endMs int64) (map[string]any, error)
+
+// NewDanmakuSource 把核心门面的窗口函数适配成 danmaku.Source，
+// 供 Config.DanmakuSource 注入（app.go 传 native.DanmakuWindow 即可）。
+func NewDanmakuSource(fn DanmakuWindowFunc) danmaku.Source { return coreSource{fn: fn} }
+
+type coreSource struct{ fn DanmakuWindowFunc }
+
+// FetchWindow 忽略 ctx（核心门面调用本身同步且自带超时）。
+func (c coreSource) FetchWindow(_ context.Context, session string, startMs, endMs int64) (danmaku.Window, error) {
+	raw, err := c.fn(session, startMs, endMs)
 	if err != nil {
 		return danmaku.Window{}, err
 	}
-	var w danmaku.Window
-	if len(m) > 0 {
-		// 核心返回 {items[],startMs,nextMs,total,windows}，字段名大小写不敏感匹配。
-		b, err := json.Marshal(m)
-		if err != nil {
-			return danmaku.Window{}, fmt.Errorf("弹幕窗口重编码失败: %w", err)
-		}
-		if err := json.Unmarshal(b, &w); err != nil {
-			return danmaku.Window{}, fmt.Errorf("弹幕窗口结构不识别: %w", err)
-		}
-	}
-	return w, nil
-}
-
-// OnStartup 由 wails OnStartup 调用（生命周期 ctx）。
-func (s *Service) OnStartup(ctx context.Context) {
-	s.mu.Lock()
-	s.ctx = ctx
-	s.mu.Unlock()
-}
-
-// OnShutdown 由 wails OnShutdown 调用：停循环、退进程。幂等。
-func (s *Service) OnShutdown(ctx context.Context) {
-	s.mu.Lock()
-	s.closing = true
-	s.mu.Unlock()
-	_, _ = s.Close()
-}
-
-// ── 方法面（全部返回 JSON 字符串；错误按「中文 [code]」） ──
-
-// Open 拉起/复用 mpv 并换源。重复 Open = 换源（v1 load 语义）。
-func (s *Service) Open(videoJSON string) (string, error) {
-	var v Video
-	if err := json.Unmarshal([]byte(videoJSON), &v); err != nil {
-		return "", fail("bad_video", "播放参数解析失败: "+err.Error())
-	}
-	if v.URL == "" {
-		return "", fail("bad_video", "播放参数缺少 url")
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.checkLive(); err != nil {
-		return "", err
-	}
-	p, err := s.ensureStartedLocked()
+	// 核心回复形状 {items[], startMs, nextMs, total, windows}；
+	// 经 JSON 往返落到 danmaku.Window（Item 的 tag 与核心行字段一致）。
+	buf, err := json.Marshal(raw)
 	if err != nil {
-		return "", err
+		return danmaku.Window{}, fmt.Errorf("player: 弹幕窗口编码失败: %w", err)
 	}
-	if err := s.applySourceLocked(p, v); err != nil {
-		return "", err
+	var decoded struct {
+		Items   []map[string]any `json:"items"`
+		NextMs  int64            `json:"nextMs"`
+		Total   int64            `json:"total"`
+		Windows map[string]int64 `json:"windows"`
 	}
-	return `{"ok":true}`, nil
+	if err := json.Unmarshal(buf, &decoded); err != nil {
+		return danmaku.Window{}, fmt.Errorf("player: 弹幕窗口解码失败: %w", err)
+	}
+	return danmaku.Window{
+		Items:   danmaku.FromMaps(decoded.Items),
+		NextMs:  decoded.NextMs,
+		Total:   decoded.Total,
+		Windows: decoded.Windows,
+	}, nil
 }
 
-func (s *Service) Pause() (string, error) {
-	return s.simple(func(p *mpv.Player) error { return p.Pause() })
-}
-func (s *Service) Resume() (string, error) {
-	return s.simple(func(p *mpv.Player) error { return p.Play() })
+// Config 注入 Service 的全部外部依赖；零值走括号里的默认。
+type Config struct {
+	Resolver Resolver // Open 取播放计划；nil → Open 直接报错
+	// MpvLauncher 造 mpv 实例；nil = 默认包装 mpv.New。
+	// 单测注入假实例集合，可在断线事件后验证自动重建续播。
+	MpvLauncher MpvLauncher
+	// DanmakuSource 弹幕窗口源（NewDanmakuSource(native.DanmakuWindow) 适配）；
+	// nil = 弹幕禁用（只发 player:tick 的 danmaku 快照，不抓取）。
+	DanmakuSource danmaku.Source
+	// Emit 事件出口；app.go 接线 runtime.EventsEmit。契约：非阻塞。
+	Emit      func(event string, payload any)
+	DataDir   string // 数据根目录（ASS 兜底路径用）
+	AssDir    string // ASS 输出目录；"" → DataDir/ass；仍 "" → danmaku.WriteAss 临时目录默认
+	MpvPath   string
+	AppRoot   string
+	Wid       uintptr
+	HWDec     bool
+	MpvSocket string      // 空 → mpv 默认（同 socket 覆盖式重启，v1 语义）
+	Backend   mpv.Backend // 单测注入 net.Pipe 假后端；nil → 平台默认
+	Logger    Logger
+
+	TickInterval time.Duration          // 默认 500ms（对齐 v1 界面刷新节奏）
+	MaxRebuilds  int                    // 断线自动重建上限，默认 3；超限发 player:error 放弃
+	AssKeep      int                    // 每剧保留的 ASS 文件数；0 → WriteAss 默认
+	FetcherOpts  danmaku.FetcherOptions // 弹幕抓取节奏覆盖；零值 = v1 默认
 }
 
-// Seek 进度条跳转：positionMs 绝对毫秒 → absolute+exact（v1 进度条语义）。
-func (s *Service) Seek(positionMs float64) (string, error) {
-	return s.simple(func(p *mpv.Player) error { return p.AbsSetPosition(positionMs / 1000) })
+// DanmakuState 快照里的弹幕部分。
+type DanmakuState struct {
+	Enabled bool   `json:"enabled"`
+	Count   int    `json:"count"`
+	Note    string `json:"note"`
 }
 
-// SetSpeed 倍速：限幅 0.5–3.0（v1 单点入口语义 player.py:1870 吸附+应用一体；
-// v1 档位表 SPEED_CHOICES=0.5/0.75/1/1.25/1.5/2/3 player.py:61，前端只发档位值，
-// 服务端限幅兜底越界输入）。
-func (s *Service) SetSpeed(v float64) (string, error) {
-	if v < 0.5 {
-		v = 0.5
-	}
-	if v > 3.0 {
-		v = 3.0
-	}
-	return s.simple(func(p *mpv.Player) error { return p.SetSpeed(v) })
+// EpisodeRef 快照里的当前集标识。
+type EpisodeRef struct {
+	DramaID string `json:"dramaID"`
+	Title   string `json:"title"`
+	Index   int    `json:"index"`
 }
 
-// SetVolume 音量：钳位 0–100（v1 set_volume player.py:1905 max(0,min(100))；
-// 前端持久化键 zgj.player.volume 由 stores/player.ts 负责）。
-func (s *Service) SetVolume(v int) (string, error) {
-	if v < 0 {
-		v = 0
-	}
-	if v > 100 {
-		v = 100
-	}
-	return s.simple(func(p *mpv.Player) error { return p.SetVolume(v) })
+// Snapshot 是 player:tick 的 payload，也是 State() 的返回值。
+type Snapshot struct {
+	Playing    bool         `json:"playing"`
+	PosMs      int64        `json:"posMs"`
+	DurationMs int64        `json:"durationMs"`
+	Speed      float64      `json:"speed"`
+	Volume     int          `json:"volume"`
+	Danmaku    DanmakuState `json:"danmaku"`
+	Episode    EpisodeRef   `json:"episode"`
 }
 
-// SetDanmaku 弹幕开关：只切 sub-visibility，不丢抓取进度；
-// 关闭期间 tick 不再喂 Fetcher（不请求）。重新开启强制重建 ASS 补挂。
-func (s *Service) SetDanmaku(on bool) (string, error) {
+// Service 播放器生命周期 + 弹幕管线编排。所有公开方法可并发调用，
+// 内部一把锁保证单实例串行；事件在其间发出，Emit 必须非阻塞。
+type Service struct {
+	cfg Config
+
+	mu       sync.Mutex
+	ctx      context.Context // 服务生命周期（Close 取消）
+	cancel   context.CancelFunc
+	closed   bool
+	quitting bool // 用户主动 Quit mpv 中：抑制断线自动重建
+
+	// 当前会话
+	req      *Request
+	plan     *Plan
+	p        MpvPlayer
+	pumpStop chan struct{} // 当前实例事件泵的停止信号
+
+	// 播放意图（重建后回放到新实例）
+	wantPaused bool
+	wantSpeed  float64
+	wantVolume int
+
+	// 弹幕
+	enabled     bool // Config.DanmakuSource 非 nil 时默认开
+	fetcher     *danmaku.Fetcher
+	subAttached bool
+	lastVersion int64
+	assPath     string
+
+	// 事件泵杂项
+	lastPosMs       int64 // 上一次 tick 位置（跳变检测）
+	pendingResumeMs int64 // 重建后等新 file-loaded 再续播（v1 resume 时机）
+	rebuilds        int   // 本集已自动重建次数（Open/成功加载后清零）
+	endedFired      bool  // 本集 player:ended 是否已发（end-file 与 eof-reached 双通道去重）
+	durMs           int64 // 权威时长：plan 给出或 mpv duration 属性（取先到的有效值）
+
+	// danmaku:stats 去重缓存
+	lastNote  string
+	lastCount int
+}
+
+// New 组装服务（不启动任何进程；Open 才 spawn）。
+func New(cfg Config) *Service {
+	if cfg.MpvLauncher == nil {
+		cfg.MpvLauncher = func(mc mpv.Config) MpvPlayer { return mpv.New(mc) }
+	}
+	if cfg.Emit == nil {
+		cfg.Emit = func(string, any) {}
+	}
+	if cfg.TickInterval <= 0 {
+		cfg.TickInterval = 500 * time.Millisecond
+	}
+	if cfg.MaxRebuilds <= 0 {
+		cfg.MaxRebuilds = 3
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Service{
+		cfg:        cfg,
+		ctx:        ctx,
+		cancel:     cancel,
+		wantSpeed:  1.0,
+		wantVolume: 100,
+		enabled:    cfg.DanmakuSource != nil,
+	}
+	if cfg.DanmakuSource != nil {
+		s.fetcher = danmaku.NewFetcher(cfg.DanmakuSource, cfg.FetcherOpts)
+	}
+	go s.loop()
+	return s
+}
+
+func (s *Service) log(format string, v ...any) {
+	if s.cfg.Logger != nil {
+		s.cfg.Logger.Printf(format, v...)
+	}
+}
+
+func (s *Service) emit(event string, payload any) {
+	if s.cfg.Emit != nil {
+		s.cfg.Emit(event, payload)
+	}
+}
+
+// mpvConfig 每次 spawn 用的内核配置（Launcher 为 nil 包装时才真正生效）。
+func (s *Service) mpvConfig() mpv.Config {
+	return mpv.Config{
+		MpvPath:    s.cfg.MpvPath,
+		AppRoot:    s.cfg.AppRoot,
+		SocketPath: s.cfg.MpvSocket,
+		Wid:        s.cfg.Wid,
+		HWDec:      s.cfg.HWDec,
+		Backend:    s.cfg.Backend,
+	}
+}
+
+// assDirPath ASS 输出目录：AssDir → DataDir/ass → ""（WriteAss 临时目录默认）。
+func (s *Service) assDirPath() string {
+	if s.cfg.AssDir != "" {
+		return s.cfg.AssDir
+	}
+	if s.cfg.DataDir != "" {
+		return filepath.Join(s.cfg.DataDir, "ass")
+	}
+	return ""
+}
+
+// ---------------------------------------------------------------- 公开 API
+
+// Open 解析计划并起播：无实例则 spawn，已有则 loadfile replace 复用。
+// 换集时先 SubRemove 防旧集弹幕串画（v1 同款），弹幕窗口状态清零重拉。
+func (s *Service) Open(ctx context.Context, req Request) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	s.mu.Unlock()
+
+	if s.cfg.Resolver == nil {
+		return errors.New("player: 未注入 Resolver，无法解析播放地址")
+	}
+	plan, err := s.cfg.Resolver.Resolve(ctx, req)
+	if err != nil {
+		return err
+	}
+	if plan.URL == "" {
+		return errors.New("player: 解析结果为空地址")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.livePlayerLocked()
-	if p == nil {
-		s.dmOn = on // 记录意图，下次 Open 生效
-		return `{"ok":true}`, nil
+	if s.closed {
+		return ErrClosed // resolve 期间可能被 Close
 	}
-	s.dmOn = on
-	if err := p.SetSubVisibility(on); err != nil {
-		return "", failCmd(err)
-	}
-	if on {
-		s.assDirty = true // 补挂/重读
-		s.refreshAssLocked(p)
-	}
-	return `{"ok":true}`, nil
-}
+	s.req = &Request{DramaID: req.DramaID, Title: req.Title, Index: req.Index,
+		Drama: req.Drama, Chapter: req.Chapter}
+	s.plan = &plan
+	s.durMs = int64(plan.DurationSec * 1000)
+	s.pendingResumeMs = 0
+	s.rebuilds = 0
+	s.endedFired = false
+	s.lastPosMs = 0
+	s.lastVersion = 0
+	s.assPath = ""
+	s.wantPaused = false // 新集默认在播（v1 play_episode 语义）
 
-// ReportViewport 前端上报播放器区域像素尺寸（ASS 动态 PlayRes）。
-func (s *Service) ReportViewport(w, h int) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if w <= 0 || h <= 0 {
-		return "", fail("bad_video", "viewport 尺寸无效")
-	}
-	if s.viewW != w || s.viewH != h {
-		s.viewW, s.viewH = w, h
-		s.assDirty = true
-		if p := s.livePlayerLocked(); p != nil {
-			s.refreshAssLocked(p)
+	// 实例已死（断线后还没重建完就来 Open）：丢弃，下面 spawn 新的。
+	if s.p != nil && !s.p.Alive() {
+		if s.pumpStop != nil {
+			close(s.pumpStop)
+			s.pumpStop = nil
 		}
+		s.p = nil
+		s.subAttached = false
 	}
-	return `{"ok":true}`, nil
-}
 
-// Close 退出 mpv 并复位。幂等；未打开时是 no-op。
-func (s *Service) Close() (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.teardownLocked()
-	return `{"ok":true}`, nil
-}
-
-// State 同步快照（JSON）。未打开返回 running=false 的空态。
-func (s *Service) State() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := map[string]any{
-		"running":   s.player != nil && s.player.Alive(),
-		"opened":    s.opened,
-		"danmakuOn": s.dmOn,
-		"ep":        s.video.Ep,
-		"title":     s.video.Title,
+	// 换集：撤下上一集的弹幕轨（数据保留在 fetcher 之外，直接清窗重拉）
+	if s.subAttached && s.p != nil {
+		_ = s.p.SubRemove()
+		s.subAttached = false
 	}
-	if p := s.player; p != nil && p.Alive() {
-		st := p.State()
-		out["position"] = st.Position
-		out["duration"] = st.Duration
-		out["paused"] = st.Paused
-		out["speed"] = st.Speed
-		out["volume"] = st.Volume
-		out["eof"] = st.EofReached
+	if s.fetcher != nil && plan.Session != "" {
+		s.fetcher.SetEpisode(danmaku.Episode{
+			Session:    plan.Session,
+			DurationMs: s.durMs,
+			Key:        s.assKeyLocked(),
+		})
 	}
-	b, _ := json.Marshal(out)
-	return string(b)
-}
 
-// ── 内部：生命周期 ──
-
-func (s *Service) checkLive() error {
-	if s.ctx == nil {
-		return fail("not_ready", "播放服务尚未初始化")
-	}
-	if s.closing {
-		return fail("closed", "播放服务已关闭")
+	if err := s.applySourceLocked(); err != nil {
+		s.emit("player:error", map[string]string{"message": "起播失败：" + err.Error()})
+		return err
 	}
 	return nil
 }
 
-// simple 在已打开且存活 player 上执行一条命令。
-func (s *Service) simple(fn func(p *mpv.Player) error) (string, error) {
+// Play 继续播放。
+func (s *Service) Play() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p := s.livePlayerLocked()
-	if p == nil {
-		return "", fail("not_open", "当前没有播放中的视频")
+	if s.p == nil {
+		return ErrNotOpen
 	}
-	if err := fn(p); err != nil {
-		return "", failCmd(err)
-	}
-	return `{"ok":true}`, nil
+	s.wantPaused = false
+	return s.p.Play()
 }
 
-func (s *Service) livePlayerLocked() *mpv.Player {
-	if s.player != nil && s.player.Alive() {
-		return s.player
+// Pause 暂停。
+func (s *Service) Pause() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.p == nil {
+		return ErrNotOpen
+	}
+	s.wantPaused = true
+	return s.p.Pause()
+}
+
+// SeekTo 绝对平滑跳转（posMs 毫秒）。命名避开 io.Seeker 惯例签名检查。
+// 弹幕窗口下一 tick 按新位置自动重定位（已抓窗口不重拉，同 v1）。
+func (s *Service) SeekTo(posMs int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.p == nil {
+		return ErrNotOpen
+	}
+	if posMs < 0 {
+		posMs = 0
+	}
+	s.lastPosMs = posMs
+	if s.pendingResumeMs > 0 {
+		s.pendingResumeMs = posMs // 用户 seek 覆盖待续播点
+	}
+	return s.p.AbsSeekSmooth(float64(posMs) / 1000.0)
+}
+
+// SetSpeed 变速并记录意图（重建后恢复）。
+func (s *Service) SetSpeed(rate float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.p == nil {
+		return ErrNotOpen
+	}
+	s.wantSpeed = rate
+	return s.p.SetSpeed(rate)
+}
+
+// SetVolume 音量（0-130，mpv 语义）并记录意图（重建后恢复）。
+func (s *Service) SetVolume(level int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.p == nil {
+		return ErrNotOpen
+	}
+	s.wantVolume = level
+	return s.p.SetVolume(level)
+}
+
+// SetDanmakuEnabled 弹幕开关。
+// 关：SubRemove 撤轨（已抓数据保留在 fetcher，不再发起抓取）；
+// 开：立即用窗口内已拉数据重渲染挂载，后续抓取自然补当前集（v1「打开就补」）。
+func (s *Service) SetDanmakuEnabled(on bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.cfg.DanmakuSource == nil {
+		return errors.New("player: 未注入弹幕源")
+	}
+	if s.enabled == on {
+		return nil
+	}
+	s.enabled = on
+	if !on {
+		if s.subAttached && s.p != nil {
+			if err := s.p.SubRemove(); err != nil {
+				s.log("player: 关弹幕撤轨失败: %v", err)
+			}
+			s.subAttached = false
+		}
+		s.emitStatsLocked()
+		return nil
+	}
+	// 开：重渲染已保留数据；不足再由 ticker 继续补拉
+	if s.p != nil {
+		s.refreshTrackLocked()
+	}
+	s.emitStatsLocked()
+	return nil
+}
+
+// Close 停服务：quit mpv + 清弹幕状态。可重复调用（幂等）。
+func (s *Service) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	s.quitting = true
+	p := s.p
+	s.p = nil
+	if s.pumpStop != nil {
+		close(s.pumpStop)
+		s.pumpStop = nil
+	}
+	s.fetcher = nil
+	s.req = nil
+	s.plan = nil
+	s.subAttached = false
+	s.assPath = ""
+	s.cancel()
+	s.mu.Unlock()
+
+	if p != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := p.Quit(ctx); err != nil {
+			s.log("player: quit 失败（忽略）: %v", err)
+			return err
+		}
 	}
 	return nil
 }
 
-// ensureStartedLocked 懒 spawn：Alive 则复用，坏死 player 先回收。
-func (s *Service) ensureStartedLocked() (*mpv.Player, error) {
-	if p := s.livePlayerLocked(); p != nil {
-		return p, nil
-	}
-	if s.player != nil {
-		s.retirePlayerLocked()
-	}
-	if err := s.checkLive(); err != nil {
-		return nil, err
-	}
-	p, err := s.spawnLocked()
-	if err != nil {
-		return nil, err
-	}
-	s.startTickLocked()
-	return p, nil
+// State 当前状态快照（未 Open 时返回零值骨架）。
+func (s *Service) State() Snapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.snapshotLocked()
 }
 
-func (s *Service) spawnLocked() (*mpv.Player, error) {
-	var wid uintptr
-	if s.opts.WidProvider != nil {
-		wid = s.opts.WidProvider()
-	}
-	p := mpv.New(mpv.Config{
-		MpvPath: s.opts.MpvPath,
-		AppRoot: s.opts.AppRoot,
-		Wid:     wid,
-		HWDec:   s.opts.HWDec,
-		Backend: s.opts.Backend,
-	})
-	if err := p.Start(s.ctx); err != nil {
-		return nil, fail("player_start_failed", err.Error())
-	}
-	s.attachPlayerLocked(p)
-	return p, nil
-}
+// ---------------------------------------------------------------- 内部实现
 
-// attachPlayerLocked 接管 player：注册事件消费（含 done 通道）。
-func (s *Service) attachPlayerLocked(p *mpv.Player) {
-	done := make(chan struct{})
-	s.player = p
-	s.playerDone = done
-	go s.consumeEvents(p, done)
-}
-
-// retirePlayerLocked 摘除当前 player 并异步 Quit（不等进程回收，避免拖住 UI）。
-func (s *Service) retirePlayerLocked() {
-	p, done := s.player, s.playerDone
-	s.player, s.playerDone = nil, nil
-	if done != nil {
-		close(done)
-	}
-	if p != nil {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-			defer cancel()
-			_ = p.Quit(ctx)
-		}()
-	}
-}
-
-// teardownLocked Close/Shutdown 共用：停 tick、退 player、清弹幕编排态。
-func (s *Service) teardownLocked() {
-	if s.tickDone != nil {
-		close(s.tickDone)
-		s.tickDone = nil
-	}
-	p, done := s.player, s.playerDone
-	s.player, s.playerDone = nil, nil
-	if done != nil {
-		close(done)
-	}
-	if p != nil {
-		ctx := context.Background()
-		if s.ctx != nil {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(s.ctx, 4*time.Second)
-			defer cancel()
+func (s *Service) snapshotLocked() Snapshot {
+	snap := Snapshot{Speed: s.wantSpeed, Volume: s.wantVolume,
+		Danmaku: DanmakuState{Enabled: s.enabled}}
+	if s.p != nil {
+		st := s.p.State()
+		snap.PosMs = msOf(st.Position)
+		dur := st.Duration
+		if durMs := msOf(dur); durMs > 0 {
+			snap.DurationMs = durMs
+		} else {
+			snap.DurationMs = s.durMs
 		}
-		_ = p.Quit(ctx)
+		snap.Playing = st.FileLoaded && !st.Paused && !st.EofReached
+		snap.Speed = st.Speed
+		if st.Volume != 0 {
+			snap.Volume = st.Volume
+		}
+	} else if s.durMs > 0 {
+		snap.DurationMs = s.durMs
 	}
-	s.opened = false
-	s.video = Video{}
-	s.subAdded = false
-	s.assPath = ""
-	s.assDirty = false
-	s.dmVersion = 0
-	s.rebuilds = 0
-}
-
-// applySourceLocked 换源：LoadWith + Fetcher.SetEpisode + 编排态复位。
-func (s *Service) applySourceLocked(p *mpv.Player, v Video) error {
-	if err := p.LoadWith(v.URL, v.Headers, v.Title, mpv.LoadOptions{Local: v.Local}); err != nil {
-		return failCmd(err)
-	}
-	s.video = v
-	s.opened = true
-	s.rebuilds = 0
-	s.subAdded = false
-	s.assPath = ""
-	s.assDirty = false
 	if s.fetcher != nil {
-		eps := danmaku.Episode{}
-		if v.Session != "" {
-			eps = danmaku.Episode{
-				Session:    v.Session,
-				DurationMs: int64(v.DurationSec * 1000),
-				Key:        s.assKey(),
-			}
-		}
-		// 无会话 = 清窗，避免上一集 items 渲染进本集
-		s.fetcher.SetEpisode(eps)
-		_, _, _, ver := s.fetcher.Stats()
-		s.dmVersion = ver
+		_, count, _, _ := s.fetcher.Stats()
+		snap.Danmaku.Count = count
+		snap.Danmaku.Note = s.fetcher.Note()
 	}
+	if s.req != nil {
+		snap.Episode = EpisodeRef{DramaID: s.req.DramaID, Title: s.req.Title, Index: s.req.Index}
+	}
+	return snap
+}
+
+func msOf(sec float64) int64 {
+	if sec <= 0 {
+		return 0
+	}
+	return int64(sec*1000 + 0.5)
+}
+
+func (s *Service) assKeyLocked() string {
+	// v1 write_ass key 语义：剧ID-集号（1 起始）
+	return fmt.Sprintf("%s-%d", s.req.DramaID, s.req.Index)
+}
+
+// applySourceLocked spawn（若无实例）并把当前 plan 装载进 mpv。
+func (s *Service) applySourceLocked() error {
+	if s.p == nil {
+		if err := s.spawnLocked(); err != nil {
+			return err
+		}
+	}
+	return s.p.LoadWith(s.plan.URL, s.plan.Headers, s.req.Title, mpv.LoadOptions{
+		DecryptionKey: s.plan.DecryptionKey,
+		Local:         s.plan.Local,
+	})
+}
+
+// spawnLocked 造新 mpv 实例、应用播放意图、启动事件泵。调用方持锁。
+func (s *Service) spawnLocked() error {
+	p := s.cfg.MpvLauncher(s.mpvConfig())
+	if err := p.Start(s.ctx); err != nil {
+		return err
+	}
+	// 播放意图先落到新进程（loadfile 不重置这些全局属性）
+	if s.wantSpeed != 1.0 {
+		if err := p.SetSpeed(s.wantSpeed); err != nil {
+			s.log("player: 恢复倍速失败: %v", err)
+		}
+	}
+	if s.wantVolume != 100 {
+		if err := p.SetVolume(s.wantVolume); err != nil {
+			s.log("player: 恢复音量失败: %v", err)
+		}
+	}
+	s.p = p
+	s.pumpStop = make(chan struct{})
+	events := p.Events()
+	stop := s.pumpStop
+	go s.pump(p, events, stop)
 	return nil
 }
 
-func (s *Service) assKey() string {
-	name := s.video.Title
-	if name == "" {
-		name = "episode"
+// pump 消费一个实例的事件流；实例被替换（重建）后自动退出。
+// Events 通道永不关闭（mpv 内核保证），靠 stop 退出。
+func (s *Service) pump(p MpvPlayer, events <-chan mpv.Event, stop <-chan struct{}) {
+	for {
+		select {
+		case <-stop:
+			return
+		case <-s.ctx.Done():
+			return
+		case ev := <-events:
+			s.mu.Lock()
+			if s.p != p || s.closed {
+				s.mu.Unlock()
+				return
+			}
+			s.handleEventLocked(ev)
+			s.mu.Unlock()
+		}
 	}
-	return name + "-ep" + strconv.Itoa(s.video.Ep)
 }
 
-// ── tick 循环（player:tick 500ms + Fetcher 驱动） ──
-
-func (s *Service) startTickLocked() {
-	if s.tickDone != nil {
-		return
-	}
-	done := make(chan struct{})
-	s.tickDone = done
-	interval := s.opts.TickInterval
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-done:
-				return
-			case <-ticker.C:
-				s.tickOnce()
+// handleEventLocked 事件语义（对齐 v1 player._on_event）：
+//   - file-loaded：续播点恢复（v1 pending_resume 语义——loadfile 后不立刻 seek，
+//     等新文件真正加载才跳）、清零重建计数、弹幕窗口初始化驱动交给 ticker；
+//   - end-file reason=eof 或 eof-reached 属性：player:ended（每集去重一次，
+//     keep-open 下 end-file 可能不发，属性是可靠兜底）；
+//   - end-file reason=error：player:error；
+//   - disconnected/exit：非用户退出时自动重建续播，最多 MaxRebuilds 次。
+func (s *Service) handleEventLocked(ev mpv.Event) {
+	switch ev.Kind {
+	case mpv.EventFileLoaded:
+		s.rebuilds = 0
+		if s.pendingResumeMs > 1000 {
+			pos := float64(s.pendingResumeMs) / 1000.0
+			s.pendingResumeMs = 0
+			s.lastPosMs = int64(pos * 1000)
+			if err := s.p.AbsSeekSmooth(pos); err != nil {
+				s.log("player: 续播 seek 失败: %v", err)
 			}
 		}
-	}()
+		if s.wantPaused {
+			if err := s.p.Pause(); err != nil {
+				s.log("player: 恢复暂停意图失败: %v", err)
+			}
+		}
+	case mpv.EventEndFile:
+		// 只对 reason=eof 报片尾（loadfile replace 换集时旧文件也会发
+		// end-file reason=stop，不能当播完）；error 报失败；其余静默。
+		switch ev.Name {
+		case "eof":
+			s.markEndedLocked()
+		case "error":
+			s.emit("player:error", map[string]string{"message": "播放失败"})
+		}
+	case mpv.EventProperty:
+		if ev.Name == "eof-reached" && ev.State.EofReached {
+			// keep-open 下 end-file 不一定发，属性兜底
+			s.markEndedLocked()
+		}
+	case mpv.EventDisconnected, mpv.EventExit:
+		if s.quitting || s.closed {
+			return
+		}
+		why := "播放器与 mpv 断开"
+		if ev.Err != nil {
+			why = ev.Err.Error()
+		}
+		posMs := msOf(ev.State.Position)
+		if posMs < s.lastPosMs {
+			posMs = s.lastPosMs
+		}
+		s.log("player: 事件 %s（%s），尝试自动重建（第 %d/%d 次）",
+			ev.Kind, why, s.rebuilds+1, s.cfg.MaxRebuilds)
+		s.rebuildLocked(posMs, why)
+	}
 }
 
-func (s *Service) tickOnce() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	p := s.livePlayerLocked()
-	if p == nil || !s.opened {
+func (s *Service) markEndedLocked() {
+	if s.endedFired {
 		return
 	}
-	st := p.State()
-	// Open 时时长未知（durationSec<=0）：拿到真实时长后补 SetEpisode，
-	// 解锁 Fetcher（DurationMs<=0 时 Tick 被短路）。只补一次。
-	if s.video.DurationSec <= 0 && st.Duration > 0 {
-		s.video.DurationSec = st.Duration
-		if s.fetcher != nil && s.video.Session != "" {
-			s.fetcher.SetEpisode(danmaku.Episode{
-				Session:    s.video.Session,
-				DurationMs: int64(s.video.DurationSec * 1000),
-				Key:        s.assKey(),
-			})
-			_, _, _, ver := s.fetcher.Stats()
-			s.dmVersion = ver
+	s.endedFired = true
+	ref := EpisodeRef{}
+	if s.req != nil {
+		ref = EpisodeRef{DramaID: s.req.DramaID, Title: s.req.Title, Index: s.req.Index}
+	}
+	s.emit("player:ended", map[string]any{"episode": ref})
+}
+
+// rebuildLocked 自动重建：杀旧实例 → 新实例 Start → 载同一 plan →
+// 记住续播点等新 file-loaded 再 seek（v1 resume 时机）。
+func (s *Service) rebuildLocked(posMs int64, why string) {
+	s.rebuilds++
+	old := s.p
+	s.p = nil
+	if s.pumpStop != nil {
+		close(s.pumpStop)
+		s.pumpStop = nil
+	}
+	s.subAttached = false // 新进程没有字幕轨了
+	if old != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+		_ = old.Quit(ctx)
+		cancel()
+	}
+	if s.plan == nil || s.req == nil {
+		return
+	}
+	if s.rebuilds > s.cfg.MaxRebuilds {
+		s.emit("player:error", map[string]any{"message": fmt.Sprintf("播放器断开，自动重建失败（已重试 %d 次）：%s", s.cfg.MaxRebuilds, why)})
+		return
+	}
+	s.pendingResumeMs = posMs
+	if err := s.applySourceLocked(); err != nil {
+		s.emit("player:error", map[string]any{"message": "播放器自动重建失败：" + err.Error()})
+		return
+	}
+	// 重建成功不报错误：前端从 player:tick 的位置恢复即可感知。
+}
+
+// ---------------------------------------------------------------- ticker 循环
+
+// loop 是 500ms 心跳：发 player:tick、驱动弹幕抓取与轨道刷新。
+func (s *Service) loop() {
+	t := time.NewTicker(s.cfg.TickInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-t.C:
+			s.tick()
 		}
 	}
-	if s.dmOn && s.fetcher != nil {
-		s.fetcher.Tick(int64(st.Position * 1000))
-		s.refreshAssLocked(p)
+}
+
+func (s *Service) tick() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || s.p == nil || s.req == nil {
+		return
 	}
+
+	st := s.p.State()
+	posMs := msOf(st.Position)
+
+	// 时长权威值：plan 没给就用 mpv duration 属性；补写进 fetcher 的 Episode
+	// （v1「没拿到时长，弹幕没加载」等待语义：fetcher 在 DurationMs<=0 时不抓）。
+	if durMs := msOf(st.Duration); durMs > s.durMs {
+		s.durMs = durMs
+		s.syncEpisodeLocked()
+	}
+
+	// 位置大幅跳变（>一个弹幕窗）→ 记日志；重定位由 Fetcher 按当前
+	// position 重推窗口起点自然完成（已抓窗口跳过，同 v1）。
+	if s.fetcher != nil && posMs > 0 && absInt64(posMs-s.lastPosMs) > danmaku.WindowMS {
+		s.log("player: 位置跳变 %d→%d，弹幕窗重定位", s.lastPosMs, posMs)
+	}
+	s.lastPosMs = posMs
+
+	// 抓取驱动：开着弹幕、真正在播（非暂停非片尾）才 pump（v1 同款门控）。
+	if s.fetcher != nil && s.enabled && s.plan != nil && s.plan.Session != "" &&
+		st.FileLoaded && !st.Paused && !st.EofReached {
+		s.fetcher.Tick(posMs)
+		_, count, _, version := s.fetcher.Stats()
+		if version != s.lastVersion {
+			s.lastVersion = version
+			s.refreshTrackLocked()
+			s.emitStatsLocked()
+		} else if s.needStatsNoteLocked(count) {
+			s.emitStatsLocked()
+		}
+	}
+
+	s.emit("player:tick", s.snapshotLocked())
+}
+
+// syncEpisodeLocked 把新拿到的时长补写给 fetcher；仅在「还没抓到东西」
+// （version==0）时重写 Episode，避免打断已进行的抓取。
+func (s *Service) syncEpisodeLocked() {
+	if s.fetcher == nil || s.durMs <= 0 || s.plan == nil || s.plan.Session == "" {
+		return
+	}
+	if s.fetcher.Episode().DurationMs > 0 {
+		return
+	}
+	s.fetcher.SetEpisode(danmaku.Episode{
+		Session:    s.plan.Session,
+		DurationMs: s.durMs,
+		Key:        s.assKeyLocked(),
+	})
+}
+
+// needStatsNoteLocked 备注变化也要播报一次（失败退避等 count 不变的提示）。
+func (s *Service) needStatsNoteLocked(count int) bool {
 	note := ""
-	count := 0
-	if s.fetcher != nil && s.video.Session != "" {
-		_, c, _, _ := s.fetcher.Stats()
-		count = c
+	if s.fetcher != nil {
 		note = s.fetcher.Note()
 	}
-	payload := map[string]any{
-		"position":     st.Position,
-		"duration":     st.Duration,
-		"title":        s.video.Title,
-		"paused":       st.Paused,
-		"speed":        st.Speed,
-		"volume":       st.Volume,
-		"eof":          st.EofReached,
-		"danmakuNote":  note,
-		"danmakuCount": count,
-	}
-	s.emitLocked("player:tick", marshalString(payload))
+	return note != s.lastNote || count != s.lastCount
 }
 
-// refreshAssLocked 版本变化（或视口/开关脏标记）→ 全量重建 ASS → 落盘 →
-// 首挂 sub-add / 原地 sub-reload（v1 同文件名 + 循环尾部 sub-reload）。
-func (s *Service) refreshAssLocked(p *mpv.Player) {
-	if s.fetcher == nil || s.video.Session == "" {
+func (s *Service) emitStatsLocked() {
+	count, note := 0, ""
+	if s.fetcher != nil {
+		_, count, _, _ = s.fetcher.Stats()
+		note = s.fetcher.Note()
+	}
+	s.lastNote = note
+	s.lastCount = count
+	s.emit("danmaku:stats", map[string]any{"count": count, "note": note})
+}
+
+// refreshTrackLocked 版本变更后重渲染当前窗口数据：
+// BuildAss(全量已抓 items, durationMs) → WriteAss(key=剧ID-集号，原地原子重写) →
+// 已挂载则 SubReload（mpv 原地重读同一文件），否则 SubAdd。
+// 关着弹幕时不挂载；无数据不挂载（v1 空窗不挂空轨）。
+func (s *Service) refreshTrackLocked() {
+	if !s.enabled || s.fetcher == nil || s.p == nil || s.req == nil || s.durMs <= 0 {
 		return
 	}
-	_, count, _, ver := s.fetcher.Stats()
-	if ver == s.dmVersion && !s.assDirty {
+	items := s.fetcher.Items()
+	if len(items) == 0 {
 		return
 	}
-	s.dmVersion = ver
-	s.assDirty = false
-	if count == 0 {
-		return
-	}
-	st := p.State()
-	durSec := s.video.DurationSec
-	if st.Duration > durSec {
-		durSec = st.Duration
-	}
-	durMs := int64(durSec * 1000)
-	text := danmaku.BuildAss(s.fetcher.Items(), durMs, danmaku.AssOptions{Width: s.viewW, Height: s.viewH})
+	text := danmaku.BuildAss(items, s.durMs, danmaku.AssOptions{})
 	if text == "" {
 		return
 	}
-	path, err := danmaku.WriteAss(s.opts.AssDir, s.assKey(), text, s.opts.AssKeep)
+	dir := s.assDirPath()
+	if dir != "" {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			s.log("player: 创建 ASS 目录失败: %v", err)
+			return
+		}
+	}
+	path, err := danmaku.WriteAss(dir, s.assKeyLocked(), text, s.cfg.AssKeep)
 	if err != nil {
+		s.log("player: 写 ASS 失败: %v", err)
 		return
 	}
 	s.assPath = path
-	if s.subAdded {
-		_ = p.SubReload()
-		return
-	}
-	if st.FileLoaded {
-		if err := p.SubAdd(path, "弹幕"); err == nil {
-			s.subAdded = true
+	if s.subAttached {
+		if err := s.p.SubReload(); err != nil {
+			s.log("player: sub-reload 失败: %v", err)
 		}
-	}
-}
-
-// ── player 事件 → player:state / 断线重建 ──
-
-func (s *Service) consumeEvents(p *mpv.Player, done chan struct{}) {
-	for {
-		select {
-		case <-done:
-			return
-		case ev := <-p.Events():
-			s.handleEvent(p, ev)
-		}
-	}
-}
-
-func (s *Service) handleEvent(p *mpv.Player, ev mpv.Event) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing || s.player != p {
-		return // 已 retire 的旧 player 噪声
-	}
-	switch ev.Kind {
-	case mpv.EventFileLoaded:
-		s.assDirty = true // 新文件 = 字幕轨全丢，重挂
-		s.refreshAssLocked(p)
-		s.emitLocked("player:state", stateJSON("file-loaded", "", p))
-	case mpv.EventDisconnected:
-		why := errText(ev.Err)
-		s.emitLocked("player:state", stateJSON("disconnected", why, p))
-		s.rebuildLocked(p, why)
-	case mpv.EventExit:
-		why := errText(ev.Err)
-		s.emitLocked("player:state", stateJSON("exit", why, p))
-		// 进程已亡，不做 Quit；摘除 player 并关闭消费通道，
-		// 本 goroutine（consumeEvents）随 range 下一轮 select 退出。
-		done := s.playerDone
-		s.player, s.playerDone = nil, nil
-		if done != nil {
-			close(done)
-		}
-		s.opened = false
-		s.subAdded = false
-	case mpv.EventEndFile:
-		// eof 经 tick 快照传达，不单独发事件（任务定案：state 仅三类）
-	}
-}
-
-// rebuildLocked 断线自动重建：新 spawn → LoadWith 同源 → 恢复倍速/音量/暂停
-// → AbsSeekSmooth 续播 → 弹幕经 assDirty 在 file-loaded 后重挂。
-// 失败放弃（running=false），等用户重新 Open。
-func (s *Service) rebuildLocked(old *mpv.Player, why string) {
-	snap := old.State()
-	if s.rebuilds >= 2 || s.video.URL == "" {
 		return
 	}
-	s.rebuilds++
-	_, done := s.player, s.playerDone
-	s.player, s.playerDone = nil, nil
-	if done != nil {
-		close(done)
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-		defer cancel()
-		_ = old.Quit(ctx)
-	}()
-	p, err := s.spawnLocked()
-	if err != nil {
-		s.emitLocked("player:state", marshalString(map[string]any{
-			"state": "disconnected", "why_died": why + "；重建失败: " + err.Error(),
-		}))
+	if err := s.p.SubAdd(path, "弹幕"); err != nil {
+		s.log("player: sub-add 失败: %v", err)
 		return
 	}
-	if err := p.LoadWith(s.video.URL, s.video.Headers, s.video.Title, mpv.LoadOptions{Local: s.video.Local}); err != nil {
-		s.emitLocked("player:state", marshalString(map[string]any{
-			"state": "disconnected", "why_died": why + "；重挂源失败: " + err.Error(),
-		}))
-		return
-	}
-	if snap.Speed > 0 && snap.Speed != 1 {
-		_ = p.SetSpeed(snap.Speed)
-	}
-	if snap.Volume > 0 {
-		_ = p.SetVolume(snap.Volume)
-	}
-	if snap.Paused {
-		_ = p.Pause()
-	}
-	if snap.Position > 0 {
-		_ = p.AbsSeekSmooth(snap.Position) // v1 续播语义：absolute 允许落关键帧
-	}
-	s.subAdded = false
-	s.assDirty = true // items 还在 fetcher 里，version 未必变；脏标记保证重挂
+	s.subAttached = true
 }
 
-// ── 小工具 ──
-
-func stateJSON(state, why string, p *mpv.Player) string {
-	out := map[string]any{"state": state}
-	if why != "" {
-		out["why_died"] = why
+func absInt64(v int64) int64 {
+	if v < 0 {
+		return -v
 	}
-	return marshalString(out)
-}
-
-func (s *Service) emitLocked(name string, data ...any) {
-	if s.opts.EventsEmit == nil {
-		return
-	}
-	s.opts.EventsEmit(name, data...)
-}
-
-func marshalString(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-	return string(b)
-}
-
-func errText(err error) string {
-	if err == nil {
-		return ""
-	}
-	return err.Error()
-}
-
-func fail(code, msg string) error {
-	return fmt.Errorf("%s [%s]", msg, code)
-}
-
-func failCmd(err error) error {
-	return fail("command_failed", "播放器指令失败: "+err.Error())
+	return v
 }

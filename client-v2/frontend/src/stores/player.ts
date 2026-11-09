@@ -1,13 +1,24 @@
-/* 播放状态容器（V2-3b）：PlayerView 与播放桥之间的唯一状态层。
-   - 真实模式：Open 后由 wails 事件驱动（player:tick 500ms 快照 / player:state）；
-   - VITE_MOCK：轮询 api.playerState()（api.ts 内置模拟时钟）；
+/* 播放状态容器（V2-3c）：PlayerView 与新 Go 播放契约之间的唯一状态层。
+   - 真实模式：PlayerOpen(dramaJSON, chapterJSON, index) 后由 wails 事件驱动——
+     player:tick（500ms，payload=Snapshot 对象）/ player:ended / player:error / danmaku:stats；
+     payload 兼容对象与 JSON 字符串两种形态（wails 给对象，防御旧序列化）。
+   - VITE_MOCK：轮询 api.playerState()（api.ts 内置模拟时钟，Snapshot+eof 扩展位）。
    - 纯浏览器兜底（无桥且非 mock）：demoMode —— 本地演示时钟 + 80 条演示弹幕，
-     状态栏标「示例数据」（父代理指令 m00080：Resolve/桥不可用 → 演示回落）。
-   localStorage：音量持久化键 zgj.player.volume（v1 set_volume player.py:1899-1905 语义，0-100）；
-   弹幕调试键 zgj.danmaku.override（强制 session）/ zgj.danmaku.demo（强制演示）。 */
+     状态栏标「示例数据」。
+   时间基：Snapshot 毫秒（posMs/durationMs）→ store 秒制（界面 fmtClock 不变）。
+   localStorage：音量键 zgj.player.volume（v1 set_volume 语义，0-100）；
+   弹幕调试键 zgj.danmaku.override / zgj.danmaku.demo（override 在新契约下仅作演示开关遗留位）。 */
 import { defineStore } from 'pinia'
 import { api, MOCK_MODE } from '@/services/api'
-import { ApiError, type Chapter, type Drama, type ResolvePlan } from '@/services/types'
+import {
+  ApiError,
+  type Chapter,
+  type DanmakuStatsPayload,
+  type Drama,
+  type PlayerEndedPayload,
+  type PlayerErrorPayload,
+  type PlayerSnapshot
+} from '@/services/types'
 import { dramaFromQuery } from '@/services/dramaRef'
 import { mockDanmakuAll } from '@/services/fixtures'
 
@@ -19,7 +30,7 @@ export const SPEED_CHOICES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3]
 const DEMO_DURATION = 180
 
 function bridgeAvailable(): boolean {
-  return !!window.go?.main?.App?.Open
+  return !!window.go?.main?.App?.PlayerOpen
 }
 
 function clampVolume(v: unknown): number {
@@ -28,12 +39,33 @@ function clampVolume(v: unknown): number {
   return Math.max(0, Math.min(100, n))
 }
 
+/** wails EventsEmit 发结构体 → JS 收到对象；防御 JSON 字符串形态 */
+function asObject<T>(payload: unknown): T | null {
+  if (payload == null) return null
+  if (typeof payload === 'string') {
+    try {
+      return JSON.parse(payload) as T
+    } catch {
+      return null
+    }
+  }
+  if (typeof payload === 'object') return payload as T
+  return null
+}
+
+type EventsBus = {
+  EventsOn?: (n: string, cb: (data: unknown) => void) => void
+  EventsOff?: (n: string) => void
+}
+
+const PLAYER_EVENTS = ['player:tick', 'player:ended', 'player:error', 'danmaku:stats'] as const
+
 export interface PlayerStoreState {
   title: string
   running: boolean
   opened: boolean
   paused: boolean
-  /** 秒（与 Go Service tick/state 同一时间基） */
+  /** 秒（Snapshot 毫秒 ÷1000 后的界面时间基） */
   position: number
   duration: number
   speed: number
@@ -41,17 +73,18 @@ export interface PlayerStoreState {
   eof: boolean
   danmakuOn: boolean
   demoMode: boolean
-  /** 弹幕条数；null=未取/不可用 */
+  /** 弹幕条数；null=未取/不可用（来源：snapshot.danmaku.count / danmaku:stats） */
   danmakuCount: number | null
+  /** snapshot.danmaku.note：非官方源等提示语 */
+  danmakuNote: string
   status: string
   error: string
   loading: boolean
+  /** 当前剧与集号：ended→下一集、重开都靠它 */
+  drama: Drama | null
+  episodeIndex: number
   ticker?: number
-  viewportTimer?: number
-  eventsBus?: {
-    EventsOn?: (n: string, cb: (data: string) => void) => void
-    EventsOff?: (n: string) => void
-  }
+  eventsBus?: EventsBus
 }
 
 export const usePlayerStore = defineStore('player', {
@@ -68,19 +101,24 @@ export const usePlayerStore = defineStore('player', {
     danmakuOn: true,
     demoMode: false,
     danmakuCount: null,
+    danmakuNote: '',
     status: '',
     error: '',
-    loading: false
+    loading: false,
+    drama: null,
+    episodeIndex: 0
   }),
 
   getters: {
     progressPct: (s) => (s.duration > 0 ? Math.min(100, (s.position / s.duration) * 100) : 0),
     posLabel: (s) => fmtClock(s.position),
-    durLabel: (s) => fmtClock(s.duration)
+    durLabel: (s) => fmtClock(s.duration),
+    /** 已知总集数且当前集非最后一集 → 播完出「下一集」按钮 */
+    hasNextEpisode: (s) => !!s.drama?.episodes && s.drama.episodes > 0 && s.episodeIndex < s.drama.episodes
   },
 
   actions: {
-    /** 入口：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定）→ Resolve → Open */
+    /** 入口：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定；兼容 ?drama=<id> 简写）→ PlayerOpen */
     async bootFromQuery(q: Record<string, unknown>) {
       this.loading = true
       this.error = ''
@@ -90,52 +128,24 @@ export const usePlayerStore = defineStore('player', {
         this.loading = false
         return
       }
+      const drama = dramaFromQuery(String(q.drama ?? q.id ?? ''), q as Record<string | number | symbol, unknown>)
+      const ep = Math.max(1, Number(q.ep ?? 1) || 1)
+      const startPosSec = Math.max(0, Number(q.pos ?? 0) || 0)
+      let chapter: Chapter | null = null
+      if (typeof q.c === 'string' && q.c) {
+        try {
+          chapter = JSON.parse(q.c) as Chapter
+        } catch {
+          chapter = null
+        }
+      }
       try {
-        const drama: Drama = dramaFromQuery('', q as Record<string | number | symbol, unknown>)
-        const ep = Math.max(1, Number(q.ep ?? 1) || 1)
-        const startPosSec = Math.max(0, Number(q.pos ?? 0) || 0)
-        let chapter: Chapter | null = null
-        if (typeof q.c === 'string' && q.c) {
-          try {
-            chapter = JSON.parse(q.c) as Chapter
-          } catch {
-            chapter = null
-          }
-        }
-        if (!chapter) {
-          const detail = await api.detail(drama)
-          chapter = detail.chapters?.[ep - 1] ?? { currentEpisode: ep }
-        }
-        const plan: ResolvePlan = await api.resolve(drama, chapter, ep - 1, 0)
-        const session = String((plan as Record<string, unknown>).playbackSession ?? plan.session ?? '')
-        const override = localStorage.getItem(DM_OVERRIDE_KEY)
-        const dmSession = override || session
-        const video = {
-          url: String(plan.url ?? ''),
-          title: `${drama.title || '影片'} · 第${ep}集`,
-          session: dmSession,
-          local: false,
-          durationSec: Number(chapter.duration ?? 0) || 0,
-          headers: plan.headers ?? {},
-          ep
-        }
-        if (!video.url) throw new ApiError('解析结果缺少播放地址', 'bad_video')
-        this.title = video.title
-        await api.openVideo(JSON.stringify(video))
-        this.opened = true
-        this.running = true
-        this.demoMode = false
-        // 音量恢复（v1 变更即存 → 启动即取）
-        await this.applyVolume(this.volume)
-        if (startPosSec > 0) await this.seek(startPosSec)
-        this.attach()
-        if (dmSession) void this.loadDanmakuCount(dmSession)
-        else this.danmakuCount = 0
+        await this.openEpisode(drama, ep, startPosSec, chapter)
       } catch (err) {
         const e = err as ApiError
         // 桥/解析不可用 → 演示回落（状态栏「示例数据」）
         if (e?.code === 'bridge_missing' || e?.code === 'not_ready' || !bridgeAvailable()) {
-          await this.startDemo(String(q.title ?? dramaFromQuery('', q as never).title) || '演示影片')
+          await this.startDemo(String(q.title ?? drama.title) || '演示影片')
         } else {
           this.error = e?.message ? `播放失败：${e.message}` : '播放失败'
         }
@@ -144,11 +154,83 @@ export const usePlayerStore = defineStore('player', {
       }
     },
 
+    /** 核心：drama+chapter 原样对象交 PlayerOpen（Go 内部 resolve，前端不再预解析），index 1 起始 */
+    async openEpisode(drama: Drama, ep: number, startPosSec = 0, chapterHint?: Chapter | null) {
+      let chapter = chapterHint ?? null
+      if (!chapter) {
+        const detail = await api.detail(drama)
+        // ?drama=<id> 简写链接只有 id：用详情回填标题/总集数（hasNextEpisode 依赖 episodes）
+        if (detail.drama) {
+          const d = detail.drama
+          drama = {
+            ...d,
+            ...drama,
+            title: drama.title || d.title || '',
+            source: drama.source || d.source || '',
+            episodes: drama.episodes || d.episodes || 0,
+            cover: drama.cover || d.cover || ''
+          }
+        }
+        chapter = detail.chapters?.[ep - 1] ?? { currentEpisode: ep }
+      }
+      this.drama = drama
+      this.episodeIndex = ep
+      this.title = `${drama.title || '影片'} · 第${ep}集`
+      this.eof = false
+      const snap = await api.playerOpen(drama, chapter, ep)
+      this.opened = true
+      this.running = true
+      this.paused = false
+      this.demoMode = false
+      this.applySnapshot(snap)
+      this.attach()
+      // 音量恢复（v1 变更即存 → 启动即取）
+      await this.applyVolume(this.volume)
+      if (startPosSec > 0) await this.seek(startPosSec)
+    },
+
+    /** 播完换下一集：沿用 drama，集号+1（chapter 由 detail 重新取） */
+    async playNext() {
+      if (!this.drama || !this.hasNextEpisode) return
+      this.loading = true
+      this.error = ''
+      try {
+        await this.openEpisode(this.drama, this.episodeIndex + 1, 0)
+      } catch (e) {
+        this.error = (e as ApiError)?.message ?? '下一集打开失败'
+      } finally {
+        this.loading = false
+      }
+    },
+
+    /** Snapshot（毫秒制）→ store（秒制）。eof 只在 mock 扩展位存在时同步；真实播完走 ended 事件 */
+    applySnapshot(s: PlayerSnapshot) {
+      if (!s || typeof s !== 'object') return
+      const openedNow = !!s.episode?.index
+      this.opened = openedNow
+      this.running = openedNow
+      this.paused = !s.playing
+      this.position = Math.max(0, Number(s.posMs ?? 0) / 1000)
+      if (Number(s.durationMs ?? 0) > 0) this.duration = Number(s.durationMs) / 1000
+      if (typeof s.speed === 'number' && s.speed > 0) this.speed = s.speed
+      if (typeof s.volume === 'number') this.volume = clampVolume(s.volume)
+      if (s.danmaku) {
+        this.danmakuOn = !!s.danmaku.enabled
+        if (typeof s.danmaku.count === 'number') this.danmakuCount = s.danmaku.count
+        this.danmakuNote = s.danmaku.note ?? ''
+      }
+      if (typeof s.eof === 'boolean') this.eof = s.eof
+      if (s.episode?.title && s.episode?.index) {
+        const label = `${s.episode.title} · 第${s.episode.index}集`
+        if (label !== this.title) this.title = label
+      }
+    },
+
     /** 演示模式：本地时钟 + fixtures 弹幕，不触碰 Go */
     async startDemo(title: string) {
       this.demoMode = true
       this.title = title ? `${title}（示例数据）` : '示例数据'
-      this.status = '演示模式：Resolve/播放桥不可用，当前为示例数据'
+      this.status = '演示模式：PlayerOpen/播放桥不可用，当前为示例数据'
       this.opened = true
       this.running = true
       this.paused = false
@@ -166,111 +248,98 @@ export const usePlayerStore = defineStore('player', {
         const now = Date.now()
         if (!this.paused && !this.eof) {
           this.position = Math.min(this.duration, this.position + ((now - last) / 1000) * this.speed)
-          if (this.position >= this.duration) this.eof = true
+          if (this.position >= this.duration) this.markEnded()
         }
         last = now
       }, 500) as unknown as number
     },
 
-    /** 真实事件/模拟轮询接线 */
+    /** 接线：真实事件订阅；mock/无事件总线 → 轮询 playerState() 兜底 */
     attach() {
-      if (this.demoMode || MOCK_MODE) {
-        this.stopTicker()
-        this.ticker = setInterval(() => void this.pollMockState(), 500) as unknown as number
-        void this.pollMockState()
+      if (this.demoMode) return
+      if (MOCK_MODE) {
+        this.startPolling()
         return
       }
-      const w = window as unknown as {
-        wails?: { EventsOn?: (n: string, cb: (data: string) => void) => void; EventsOff?: (n: string) => void }
-        runtime?: { EventsOn?: (n: string, cb: (data: string) => void) => void; EventsOff?: (n: string) => void }
-      }
+      const w = window as unknown as { wails?: EventsBus; runtime?: EventsBus }
       const bus = w.wails?.EventsOn ? w.wails : w.runtime
       if (!bus?.EventsOn) {
-        // 极端兜底：事件 API 不可用则轮询 State()
-        this.ticker = setInterval(() => void this.pollMockState(true), 500) as unknown as number
+        // 极端兜底：事件 API 不可用则轮询 PlayerState()（任务要求保留）
+        this.startPolling()
         return
       }
       this.detach()
-      bus.EventsOn('player:tick', (payload: string) => {
-        try {
-          const m = JSON.parse(payload) as {
-            position: number; duration: number; title: string; paused: boolean
-            speed: number; volume: number; eof: boolean; danmakuCount: number
-          }
-          this.position = m.position ?? 0
-          this.duration = m.duration ?? this.duration
-          if (m.title) this.title = m.title
-          this.paused = !!m.paused
-          this.speed = m.speed ?? this.speed
-          this.volume = clampVolume(m.volume)
-          this.eof = !!m.eof
-          if (typeof m.danmakuCount === 'number') this.danmakuCount = m.danmakuCount
-          this.running = true
-        } catch {
-          /* 忽略坏帧 */
-        }
+      bus.EventsOn('player:tick', (payload: unknown) => {
+        const s = asObject<PlayerSnapshot>(payload)
+        if (s) this.applySnapshot(s)
       })
-      bus.EventsOn('player:state', (payload: string) => {
-        try {
-          const m = JSON.parse(payload) as { state: string; why_died?: string }
-          if (m.state === 'file-loaded') this.status = '已载入'
-          if (m.state === 'disconnected') this.status = m.why_died ? `连接中断，正在重建：${m.why_died}` : '连接中断，正在重建'
-          if (m.state === 'exit') {
-            this.running = false
-            this.status = m.why_died ? `播放器已退出：${m.why_died}` : '播放器已退出'
-          }
-        } catch {
-          /* 忽略 */
-        }
+      bus.EventsOn('player:ended', (payload: unknown) => {
+        const m = asObject<PlayerEndedPayload>(payload)
+        if (m?.episode?.index) this.episodeIndex = m.episode.index // payload={"episode":EpisodeRef}
+        this.markEnded()
+      })
+      bus.EventsOn('player:error', (payload: unknown) => {
+        const m = asObject<PlayerErrorPayload>(payload)
+        if (m?.message) this.error = m.message
+      })
+      bus.EventsOn('danmaku:stats', (payload: unknown) => {
+        const m = asObject<DanmakuStatsPayload>(payload)
+        if (!m) return
+        if (typeof m.count === 'number') this.danmakuCount = m.count
+        this.danmakuNote = m.note ?? this.danmakuNote
       })
       this.eventsBus = bus
     },
 
-    async pollMockState(real = false) {
+    startPolling() {
+      this.stopTicker()
+      void this.pollSnapshot()
+      this.ticker = setInterval(() => void this.pollSnapshot(), 500) as unknown as number
+    },
+
+    async pollSnapshot() {
       try {
-        const st = real ? await api.playerState() : await api.playerState()
-        this.running = st.running
-        this.opened = st.opened
-        this.position = st.position ?? this.position
-        this.duration = st.duration ?? this.duration
-        this.paused = st.paused ?? this.paused
-        this.speed = st.speed ?? this.speed
-        this.volume = clampVolume(st.volume ?? this.volume)
-        this.eof = st.eof ?? this.eof
-        this.danmakuOn = st.danmakuOn ?? this.danmakuOn
-        if (st.title) this.title = st.title
+        const s = await api.playerState()
+        this.applySnapshot(s)
+        // mock 面 eof → 播完（真实后端不发 eof，由 player:ended 驱动）
+        if (s.eof && !this.eof) this.markEnded()
       } catch {
         /* 轮询失败静默，退出时兜底 */
       }
     },
 
-    async loadDanmakuCount(session: string) {
-      try {
-        const res = await api.danmakuAll(session)
-        this.danmakuCount = res.items?.length ?? 0
-      } catch {
-        // 弹幕全量不可用：回落演示条目并标注（父代理指令 m00080）
-        const demo = mockDanmakuAll(session)
-        this.danmakuCount = demo.items.length
-        this.status = '弹幕通道不可用，计数为示例数据'
-      }
+    /** 播完定案：eof + 提示（v1「下一集」按钮语义，player.py:1185） */
+    markEnded() {
+      this.eof = true
+      this.paused = true
+      this.running = true
+      this.status = '本集已播完，可播放下一集'
     },
 
     async togglePlay() {
       if (this.demoMode) {
         this.paused = !this.paused
-        if (!this.paused) this.eof = false
+        if (!this.paused) {
+          this.eof = false
+          if (this.position >= this.duration) this.position = 0
+        }
         return
       }
       try {
-        if (this.paused) await api.resumeVideo()
-        else await api.pauseVideo()
+        if (this.paused) {
+          if (this.eof) await this.seek(0) // 播完 keep-open：从头播走 Seek 路径
+          await api.playerPlay()
+        } else {
+          await api.pauseVideo()
+        }
         this.paused = !this.paused
+        this.eof = false
       } catch (e) {
         this.error = (e as ApiError)?.message ?? '操作失败'
       }
     },
 
+    /** 界面秒制入口（PlayerView 传秒），桥内毫秒 */
     async seek(sec: number) {
       const target = Math.max(0, Math.min(this.duration || sec, sec))
       if (this.demoMode) {
@@ -281,6 +350,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await api.seekVideo(target * 1000)
         this.position = target
+        this.eof = false
       } catch (e) {
         this.error = (e as ApiError)?.message ?? '跳转失败'
       }
@@ -323,15 +393,6 @@ export const usePlayerStore = defineStore('player', {
       }
     },
 
-    /** 视口上报（300ms 去抖，Go 侧重建 ASS PlayRes） */
-    reportViewport(w: number, h: number) {
-      if (this.demoMode || !this.opened) return
-      clearTimeout(this.viewportTimer)
-      this.viewportTimer = setTimeout(() => {
-        api.reportViewport(Math.round(w), Math.round(h)).catch(() => undefined)
-      }, 300) as unknown as number
-    },
-
     stopTicker() {
       if (this.ticker) {
         clearInterval(this.ticker)
@@ -341,16 +402,14 @@ export const usePlayerStore = defineStore('player', {
 
     detach() {
       this.stopTicker()
-      clearTimeout(this.viewportTimer)
       const bus = this.eventsBus
       if (bus?.EventsOff) {
-        bus.EventsOff('player:tick')
-        bus.EventsOff('player:state')
+        for (const name of PLAYER_EVENTS) bus.EventsOff(name)
       }
       this.eventsBus = undefined
     },
 
-    /** 关闭=Close+返回（任务定案）；路由卸载也调用，幂等 */
+    /** 关闭=PlayerClosePlayer+返回（任务定案）；路由卸载也调用，幂等 */
     async shutdown() {
       this.detach()
       if (this.demoMode || !this.opened) {

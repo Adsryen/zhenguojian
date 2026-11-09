@@ -16,8 +16,8 @@ const sections = computed(() => [
       { to: '/discover', text: t('nav.discover'), icon: 'compass' },
       { to: '/library', text: t('nav.library'), icon: 'library' },
       { to: '/search', text: t('nav.search'), icon: 'search' },
-      // V2-2：新剧日历并入 /reserve（旧 /calendar 占位路由保留兜底，避免深层链接 404）
-      { to: '/reserve', text: t('nav.calendar'), icon: 'calendar' }
+      // 追剧日历实页（V2-5）：/reserve 保留路由兼容深层链接与预约视图
+      { to: '/calendar', text: t('nav.calendar'), icon: 'calendar' }
     ]
   },
   {

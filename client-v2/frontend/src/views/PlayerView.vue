@@ -1,8 +1,10 @@
 <script setup lang="ts">
-/* PlayerView（V2-3b）：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定）→ store.bootFromQuery。
+/* PlayerView（V2-3c）：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定，兼容 ?drama=<id>）→ store.bootFromQuery。
    控制条 = 播放/暂停、进度条（拖拽 Seek）、倍速 0.5–3（v1 SPEED_CHOICES，player.py:61）、
-   音量（0-100，持久化 zgj.player.volume，v1 player.py:1899-1905 语义）、弹幕开关、关闭=Close+返回。
-   数据由 player:tick / player:state 事件驱动（stores/player.ts）；
+   音量（0-100，持久化 zgj.player.volume，v1 player.py:1899-1905 语义）、弹幕开关（PlayerDanmaku）、
+   播完「下一集」（player:ended → playNext，v1 player.py:1185 语义）、关闭=PlayerClosePlayer+返回。
+   数据由 player:tick / player:ended / player:error / danmaku:stats 事件驱动（stores/player.ts）；
+   旧 ReportViewport 已随契约移除——Go 侧不再收视口，ASS 缩放由服务内部处理。
    弹幕由 mpv ASS 渲染，本组件 DOM 不画弹幕（任务定案）。 */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -13,7 +15,6 @@ const route = useRoute()
 const router = useRouter()
 const store = usePlayerStore()
 
-const stageEl = ref<HTMLElement | null>(null)
 const dragging = ref(false)
 const dragPos = ref(0)
 
@@ -36,7 +37,7 @@ async function onDragEnd() {
 
 function dramaTitleFromQuery(): string {
   try {
-    return dramaFromQuery('', route.query as Record<string | number | symbol, unknown>).title || ''
+    return dramaFromQuery(String(route.query.drama ?? ''), route.query as Record<string | number | symbol, unknown>).title || ''
   } catch {
     return ''
   }
@@ -48,22 +49,11 @@ async function closePlayer() {
   else router.push('/')
 }
 
-let ro: ResizeObserver | undefined
 onMounted(async () => {
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
-  if (stageEl.value && typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver((entries) => {
-      const r = entries[0]?.contentRect
-      if (r) store.reportViewport(r.width, r.height)
-    })
-    ro.observe(stageEl.value)
-    const b = stageEl.value.getBoundingClientRect()
-    store.reportViewport(b.width, b.height)
-  }
 })
 
 onBeforeUnmount(() => {
-  ro?.disconnect()
   void store.shutdown()
 })
 </script>
@@ -76,18 +66,26 @@ onBeforeUnmount(() => {
       <div class="pl-badges">
         <span v-if="store.demoMode" class="pl-badge demo">示例数据</span>
         <span v-if="store.danmakuCount !== null" class="pl-badge">弹幕 {{ store.danmakuCount }} 条</span>
+        <span v-if="store.danmakuNote" class="pl-badge">{{ store.danmakuNote }}</span>
         <span v-if="store.eof" class="pl-badge warn">已播完</span>
       </div>
     </header>
 
-    <div ref="stageEl" class="pl-stage" @click="store.togglePlay()">
-      <div v-if="store.loading" class="pl-hint">正在解析播放地址…</div>
+    <div class="pl-stage" @click="store.togglePlay()">
+      <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
       <div v-else-if="store.error" class="pl-hint err">{{ store.error }}</div>
       <div v-else class="pl-stage-inner">
-        <div class="pl-disc" :class="{ spin: store.running && !store.paused }">
+        <div class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
           <span class="pl-disc-core" />
         </div>
-        <div v-if="store.paused && !store.eof && !store.loading" class="pl-bigplay">▶</div>
+        <div v-if="store.eof" class="pl-ended">
+          <span class="pl-ended-txt">本集已播完</span>
+          <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
+            下一集
+          </button>
+          <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
+        </div>
+        <div v-else-if="store.paused && !store.loading" class="pl-bigplay">▶</div>
       </div>
     </div>
 
@@ -230,6 +228,23 @@ onBeforeUnmount(() => {
   to {
     transform: rotate(360deg);
   }
+}
+.pl-ended {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.pl-ended-txt {
+  font-size: 13px;
+  color: var(--muted, #9aa3b2);
+}
+.pl-btn.next {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .pl-bigplay {
   position: absolute;

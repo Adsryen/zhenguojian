@@ -1,6 +1,6 @@
 /* mock fixtures —— 手抄自 v1 引擎真实 catalog 形状（hongguo nativeDrama 字段名逐一对应；
    封面为本地占位 SVG，真实 cover 是引擎返回的 CDN 直链）。仅 VITE_MOCK=1 时使用。 */
-import type { DanmakuItem, DanmakuWindowResult, CalendarItem, CatalogResult, Chapter, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
+import type { DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
 
 export const MOCK_SOURCES: SourceListItem[] = [
   {
@@ -268,6 +268,42 @@ export function mockCalendarDays(): CalendarItem[] {
   return out
 }
 
+/** 追剧日历 mock：与核心 App.Calendar（case "calendar" → hongguoCalendarPage）
+    同构的平铺页形状 —— items 属于所查询日期、dates 轴、defaultDate/hasMore/nextOffset。
+    mockCalendarDays() 保留给 ReserveView（嵌套形状），两者互不影响。 */
+export function mockCalendarPage(date = ''): CalendarPayload {
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  const now = new Date()
+  const todayStr = fmt(now)
+  // 核心日期轴 ≈ 今天前 2 天 .. 后 4 天
+  const dates: string[] = []
+  for (let day = -2; day <= 4; day++) {
+    dates.push(fmt(new Date(now.getFullYear(), now.getMonth(), now.getDate() + day)))
+  }
+  const selected = /^\d{8}$/.test(date) ? date : todayStr
+  const pool: CalendarEntry[] = [
+    { seriesId: 'mock-cal-1', title: '夜阑直播', cover: '/posters/p1.svg', category: '悬疑', tags: ['悬疑', '直播'], episodeCnt: 24, isOnline: true, subscribed: false, heat: '1234万热度', note: '1234万热度', publishText: '24集全', badge: '爆' },
+    { seriesId: 'mock-cal-2', title: '长公主的替影', cover: '/posters/p2.svg', category: '古装', tags: ['古装', '权谋'], episodeCnt: 18, isOnline: true, subscribed: true, heat: '890万热度', note: '890万热度', publishText: '更新至12集' },
+    { seriesId: 'mock-cal-3', title: '逆熵实验室', cover: '/posters/p3.svg', category: '科幻', tags: ['科幻'], isOnline: false, subscribed: false, hint: '今晚 18:00', expectedText: '预计今日 18:00 上线', note: '预计今日 18:00 上线', publishAt: now.getTime() },
+    { seriesId: 'mock-cal-4', title: '雾中告别', cover: '/posters/p4.svg', category: '都市', tags: ['都市', '情感'], isOnline: false, subscribed: false, hint: '今日 20:00', note: '预计今日 20:00 上线' },
+    { seriesId: 'mock-cal-5', title: '机甲小厨娘', cover: '/posters/p1.svg', category: '漫剧', tags: ['漫剧'], isOnline: false, subscribed: true, hint: '待定上线时间', note: '敬请期待', badge: '新' },
+    { seriesId: 'mock-cal-6', title: '山海藏舟', cover: '/posters/p2.svg', category: '玄幻', tags: ['玄幻'], episodeCnt: 30, isOnline: true, subscribed: false, note: '456万热度', publishText: '30集全' }
+  ]
+  const dayIdx = dates.indexOf(selected)
+  // 前天日为空日（演示「这一天没有上新」空态），其余日切片变化
+  const items = dayIdx < 0 || dayIdx === 0 ? [] : pool.slice(0, 2 + (dayIdx % 4)).map((it) => ({ ...it }))
+  return {
+    items,
+    dates,
+    defaultDate: todayStr,
+    hasMore: false,
+    nextOffset: 0,
+    sessionId: 'mock-calendar',
+    fetchedAt: new Date().toISOString()
+  }
+}
+
 /** Resolve 的 mock plan：与 Go 端 (string,error) JSON 形状一致 */
 export function mockResolvePlan(drama: Drama, chapter: Chapter, index: number): ResolvePlan {
   return {
@@ -325,4 +361,356 @@ export function mockCatalog(source: string, query: string, page: number): Catalo
     localSearch: false,
     fresh: page === 1
   }
+}
+
+/* ---------------------------------------------------------------- V2-3 下载与合并（有状态 mock）
+   模拟 downloadsvc 语义：入队→并发槽位→进度推进→暂停/续传/重试/移除，
+   合并 FIFO 队列按 v1 阶段推进（解密→解析→统一→合并→校验→保存）。
+   设置持久化在 localStorage（key 同 resourceSettings 风格），仅 VITE_MOCK 使用。 */
+import type {
+  DownloadEntry,
+  DownloadJobRow,
+  DownloadSettingsSnapshot,
+  DownloadSnapshot,
+  MergeEntryRow
+} from './types'
+
+const MOCK_DL_SETTINGS_KEY = 'zgj.mock.downloadSettings'
+const MOCK_DL_TICK_MS = 1000
+/** 与 Go 侧 mergeStages 对齐 */
+const MOCK_MERGE_STAGES: Array<[string, number, number]> = [
+  ['准备中', 0, 0.02],
+  ['解密分集', 0.02, 0.1],
+  ['解析媒体信息', 0.1, 0.16],
+  ['统一分集格式', 0.16, 0.46],
+  ['合并视频', 0.46, 0.58],
+  ['完整解码校验', 0.58, 0.95],
+  ['保存成品', 0.95, 1]
+]
+
+interface MockDlState {
+  seq: number
+  jobs: DownloadJobRow[]
+  merges: MergeEntryRow[]
+  status: string
+  timer?: ReturnType<typeof setInterval>
+}
+
+function mockDlSettings(): Required<Pick<DownloadSettingsSnapshot, 'downloadConcurrency' | 'downloadBySource' | 'mergeVerify'>> {
+  try {
+    const raw = localStorage.getItem(MOCK_DL_SETTINGS_KEY)
+    if (raw) {
+      const s = JSON.parse(raw) as Record<string, unknown>
+      return {
+        downloadConcurrency: typeof s.downloadConcurrency === 'number' ? s.downloadConcurrency : 2,
+        downloadBySource: !!s.downloadBySource,
+        mergeVerify: s.mergeVerify === undefined ? true : !!s.mergeVerify
+      }
+    }
+  } catch {
+    /* 忽略：回落默认 */
+  }
+  return { downloadConcurrency: 2, downloadBySource: false, mergeVerify: true }
+}
+
+function mockDlSaveSettings(s: DownloadSettingsSnapshot): void {
+  localStorage.setItem(
+    MOCK_DL_SETTINGS_KEY,
+    JSON.stringify({
+      downloadConcurrency: s.downloadConcurrency ?? 2,
+      downloadBySource: !!s.downloadBySource,
+      mergeVerify: s.mergeVerify !== false
+    })
+  )
+}
+
+const mockDlHongguo: Drama = {
+  id: 'hongguo:7439220582928952383',
+  source: 'hongguo',
+  sourceId: '7439220582928952383',
+  title: '一世之尊',
+  cover: '/posters/p1.svg',
+  episodes: 35
+}
+const mockDlShan: Drama = {
+  id: 'hongguo:7421530981234567890',
+  source: 'hongguo',
+  sourceId: '7421530981234567890',
+  title: '闪婚老公是大佬',
+  cover: '/posters/p2.svg',
+  episodes: 82
+}
+
+function seedJob(
+  state: MockDlState,
+  drama: Drama,
+  index: number,
+  totalBytes: number,
+  bytes: number,
+  st: DownloadJobRow['state'],
+  extra?: Partial<DownloadJobRow>
+): DownloadJobRow {
+  const job: DownloadJobRow = {
+    id: `mock${String(++state.seq).padStart(4, '0')}`,
+    drama,
+    chapter: { title: `第${index + 1}集`, currentEpisode: index + 1, duration: 132 + (index % 7) * 9 },
+    index,
+    quality: 2,
+    actualQuality: 2,
+    bitrate: 2800000,
+    state: st,
+    bytes,
+    total: totalBytes,
+    progress: totalBytes > 0 ? Math.min(1, bytes / totalBytes) : 0,
+    created: Math.floor(Date.now() / 1000) - 3600 - index * 7,
+    revision: 1 + index,
+    ...extra
+  }
+  state.jobs.push(job)
+  return job
+}
+
+function mockDlSeed(): MockDlState {
+  const mb = 1024 * 1024
+  const state: MockDlState = { seq: 0, jobs: [], merges: [], status: '示例数据：模拟核心下载队列（VITE_MOCK）' }
+  // 一世之尊：1/2 已完成（可整季合并），3 下载中，4 排队，5 失败，6 已暂停
+  for (const i of [0, 1]) seedJob(state, mockDlHongguo, i, 96 * mb, 96 * mb, 'completed')
+  seedJob(state, mockDlHongguo, 2, 102 * mb, 37 * mb, 'downloading')
+  seedJob(state, mockDlHongguo, 3, 99 * mb, 0, 'queued')
+  seedJob(state, mockDlHongguo, 4, 94 * mb, 12 * mb, 'failed', { error: '解析下载直链失败：线路超时' })
+  seedJob(state, mockDlHongguo, 5, 101 * mb, 55 * mb, 'paused')
+  // 闪婚老公是大佬：1/2/3 已完成
+  for (const i of [0, 1, 2]) seedJob(state, mockDlShan, i, 88 * mb, 88 * mb, 'completed')
+  // 归档一条
+  seedJob(state, mockDlShan, 3, 86 * mb, 86 * mb, 'completed', { archived: true })
+  // 合并历史：一世之尊 全001-002集 已完成
+  state.merges.push({
+    id: `${mockDlHongguo.id}#001-002`,
+    dramaId: mockDlHongguo.id,
+    title: mockDlHongguo.title,
+    episodes: [1, 2],
+    count: 2,
+    state: 'done',
+    stage: '保存成品',
+    progress: 1,
+    output: 'D:\\ZhenguoJian\\downloads\\合并\\一世之尊 全001-002集.mkv',
+    bytes: 188 * mb,
+    detail: '示例产物路径'
+  })
+  return state
+}
+
+let mockDl: MockDlState | null = null
+
+function mockDlState(): MockDlState {
+  if (!mockDl) mockDl = mockDlSeed()
+  if (!mockDl.timer) {
+    mockDl.timer = setInterval(() => mockDlTick(), MOCK_DL_TICK_MS)
+  }
+  return mockDl
+}
+
+function mockDlFind(id: string): DownloadJobRow | undefined {
+  return mockDlState().jobs.find((j) => j.id === id)
+}
+
+/** 模拟核心调度：并发槽位内的 queued → downloading；downloading 前进字节 */
+function mockDlTick(): void {
+  const state = mockDl
+  if (!state) return
+  const { downloadConcurrency } = mockDlSettings()
+  let active = state.jobs.filter((j) => j.state === 'downloading').length
+  for (const job of state.jobs) {
+    if (job.state !== 'queued') continue
+    if (active >= Math.max(1, downloadConcurrency)) break
+    job.state = 'downloading'
+    job.error = undefined
+    active += 1
+  }
+  for (const job of state.jobs) {
+    if (job.state !== 'downloading') {
+      if (job.state !== 'queued') job.speed = 0
+      continue
+    }
+    const step = (5 + Math.random() * 9) * 1024 * 1024
+    job.bytes = Math.min(job.total, job.bytes + step)
+    job.progress = job.total > 0 ? job.bytes / job.total : 1
+    job.speed = Math.round(step)
+    job.eta = Math.max(0, Math.round((job.total - job.bytes) / Math.max(1, step)))
+    job.revision = (job.revision ?? 0) + 1
+    if (job.bytes >= job.total) {
+      job.state = 'completed'
+      job.progress = 1
+      job.speed = 0
+      job.eta = 0
+      job.revision = 0
+    }
+  }
+  for (const m of state.merges) {
+    if (m.state !== 'running') continue
+    const next = m.progress + 0.02 + Math.random() * 0.03
+    if (next >= 1) {
+      m.progress = 1
+      m.stage = '保存成品'
+      m.state = 'done'
+      m.output = `D:\\ZhenguoJian\\downloads\\合并\\${m.title} 全${String(m.episodes[0]).padStart(3, '0')}-${String(m.episodes[m.episodes.length - 1]).padStart(3, '0')}集.mkv`
+      m.detail = '示例数据：模拟合并产物'
+      state.status = `《${m.title}》合并完成：全${String(m.episodes[0]).padStart(3, '0')}-${String(m.episodes[m.episodes.length - 1]).padStart(3, '0')}集（示例数据）`
+    } else {
+      m.progress = next
+      for (const [name, lo, hi] of MOCK_MERGE_STAGES) {
+        if (next >= lo && next < hi) {
+          m.stage = name
+          break
+        }
+      }
+    }
+  }
+}
+
+export function mockDownloadList(): DownloadSnapshot {
+  const state = mockDlState()
+  const { mergeVerify } = mockDlSettings()
+  return {
+    jobs: state.jobs.map((j) => ({ ...j })),
+    merges: state.merges.map((m) => ({ ...m })),
+    status: state.status,
+    mergeVerify
+  }
+}
+
+export function mockDownloadStart(drama: Drama, entries: DownloadEntry[], quality: number): { added: number } {
+  const state = mockDlState()
+  if (!drama?.id || !drama?.source) throw new Error('剧集信息不完整')
+  if (!entries.length) throw new Error('请先选择要下载的分集')
+  if (entries.length > 500) throw new Error('单次最多添加 500 集')
+  let added = 0
+  const mb = 1024 * 1024
+  for (const e of entries) {
+    if (state.jobs.some((j) => j.drama?.id === drama.id && j.index === e.index && !j.archived)) continue
+    const total = (85 + ((e.index * 7) % 25)) * mb
+    seedJob(state, drama, e.index, total, 0, 'queued', { quality, chapter: e.chapter })
+    added += 1
+  }
+  state.status = `已添加 ${added} 集到下载队列（示例数据）`
+  return { added }
+}
+
+export function mockDownloadControl(id: string, command: string): { ok: boolean } {
+  const state = mockDlState()
+  const job = mockDlFind(id)
+  if (!job) throw new Error('下载任务不存在，请刷新列表')
+  if (command === 'pause' && (job.state === 'downloading' || job.state === 'queued')) {
+    job.state = 'paused'
+    job.speed = 0
+    job.error = '上次下载已暂停'
+  } else if (command === 'resume' && (job.state === 'paused' || job.state === 'failed')) {
+    job.state = 'queued'
+    job.error = undefined
+  } else if (command === 'remove') {
+    state.jobs = state.jobs.filter((j) => j.id !== id)
+  } else if (command === 'archive') {
+    job.archived = true
+  } else if (command === 'restore') {
+    job.archived = false
+  }
+  return { ok: true }
+}
+
+export function mockDownloadControlAll(command: string): { ok: boolean } {
+  const state = mockDlState()
+  for (const job of state.jobs) {
+    if (command === 'pauseAll' && (job.state === 'downloading' || job.state === 'queued')) {
+      job.state = 'paused'
+      job.speed = 0
+      job.error = '上次下载已暂停'
+    } else if (command === 'resumeAll' && job.state === 'paused') {
+      job.state = 'queued'
+      job.error = undefined
+    }
+  }
+  return { ok: true }
+}
+
+export function mockDownloadRemoveBatch(ids: string[]): { completed: string[]; failures: Record<string, string> } {
+  const state = mockDlState()
+  const completed = ids.filter((id) => state.jobs.some((j) => j.id === id))
+  state.jobs = state.jobs.filter((j) => !ids.includes(j.id))
+  return { completed, failures: {} }
+}
+
+export function mockDownloadSettings(): DownloadSettingsSnapshot {
+  return {
+    proxyMode: 'auto',
+    catalogConcurrency: 3,
+    catalogIntervalMs: 250,
+    ...mockDlSettings()
+  }
+}
+
+export function mockSaveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): DownloadSettingsSnapshot {
+  const snap: DownloadSettingsSnapshot = {
+    proxyMode: 'auto',
+    catalogConcurrency: 3,
+    catalogIntervalMs: 250,
+    downloadConcurrency: Math.max(1, Math.min(8, Math.round(concurrency || 2))),
+    downloadBySource: !!bySource,
+    mergeVerify: !!mergeVerify
+  }
+  mockDlSaveSettings(snap)
+  mockDlState().status = '下载设置已保存（示例数据）'
+  return mockDownloadSettings()
+}
+
+export function mockMergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): { queued: number; replaced: boolean; episodes: number[] } {
+  const state = mockDlState()
+  let candidates: DownloadJobRow[] = []
+  if (mode === 'selected') {
+    if (!jobIds.length) throw new Error('请先勾选要合并的分集')
+    candidates = state.jobs.filter((j) => jobIds.includes(j.id))
+    if (candidates.some((j) => j.state !== 'completed')) throw new Error('只有已完成的分集可以合并，请检查勾选')
+    const ids = new Set(candidates.map((j) => j.drama?.id ?? ''))
+    if (ids.size > 1) throw new Error('请选择同一部剧的分集合并')
+  } else {
+    if (!drama?.id) throw new Error('缺少剧集信息')
+    candidates = state.jobs.filter((j) => j.drama?.id === drama.id && j.state === 'completed' && !j.archived)
+  }
+  if (candidates.length < 2) {
+    const title = drama?.title ?? candidates[0]?.drama?.title ?? ''
+    throw new Error(`《${title}》可合并的已完成分集不足 2 集`)
+  }
+  candidates.sort((a, b) => a.index - b.index)
+  const d = drama ?? (candidates[0].drama as Drama)
+  const episodes = candidates.map((j) => j.index + 1)
+  const first = episodes[0]
+  const last = episodes[episodes.length - 1]
+  const id = `${d.id}#${String(first).padStart(3, '0')}-${String(last).padStart(3, '0')}`
+  if (state.merges.some((m) => m.id === id && (m.state === 'running' || m.state === 'queued'))) {
+    throw new Error('该剧这段分集正在合并中，请等待完成')
+  }
+  const queued = state.merges.filter((m) => m.id === id && m.state === 'queued')
+  state.merges = state.merges.filter((m) => !queued.includes(m))
+  state.merges.unshift({
+    id,
+    dramaId: d.id,
+    title: d.title,
+    episodes,
+    count: episodes.length,
+    state: 'running',
+    stage: '准备中',
+    progress: 0.01
+  })
+  state.status = `开始合并《${d.title}》全${episodes.length}集（示例数据）`
+  mockDlTick()
+  return { queued: 1, replaced: queued.length > 0, episodes }
+}
+
+export function mockMergeCancel(id: string): { ok: boolean } {
+  const state = mockDlState()
+  const targets = state.merges.filter((m) => (!id || m.id === id) && (m.state === 'running' || m.state === 'queued'))
+  for (const m of targets) {
+    m.state = 'canceled'
+    m.detail = id ? '已取消排队' : '合并已取消'
+  }
+  return { ok: true }
 }

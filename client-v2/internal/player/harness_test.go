@@ -21,7 +21,9 @@ import (
 	"testing"
 	"time"
 
+	"zhenguojian/client-v2/internal/danmaku"
 	"zhenguojian/client-v2/internal/mpv"
+	"zhenguojian/client-v2/internal/player"
 )
 
 type cmdRec struct {
@@ -258,40 +260,123 @@ func waitFor(t *testing.T, timeout time.Duration, pred func() bool, desc string)
 	t.Fatalf("等待超时: %s", desc)
 }
 
-// emitter 捕获 EventsEmit(name, data...)。
+// emitter 捕获 Emit(event, payload)（缓冲通道，满则丢——与服务契约「非阻塞」一致）。
 type emitter struct {
 	ch chan emEv
 }
 
 type emEv struct {
-	Name string
-	Data string
+	Name    string
+	Payload any
 }
 
-func newEmitter() *emitter { return &emitter{ch: make(chan emEv, 512)} }
+func newEmitter() *emitter { return &emitter{ch: make(chan emEv, 1024)} }
 
-func (e *emitter) emit(name string, data ...any) {
-	payload := ""
-	if len(data) > 0 {
-		payload = fmt.Sprintf("%v", data[0])
-	}
+func (e *emitter) emit(name string, payload any) {
 	select {
-	case e.ch <- emEv{Name: name, Data: payload}:
+	case e.ch <- emEv{Name: name, Payload: payload}:
 	default:
 	}
 }
 
-func (e *emitter) waitEvent(t *testing.T, name string, timeout time.Duration) emEv {
+// waitEvent  draining 等待名字匹配且 pred 为真的事件。
+func (e *emitter) waitEvent(t *testing.T, name string, timeout time.Duration,
+	pred func(any) bool) emEv {
 	t.Helper()
 	deadline := time.After(timeout)
 	for {
 		select {
 		case ev := <-e.ch:
-			if ev.Name == name {
+			if ev.Name == name && (pred == nil || pred(ev.Payload)) {
 				return ev
 			}
 		case <-deadline:
 			t.Fatalf("等待事件 %s 超时", name)
 		}
 	}
+}
+
+// collect 把当前已到达的事件全部取出（用于「之后不再有事件」断言）。
+func (e *emitter) collect() []emEv {
+	var out []emEv
+	for {
+		select {
+		case ev := <-e.ch:
+			out = append(out, ev)
+		default:
+			return out
+		}
+	}
+}
+
+// ---------------------------------------------------------------- 集成用例
+// 用真实 *mpv.Player（默认 Launcher）+ net.Pipe 假后端跑一遍完整链路：
+// Open → 属性驱动 tick/弹幕 → 断开自动重建 → 新实例 file-loaded 后续播。
+
+func TestIntegrationRealPlayerOverFakeIPC(t *testing.T) {
+	fb := &fakeBackend{}
+	src := &fakeSource{def: items(3, 5000)}
+	em := newEmitter()
+	svc := player.New(player.Config{
+		Resolver: resolverFunc(func(_ context.Context, _ player.Request) (player.Plan, error) {
+			return fixedPlan(), nil
+		}),
+		Backend:       fb,
+		MpvPath:       "fake-mpv", // 真实内核 Start 只查非空，假后端忽略路径
+		DanmakuSource: src,
+		Emit:          em.emit,
+		AssDir:        t.TempDir(),
+		TickInterval:  10 * time.Millisecond,
+		FetcherOpts: danmaku.FetcherOptions{MinGap: 2 * time.Millisecond,
+			RetryDelays: []time.Duration{2 * time.Millisecond, 4 * time.Millisecond}},
+	})
+	defer func() { _ = svc.Close() }()
+
+	if err := svc.Open(context.Background(), openReq(1)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	waitFor(t, 3*time.Second, func() bool {
+		s := fb.lastServer()
+		return s != nil && s.hasLoadfile()
+	}, "真实内核经假 IPC 送达 loadfile")
+	s0 := fb.lastServer()
+	s0.PushProperty("duration", 120.0)
+	s0.PushProperty("time-pos", 5.0)
+
+	em.waitEvent(t, "danmaku:stats", 3*time.Second, func(p any) bool {
+		m, _ := p.(map[string]any)
+		return m["count"] == 3
+	})
+	waitFor(t, 3*time.Second, func() bool {
+		for _, c := range s0.Cmds() {
+			if c.Name == "sub-add" {
+				return true
+			}
+		}
+		return false
+	}, "sub-add 送达 IPC")
+
+	// 断开 → 自动重建：新 fakeServer、新 loadfile、旧实例收到 quit
+	s0.PushProperty("time-pos", 60.0)
+	s0.CloseEvents()
+	waitFor(t, 5*time.Second, func() bool { return fb.serverCount() == 2 }, "断线自动重建")
+	s1 := fb.lastServer()
+	waitFor(t, 5*time.Second, func() bool { return s1.hasLoadfile() }, "新实例装载")
+	waitFor(t, 5*time.Second, func() bool {
+		for _, c := range s0.Cmds() {
+			if c.Name == "quit" {
+				return true
+			}
+		}
+		return false
+	}, "旧实例被 quit")
+	// fakeServer 对 loadfile 自动补推 file-loaded → 服务应在新实例上发续播 seek
+	waitFor(t, 5*time.Second, func() bool {
+		for _, c := range s1.Cmds() {
+			if c.Name == "seek" {
+				return true
+			}
+		}
+		return false
+	}, "file-loaded 后续播 seek")
 }
