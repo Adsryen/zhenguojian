@@ -153,10 +153,16 @@ jobs:
       - name: PyInstaller
         working-directory: zhenguojian\app
         run: |
+          # 与本地 build/build.py 同口径：onefile 单文件 exe + 图标，
+          # app.ico 以 add-data 打进包内供窗口图标运行时读取
           python -m PyInstaller --noconfirm --clean --windowed `
-            --name "真果鉴" --onedir --contents-directory . `
+            --name "真果鉴" --onefile `
             --icon "$PWD\zhenguojian\app.ico" `
-            --paths . --distpath ..\..\dist-app --workpath ..\..\build-work --specpath ..\..\build-work `
+            --add-data "$PWD\zhenguojian\app.ico;zhenguojian" `
+            --paths . `
+            --hidden-import PyQt5.QtCore --hidden-import PyQt5.QtGui --hidden-import PyQt5.QtWidgets `
+            --hidden-import win32file --hidden-import win32pipe --hidden-import pywintypes `
+            --distpath ..\..\dist-app --workpath ..\..\build-work --specpath ..\..\build-work `
             run.py
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
@@ -164,11 +170,14 @@ jobs:
         run: |
           $stage = "dist\真果鉴"
           New-Item -ItemType Directory -Force $stage | Out-Null
-          # onedir 输出（PyInstaller 6.x 把支持文件放 _internal，exe 在 dist-app\真果鉴\ 根）
-          Copy-Item -Recurse -Force "dist-app\真果鉴\*" $stage\
+          # onefile 产物是单个 exe（dist-app\真果鉴.exe）
+          Copy-Item -Force "dist-app\真果鉴.exe" $stage\
           # runtime（sidecar/mpv/ffmpeg）与 exe 同级——tools.app_root()=exe 所在目录
           # 上面 dist\ 里已有 runtime\sidecar.exe（第一步构建产物在 dist\ 根）
           Move-Item -Force dist\runtime $stage\runtime -ErrorAction SilentlyContinue
+          # 与本地 package.py 一致：README 与空目录骨架随包分发
+          Copy-Item -Force "zhenguojian\README.md" "$stage\README.md"
+          New-Item -ItemType Directory -Force "$stage\下载", "$stage\.cache\downloads" | Out-Null
           git show -s --format=%cI HEAD | Set-Content -NoNewline ct.txt
           $commit = (Get-Content ct.txt).Trim(); Remove-Item ct.txt
           $json = '{"revision":"' + "${{ github.sha }}" + '","commitTime":"' + $commit + '","modified":false}'
