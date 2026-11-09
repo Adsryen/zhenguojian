@@ -1,0 +1,226 @@
+/* ================================================================
+   真果鉴 V2 设计 token —— 从 v1 zhenguojian/app/zhenguojian/ui.py
+   DARK/LIGHT 调色板 + guo_* 派生 token 全量 1:1 翻译（2026-11-09）。
+   组件禁止散落硬编码色值，只用 var(--token)。
+   Qt #AARRGGBB 已转 CSS #RRGGBBAA。
+   主视觉走 guoapp 语义：accent=guo_accent #4a83ff（V2 蓝），
+   v1 品牌红保留为 --guoapp-red 系（--accent-v1）。
+   ================================================================ */
+
+:root,
+[data-theme="dark"] {
+  /* --- 圆角 --- */
+  --radius: 8px;          /* RADIUS：按钮/输入框/卡片/列表/菜单 */
+  --radius-small: 4px;    /* RADIUS_SMALL：菜单项/列表项/细条 */
+  --guo-radius: 6px;
+  --guo-radius-lg: 12px;  /* 海报卡/浮层大圆角 */
+
+  /* --- 底色与层 --- */
+  --bg: #0f1117;          /* 窗口背景 */
+  --surface: #141821;     /* 列表/表格/输入框 */
+  --surface-2: #171b23;   /* 菜单栏/状态栏/未选中标签页 */
+  --surface-3: #24242e;   /* 悬停底色 */
+  --surface-4: #2e2e3a;   /* 表头/分隔条/次要按钮禁用态 */
+  --border: #2b2b36;      /* 细边框 */
+  --grid: #2b2b36;        /* 表格网格线 */
+  --alt-row: #12121a;     /* 表格隔行 */
+
+  /* --- 品牌与语义色 --- */
+  --accent: #4a83ff;          /* V2 主强调色（guo_accent，guoapp 蓝） */
+  --accent-hover: #5f92ff;
+  --accent-pressed: #3b6ecf;
+  --accent-soft: #4a83ff26;   /* 15% accent（原 #264a83ff AARRGGBB） */
+  --on-accent: #ffffff;       /* 压在 accent/success 上的字 */
+  --accent-v1: #ff3b5c;       /* v1 品牌红保留 */
+  --accent-v1-hover: #e8264c;
+  --accent-v1-pressed: #cf1f42;
+  --accent-v1-soft: #ff3b5c24;
+  --accent2: #ff6f85;         /* 品牌色浅一档：标题、徽标 */
+  --success: #2ea043;
+  --success-hover: #3fb950;
+  --success-pressed: #278839;
+  --danger: #ff5d5d;
+  --warning: #d29922;
+  --score: #ffb400;
+
+  /* --- 文本 --- */
+  --text: #d7dce5;        /* V2 正文色（guo_text） */
+  --text-v1: #e9e9f0;     /* v1 DARK text 原值保留 */
+  --muted: #8d97a8;       /* V2 次要文本（guo_muted） */
+  --muted-v1: #a2a2b2;    /* v1 muted (--text-2) */
+  --muted-2: #6d6d7c;     /* 比 muted 再弱一档（v1 muted2/--text-3） */
+
+  /* --- 控件底色 --- */
+  --chip: transparent;    /* 胶囊 chip 默认透明底 */
+  --chip-hover: #24242e;
+  --cover-bg: #24242e;    /* 海报未加载占位底色 */
+  --button-bg: #24242e;
+  --button-border: #3a3a48;
+  --button-hover: #2e2e3a;
+  --button-pressed: #1c1c24;
+  --button2-bg: #1c1c24;  /* 次要按钮（描边款） */
+  --button2-hover: #24242e;
+  --button2-border: #3a3a48;
+  --input-hover-border: #4a4a5c;
+  --disabled-bg: #2e2e3a;
+  --disabled-text: #6d6d7c;
+  --disabled-border: #3a3a48;
+  --ghost-disabled-text: #6d6d7c;
+  --ghost-disabled-border: #3a3a48;
+  --success-disabled-bg: #1f2a24;
+  --success-disabled-text: #6d6d7c;
+  --success-disabled-border: #2b3a31;
+  --danger-border: #5a3a41;
+  --danger-hover-bg: #2a1d21;
+  --danger-pressed-bg: #351f24;
+  --selected-soft: #ff3b5c24;
+  --scroll: #2b2b36;
+  --scroll-hover: #4a4a5c;
+
+  /* --- 状态色（下载队列） --- */
+  --state-downloading: #ff6f85;
+  --state-completed: #3fb950;
+  --state-paused: #d29922;
+  --state-queued: #a2a2b2;
+  --state-failed: #ff5d5d;
+
+  /* --- 播放器（两种主题都保持深色） --- */
+  --video-bg: #000000;
+  --video-text: #a2a2b2;
+  --video-danger: #ff5d5d;
+
+  /* --- 排行榜前三 --- */
+  --rank-1: #ff7a45;
+  --rank-2: #ffc04d;
+  --rank-3: #5ec2ff;
+
+  /* --- guoapp 派生系 --- */
+  --guo-surface-3: #1c2130;   /* 深一档悬停层 */
+  --guo-border: #262c3a;
+  --guo-accent: #4a83ff;
+  --guo-accent-hover: #5f92ff;
+  --guo-accent-pressed: #3b6ecf;
+  --guo-accent-soft: #4a83ff26;
+  --guo-success: #2ea043;
+  --guo-danger: #e06c75;
+  --guo-warning: #d29922;
+  --guo-text: #d7dce5;
+  --guo-muted: #8d97a8;
+  --guo-card-bg: #141821;      /* 海报卡本体底色 */
+  --guo-badge-bg: #000000b3;   /* 角标 chip 黑底 70% */
+  --guo-scrim-top: #00000000;  /* 海报渐变起（全透明） */
+  --guo-scrim-bottom: #0f1117cc; /* 海报渐变止（80% 深底） */
+  --guo-blur-scrim: #00000099; /* 模糊背景上 60% 黑遮罩 */
+  --guo-player-scrim: #0f1117cc; /* 控制条浮层底 */
+  --guo-vip-bg: #3d3222;
+  --guo-vip-fg: #e6c07b;
+  --guo-chip-bg: #1c2130;
+  --guo-chip-hover: #232a3b;
+  --guo-chip-pressed: #1a2438;
+  --guo-shadow: #00000066;     /* 悬停上浮阴影 40% 黑 */
+  --guo-shadow-blur: 28px;
+}
+
+[data-theme="light"] {
+  --radius: 8px;
+  --radius-small: 4px;
+  --guo-radius: 6px;
+  --guo-radius-lg: 12px;
+
+  --bg: #f5f5f8;
+  --surface: #ffffff;
+  --surface-2: #f7f7fa;
+  --surface-3: #f0f0f4;
+  --surface-4: #e6e6ec;
+  --border: #e4e4ea;
+  --grid: #e6e6ec;
+  --alt-row: #fafbfc;
+
+  --accent: #3a6fd8;
+  --accent-hover: #2f5fc0;
+  --accent-pressed: #274f9e;
+  --accent-soft: #3a6fd826;
+  --on-accent: #ffffff;
+  --accent-v1: #fe2c55;
+  --accent-v1-hover: #e8264c;
+  --accent-v1-pressed: #cf1f42;
+  --accent-v1-soft: #fe2c551a;
+  --accent2: #ff6f85;
+  --success: #1a7f37;
+  --success-hover: #1c8c3d;
+  --success-pressed: #146429;
+  --danger: #cf222e;
+  --warning: #bf8700;
+  --score: #976500;
+
+  --text: #23283a;
+  --text-v1: #1c1c24;
+  --muted: #5f6878;
+  --muted-v1: #55556a;
+  --muted-2: #8a8a9a;
+
+  --chip: transparent;
+  --chip-hover: #f0f0f4;
+  --cover-bg: #f0f0f4;
+  --button-bg: #ffffff;
+  --button-border: #d4d4dc;
+  --button-hover: #f0f0f4;
+  --button-pressed: #e6e6ec;
+  --button2-bg: #f7f7fa;
+  --button2-hover: #f0f0f4;
+  --button2-border: #d4d4dc;
+  --input-hover-border: #b8b8c4;
+  --disabled-bg: #e6e6ec;
+  --disabled-text: #8a8a9a;
+  --disabled-border: #d4d4dc;
+  --ghost-disabled-text: #8a8a9a;
+  --ghost-disabled-border: #d4d4dc;
+  --success-disabled-bg: #e4efe6;
+  --success-disabled-text: #8a8a9a;
+  --success-disabled-border: #cfe0d3;
+  --danger-border: #e5b4b8;
+  --danger-hover-bg: #fdecee;
+  --danger-pressed-bg: #f9dade;
+  --selected-soft: #fe2c551a;
+  --scroll: #c8cdd6;
+  --scroll-hover: #adb4bf;
+
+  --state-downloading: #fe2c55;
+  --state-completed: #1a7f37;
+  --state-paused: #bf8700;
+  --state-queued: #8a8a9a;
+  --state-failed: #cf222e;
+
+  --video-bg: #101114;
+  --video-text: #a2a2b2;
+  --video-danger: #ff5d5d;
+
+  --rank-1: #ff7a45;
+  --rank-2: #ffc04d;
+  --rank-3: #5ec2ff;
+
+  --guo-surface-3: #e9edf5;
+  --guo-border: #d3dae6;
+  --guo-accent: #3a6fd8;
+  --guo-accent-hover: #2f5fc0;
+  --guo-accent-pressed: #274f9e;
+  --guo-accent-soft: #3a6fd826;
+  --guo-success: #1a7f37;
+  --guo-danger: #d0565f;
+  --guo-warning: #bf8700;
+  --guo-text: #23283a;
+  --guo-muted: #5f6878;
+  --guo-card-bg: #ffffff;
+  --guo-badge-bg: #ffffffb3;
+  --guo-scrim-top: #00000000;
+  --guo-scrim-bottom: #f5f5f8cc;
+  --guo-blur-scrim: #ffffff99;
+  --guo-player-scrim: #101114cc; /* 视频浮层两种主题都保持深色 */
+  --guo-vip-bg: #f3e3c0;
+  --guo-vip-fg: #8a6112;
+  --guo-chip-bg: #eef1f7;
+  --guo-chip-hover: #e4e8f2;
+  --guo-chip-pressed: #d8deeb;
+  --guo-shadow: #20242e33;
+  --guo-shadow-blur: 24px;
+}

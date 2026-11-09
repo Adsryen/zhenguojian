@@ -11,3 +11,11 @@ AGENTS.md
 reference/
 __pycache__/
 dist-win/
+
+# v2 desktop shell build outputs
+client-v2/*.exe
+client-v2/build/bin/
+
+# v2 desktop shell build outputs
+client-v2/*.exe
+client-v2/build/bin/

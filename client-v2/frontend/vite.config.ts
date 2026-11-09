@@ -1,0 +1,32 @@
+import { defineConfig, type UserConfig } from 'vite'
+import vue from '@vitejs/plugin-vue'
+import { fileURLToPath } from 'node:url'
+
+// https://vitejs.dev/config/
+export default defineConfig(({ mode }) => {
+  const base: UserConfig = {
+    plugins: [vue()],
+    resolve: {
+      alias: {
+        '@': fileURLToPath(new URL('./src', import.meta.url))
+      }
+    },
+    // wails 打包产物路径固定为 frontend/dist
+    build: {
+      outDir: 'dist',
+      emptyOutDir: true,
+      chunkSizeWarningLimit: 1200
+    },
+    server: {
+      host: '127.0.0.1',
+      port: 5173,
+      strictPort: true
+    },
+    clearScreen: false
+  }
+  // `npm run dev:mock` = 强制 VITE_MOCK=1，无需 .env 文件
+  if (mode === 'mock') {
+    base.define = { 'import.meta.env.VITE_MOCK': JSON.stringify('1') }
+  }
+  return base
+})

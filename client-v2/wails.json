@@ -1,0 +1,19 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "zhenguojian",
+  "outputfilename": "zhenguojian",
+  "frontend:install": "npm install --registry=https://registry.npmmirror.com",
+  "frontend:build": "npm run build",
+  "frontend:dev:watcher": "npm run dev",
+  "frontend:dev:serverUrl": "auto",
+  "author": {
+    "name": "Adsryen",
+    "email": "51238895+Adsryen@users.noreply.github.com"
+  },
+  "info": {
+    "productName": "真果鉴",
+    "productVersion": "2.0.0-shell",
+    "copyright": "Copyright © 2026",
+    "comments": "V2-1 壳：Wails v2 + Vue3 + 进程内 native engine"
+  }
+}
