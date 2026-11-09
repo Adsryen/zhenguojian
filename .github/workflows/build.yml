@@ -147,10 +147,15 @@ jobs:
           if (-not $asset) { throw "no usable mpv windows asset" }
           Write-Host ("mpv asset: " + $asset.name)
           New-Item -ItemType Directory -Force mpvtmp, dist\runtime\mpv | Out-Null
+          # GitHub 资产 CDN 有间歇性 504 事故（见 githubstatus），拉长重试窗口硬扛
           $mpvOk = $false
-          foreach ($u in @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url), $asset.browser_download_url)) {
-            if (curl.exe -fSL --retry 2 -o mpv.pkg $u 2>$null) { $mpvOk = $true; break }
-            Write-Warning "mpv attempt failed: $u"
+          $srcs = @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url))
+          for ($i = 1; $i -le 20; $i++) {
+            $u = $srcs[($i - 1) % 2]
+            curl.exe -fsSL --retry 2 -o mpv.pkg $u 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Get-Item mpv.pkg -ErrorAction SilentlyContinue).Length -gt 1MB) { $mpvOk = $true; break }
+            Write-Warning ("mpv attempt $i failed: $u")
+            Start-Sleep 60
           }
           if (-not $mpvOk) { throw "mpv download failed from all sources" }
           if ($asset.name -like "*.zip") {
