@@ -145,7 +145,7 @@ export interface PlayerState {
 
 /** 适配层统一接口：wails 实现与 mock 实现同签名 */
 export interface NativeApi {
-  ping(): Promise<string>
+  ping(): Promise<string> | Promise<unknown>
   dataPath(): Promise<string>
   listSources(): Promise<SourceListItem[]>
   setSourceEnabled(slug: string, enabled: boolean): Promise<void>

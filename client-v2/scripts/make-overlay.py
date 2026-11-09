@@ -5,12 +5,13 @@
 import json, os, sys
 
 out = os.path.abspath(sys.argv[1])
-base = os.path.dirname(out)
+base = os.path.dirname(out)  # 仅作记录；键值已用绝对路径
 root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def rel(p):
-    r = os.path.relpath(p, base)
-    return r.replace("\\", "/")
+    # cmd/go 的 -overlay 里相对路径按「当前工作目录」解析而非 overlay 文件
+    # 所在目录，跨目录调用极易错位——统一写绝对路径，CI/本地行为一致。
+    return os.path.abspath(p).replace("\\", "/")
 
 src_overlay_dir = rel(os.path.join(root, "zhenguojian", "sidecar", "core_overlay"))
 core_dir = rel(os.path.join(root, "guoapp-src", "native", "core"))
