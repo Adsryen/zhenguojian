@@ -29,11 +29,12 @@ jobs:
       - name: Frontend
         working-directory: client-v2/frontend
         run: |
-          npm ci --registry=https://registry.npmmirror.com
+          npm ci --registry=https://registry.npmjs.org --fetch-retries=3
           if ($LASTEXITCODE -ne 0) {
-            Write-Host "::notice::npmmirror failed, retrying official registry"
+            Write-Host "::notice::official registry failed, retrying npmmirror"
             Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
-            npm ci
+            npm ci --registry=https://registry.npmmirror.com
+            if ($LASTEXITCODE -ne 0) { exit 1 }
           }
           npm run build
 
