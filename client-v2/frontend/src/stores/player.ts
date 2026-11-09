@@ -412,6 +412,17 @@ export const usePlayerStore = defineStore('player', {
     /** 关闭=PlayerClosePlayer+返回（任务定案）；路由卸载也调用，幂等 */
     async shutdown() {
       this.detach()
+      // SaveWatch 接线：退出播放页时写观看进度（真值 = watch store → Go watchstore；
+      // mock/DEGRADED 由 watch store 降级写 localStorage）。失败静默，不打断关闭流程。
+      if (this.drama && this.episodeIndex > 0 && this.position > 0) {
+        const finished = this.eof || (this.duration > 0 && this.position >= this.duration - 1)
+        try {
+          const { useWatchStore } = await import('./watch')
+          await useWatchStore().saveWatch(this.drama, this.episodeIndex, Math.floor(this.position), Math.floor(this.duration), finished)
+        } catch {
+          /* 进度写入失败静默 */
+        }
+      }
       if (this.demoMode || !this.opened) {
         this.opened = false
         this.running = false

@@ -334,7 +334,7 @@ const mockApi: NativeApi = {
   historyList: async () => {
     const rows: HistoryRow[] = []
     for (const [key, e] of Object.entries(readHistory())) {
-      const dramaId = key.split('#')[0]
+      const dramaId = key.slice(0, key.lastIndexOf(':'))
       rows.push({
         drama: { id: dramaId, title: e.title, cover: e.cover ?? '' } as Drama,
         episode: e.episode,
@@ -369,7 +369,7 @@ const mockApi: NativeApi = {
     return { ok: true }
   },
   removeHistory: async (id) => {
-    for (const key of Object.keys(readHistory())) if (key.split('#')[0] === id) deleteHistoryEntry(key)
+    for (const key of Object.keys(readHistory())) if (key.slice(0, key.lastIndexOf(':')) === id) deleteHistoryEntry(key)
     return { ok: true }
   },
   clearHistory: async () => {

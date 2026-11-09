@@ -1,6 +1,7 @@
-/* 本地兜底存储：V2-3 前没有 Go 端 watchstore/reservation 绑定，
-   追剧、看过、历史、下载队列、日历预约全部先落 localStorage（单一事实源在本地）。
-   —— 依赖请求见 V2-2 终报：需要 Go 端提供 Follows/History/Watched/Reservations 绑定后切换。 */
+/* 本地兜底存储：追剧/预约/历史 已切换为 stores/watch → Go watchstore 真值，
+   本模块仅保留为 DEGRADED（无桥）降级缓存层（watch.ts 在 MOCK/DEGRADED/桥竞态时回落此处同名函数）；
+   看过标记与下载队列仍以 localStorage 为主存储。
+   —— 历史依赖请求见 V2-2 终报：需要 Go 端提供 Follows/History/Watched/Reservations 绑定后切换。 */
 import type { Drama } from './types'
 
 /* 命名空间用拼接：字面量 'zgj.xxx' 曾被工具链脱敏管道损坏（history 键被替换成星号），

@@ -3,24 +3,18 @@
    版式照 v1 detail_layout.py：模糊封面铺头区 + 150x225 封面 + 标题/简介/热度/标签；
    选集照 v1 detail_episodes.py：GROUP_SIZE=30 分组 + 44px 网格 + 当前集高亮/未播变淡/VIP 角标。
    操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(Resolve→plan→localStorage
-   'downloads.queue'，V2-3 才接下载引擎)、追剧/看过(localStorage 兜底)。
-   —— 依赖请求（详见终报）：追剧需 Go 端 watchstore 绑定；// TODO binding: native.Follow/FollowList */
+   'downloads.queue'，V2-3 才接下载引擎)、追剧(stores/watch → Go watchstore)、看过(localStorage 兜底)。
+   追剧真值与「看到第 N 集」锚点已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, DetailResult, Drama } from '@/services/types'
 import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
-import {
-  enqueueDownloads,
-  historyAnchor,
-  isFollowed,
-  isWatched,
-  queueLength,
-  readHistory,
-  toggleFollow,
-  toggleWatched
-} from '@/services/local'
+import { enqueueDownloads, isWatched, queueLength, toggleWatched } from '@/services/local'
+import { useWatchStore } from '@/stores/watch'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
+
+const watchStore = useWatchStore()
 
 const route = useRoute()
 const router = useRouter()
@@ -34,7 +28,11 @@ let toastTimer: number | undefined
 
 const selectedIdx = ref(0)
 const currentEpisode = ref(0)
-const followed = ref(false)
+/** 追剧态 = watchstore 行标志（stores/watch 乐观更新/回滚即时反映） */
+const followed = computed(() => {
+  const id = drama.value?.id
+  return !!id && !!watchStore.follows.find((r) => r.id === id)?.followed
+})
 const watched = ref(false)
 const played = ref<number[]>([])
 const anchorPos = ref(0)
@@ -56,17 +54,15 @@ const selectedEpisode = computed(() =>
   selectedChapter.value ? chapterEpisode(selectedChapter.value, chapters.value.indexOf(selectedChapter.value)) : 0
 )
 
-/** 已追平到第几集：选集当前集；无播放记录时 = 第 1 集 */
+/** 已追平到第几集：watchstore 历史行（Go 每剧一行，取该剧全部历史行的最大集）；无播放记录时 = 第 1 集 */
 function resetAnchor() {
   const id = drama.value?.id ?? ''
-  const anchor = id ? historyAnchor(id) : undefined
-  currentEpisode.value = anchor?.episode ?? 1
-  anchorPos.value = anchor ? Math.max(0, Math.floor(anchor.position)) : 0
-  played.value = id
-    ? Object.values(readHistory())
-        .filter((e) => (e.dramaId || '') === id)
-        .map((e) => e.episode)
-    : []
+  const hist = id ? watchStore.history.filter((r) => r.drama.id === id) : []
+  let latest: (typeof hist)[number] | undefined
+  for (const r of hist) if (!latest || r.updated > latest.updated) latest = r
+  currentEpisode.value = latest?.episode ?? 1
+  anchorPos.value = latest ? Math.max(0, Math.floor(latest.position)) : 0
+  played.value = hist.map((r) => r.episode)
   const idx = chapters.value.findIndex((c, i) => chapterEpisode(c, i) === currentEpisode.value)
   selectedIdx.value = idx >= 0 ? idx : 0
 }
@@ -83,6 +79,7 @@ async function loadDetail() {
     error.value = e?.message ?? String(e)
   } finally {
     loading.value = false
+    await watchStore.ensureLoaded()
     resetAnchor()
   }
 }
@@ -145,12 +142,16 @@ function downloadAll() {
   )
 }
 
-function onFollow() {
+async function onFollow() {
   const d = drama.value
   if (!d) return
-  // localStorage 兜底。TODO binding: native.Follow/Unfollow（Go watchstore 接线后切换，见终报依赖请求）
-  followed.value = toggleFollow(d)
-  showToast(followed.value ? `已追剧《${d.title}》（本地记录，追更数据待 Go watchstore 接线）` : `已取消追剧《${d.title}》`)
+  // stores/watch：真值 Go watchstore ToggleFollow（无桥降级 localStorage 记录）
+  try {
+    const on = await watchStore.toggleFollow(d)
+    showToast(on ? `已追剧《${d.title}》` : `已取消追剧《${d.title}》`)
+  } catch (e: any) {
+    showToast(e?.message ?? '追剧操作失败')
+  }
 }
 
 function onWatchedMark() {
@@ -194,7 +195,6 @@ watch(
     drama.value = raw ? dramaFromQuery(decodeURIComponent(raw), route.query) : null
     detail.value = null
     if (drama.value) {
-      followed.value = isFollowed(drama.value.id)
       watched.value = isWatched(drama.value.id)
       loadDetail()
     }
@@ -205,7 +205,6 @@ onMounted(() => {
   const raw = String(route.params.id ?? '')
   drama.value = raw ? dramaFromQuery(decodeURIComponent(raw), route.query) : null
   if (drama.value) {
-    followed.value = isFollowed(drama.value.id)
     watched.value = isWatched(drama.value.id)
     loadDetail()
   } else {

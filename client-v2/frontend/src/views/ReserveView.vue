@@ -1,30 +1,47 @@
 <script setup lang="ts">
 /* ReserveView —— /reserve?tab=calendar|follow
    Tab1 上新日历：v1 calendar_panel.py 结构（日期 chips + 当日行：封面+标题+已上线/「hint」即将上线+简介+播放/预约）。
-   数据源：Go 端暂无日历/预约绑定 —— 保留 // TODO binding: native.Reservations（V2-4 接线）。
-     mock 模式走 fixtures.mockCalendarDays()（页面标注示例数据）；真实模式明示待接线，不假装有数据。
-   Tab2 追更预约：localStorage zgj.follows（追剧）列表 + 取消追剧。
-   —— 依赖请求：预约/追更读写需 Go watchstore 绑定（见终报），当前全部本地兜底。 */
+     日历列表数据源：Go 端暂无日历条目绑定 —— 保留 // TODO binding: native.Reservations（V2-4 接线）。
+       mock 模式走 fixtures.mockCalendarDays()（页面标注示例数据）；真实模式明示待接线，不假装有数据。
+     预约开关：真值走 stores/watch（Go watchstore Reserve/CancelReservation；降级读 localStorage）。
+   Tab2 追更预约：stores/watch.watchlist 的 followed 行（取消追剧 = ToggleFollow 互斥语义）。
+   —— watchstore 绑定已接线；日历条目绑定仍为依赖请求（见终报）。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
 import type { CalendarItem } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
-import { formatTime, isFollowed, readFollows, readReservations, toggleFollow, toggleReservation, type FollowEntry } from '@/services/local'
+import { formatTime, readReservations } from '@/services/local'
+import { useWatchStore } from '@/stores/watch'
 import { mockCalendarDays } from '@/services/fixtures'
 
 const route = useRoute()
 const router = useRouter()
+const watchStore = useWatchStore()
 
 const tab = ref<'calendar' | 'follow'>('calendar')
+const toast = ref('')
+let toastTimer: number | undefined
+
+function showToast(msg: string) {
+  toast.value = msg
+  clearTimeout(toastTimer)
+  toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
+}
 
 /* ---------------- 日历 tab ---------------- */
-// TODO binding: native.Reservations(date, offset) —— 接线前真实模式无数据源
+// TODO binding: native.Reservations(date, offset) —— 日历条目接线前真实模式无数据源
 const items = ref<CalendarItem[]>([])
 const loading = ref(false)
 const calError = ref('')
 const selectedDate = ref('')
-const reservations = ref<Record<string, boolean>>({})
+
+/** 预约状态：watchstore 行标志为准；无行 id 回落本地 zgj.reservations（mock 纯预约项） */
+const reservedIds = computed<Record<string, boolean>>(() => {
+  const m: Record<string, boolean> = { ...readReservations() }
+  for (const r of watchStore.follows) m[r.id] = r.reserved
+  return m
+})
 
 function ymd(d: Date): string {
   return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
@@ -63,11 +80,14 @@ async function loadCalendar() {
   }
 }
 
-function onReserveClick(it: CalendarItem) {
-  const id = it.drama?.id
-  if (!id) return
-  const on = toggleReservation(id)
-  reservations.value = { ...reservations.value, [id]: on }
+async function onReserveClick(it: CalendarItem) {
+  const drama = it.drama
+  if (!drama?.id) return
+  try {
+    await watchStore.reserve(drama)
+  } catch (e: any) {
+    showToast(e?.message ?? '预约操作失败')
+  }
 }
 
 function goDetail(id: string) {
@@ -76,28 +96,30 @@ function goDetail(id: string) {
 }
 
 /* ---------------- 追更 tab ---------------- */
-const follows = ref<FollowEntry[]>([])
-function rebuildFollows() {
-  follows.value = readFollows().filter((f) => isFollowed(f.drama.id))
-}
-function unfollow(f: FollowEntry) {
-  toggleFollow(f.drama)
-  rebuildFollows()
+const follows = computed(() => watchStore.followedRows)
+
+async function unfollow(row: (typeof follows.value)[number]) {
+  try {
+    await watchStore.toggleFollow(row.drama)
+  } catch (e: any) {
+    showToast(e?.message ?? '取消追剧失败')
+  }
 }
 
-const followDate = (f: FollowEntry) => formatTime(f.ts)
+const followDate = (row: (typeof follows.value)[number]) => formatTime(row.added)
 
 function syncTab() {
   const t = String(route.query.tab ?? '')
   tab.value = t === 'follow' ? 'follow' : 'calendar'
-  if (tab.value === 'follow') rebuildFollows()
 }
 
 watch(() => route.query.tab, syncTab)
 onMounted(() => {
-  reservations.value = readReservations()
   syncTab()
   loadCalendar()
+  void watchStore.ensureLoaded().then(() => {
+    if (watchStore.error) showToast(watchStore.error)
+  })
 })
 
 function coverUrl(c?: string): string {
@@ -162,8 +184,8 @@ function coverUrl(c?: string): string {
                 <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
                 播放
               </button>
-              <button v-else class="btn sm" :class="{ toggled: !!reservations[it.drama!.id] }" @click="onReserveClick(it)">
-                {{ reservations[it.drama!.id] ? '已预约 ✓' : '预约' }}
+              <button v-else class="btn sm" :class="{ toggled: !!reservedIds[it.drama!.id] }" @click="onReserveClick(it)">
+                {{ reservedIds[it.drama!.id] ? '已预约 ✓' : '预约' }}
               </button>
             </div>
           </div>
@@ -177,14 +199,17 @@ function coverUrl(c?: string): string {
 
   <!-- 追更 tab -->
   <template v-else>
-    <div v-if="!follows.length" class="state-block">
+    <div v-if="watchStore.loading && !follows.length" class="state-block">
+      <div class="dots">读取追更列表…</div>
+    </div>
+    <div v-else-if="!follows.length" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 21s-7.5-4.9-9.6-9A5.6 5.6 0 0 1 12 6.7 5.6 5.6 0 0 1 21.6 12c-2.1 4.1-9.6 9-9.6 9z" /></svg>
       <div>还没有追更的剧。</div>
-      <div class="text-muted hint">在详情页点「追剧」，这里就会替你盯着更新（本地记录，追更数据源待 Go watchstore 接线）。</div>
+      <div class="text-muted hint">在详情页点「追剧」，这里就会替你盯着更新（真值存 Go watchstore，无桥时降级本地记录）。</div>
       <button class="btn primary" @click="router.push('/discover')">去找剧</button>
     </div>
     <div v-else class="cal-list">
-      <div v-for="f in follows" :key="f.drama.id" class="cal-row card">
+      <div v-for="f in follows" :key="f.id" class="cal-row card">
         <div class="cal-cover" @click="router.push(detailRoute(f.drama))">
           <img v-if="coverUrl(f.drama.cover)" :src="coverUrl(f.drama.cover)" :alt="f.drama.title" />
           <div v-else class="cover-ph" />
@@ -204,6 +229,8 @@ function coverUrl(c?: string): string {
       </div>
     </div>
   </template>
+
+  <div v-if="toast" class="toast">{{ toast }}</div>
 </template>
 
 <style scoped>
@@ -356,5 +383,18 @@ function coverUrl(c?: string): string {
   font-size: 12.5px;
   max-width: 380px;
   line-height: 1.6;
+}
+.toast {
+  position: fixed;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--guo-player-scrim);
+  color: var(--text);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  box-shadow: 0 6px 24px var(--guo-shadow);
+  z-index: 60;
 }
 </style>
