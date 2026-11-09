@@ -42,11 +42,18 @@ jobs:
           mkdir -p "$env:RUNNER_TEMP/ov"
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
+          $LASTEXITCODE -eq 0 -or (throw "vet failed")
           go build -tags v2overlay -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
 
       - name: Build info
         working-directory: client-v2
         run: |
+          if (Test-Path build\bin\client-v2.exe) {
+            Write-Host "exe ok: $((Get-Item build\bin\client-v2.exe).Length) bytes"
+          } else {
+            Write-Host "::error::build step claimed success but client-v2.exe missing"
+            exit 1
+          }
           $sha = git rev-parse HEAD
           $iso = (git log -1 --format=%cI).Trim()
           $mod = if ((git status --porcelain | Measure-Object -Line).Lines -gt 0) { "true" } else { "false" }
