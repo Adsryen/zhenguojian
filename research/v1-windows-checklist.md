@@ -55,16 +55,27 @@ resources / library / newseries / search / detail / preload / download / decrypt
 5. 青空搜索对超长结果集（单字关键词如「我」）上游返回体超限会被拒绝（报「数据过大」或「目录数据
    格式无效」均可能），属上游限制，两个汉字以上的常规关键词应正常。
 
-## GitHub CI 与 Release（2026-11-08 增补）
-> 更新（2026-11-09，v1.0.1）：Windows 产物改**单文件 真果鉴.exe（带图标）**，runtime/README/build-info.json 与其同级；onedir 版 v1.0.0 已下线。zip 资产名固定 ASCII zhenGuoJian-windows-x64.zip（中文前缀曾被 gh 裁成 -windows-x64.zip）。CI 内 selftest 九步（含真机下载/解密/合并）全过。若下载 release 报 504/404 属 GitHub 资产 CDN 间歇事故（状态页 investigating），重试或换网络即可，与包无关。
+## GitHub CI 与 Release（2026-11-08 增补，2026-11-09 更新至 v1.0.1）
+> Windows 产物为**单文件 真果鉴.exe（带图标）**，runtime/README/build-info.json 与其同级；onedir 版 v1.0.0 已下线删除。zip 资产名固定 ASCII zhenGuoJian-windows-x64.zip（中文前缀曾被 gh 裁成 -windows-x64.zip）。CI 内 selftest 九步（含真机下载/解密/合并）全过。若 CI 红在 Download ffmpeg/mpv 或下载 release 报 504/404，属 GitHub 资产 CDN 间歇事故（gyan.dev 主源+BtbN/gh-proxy 兜底+3 次重试已内置），重跑或换网络即可，与包无关。
 
-
-1. 官方产物改为私有仓库 Release：https://github.com/Adsryen/zhenguojian/releases/tag/v1.0.0
-   下载 zhenGuoJian-windows-x64.zip，解压后运行 真果鉴\真果鉴.exe（同目录已带 runtime：
-   sidecar.exe / mpv / ffmpeg / ffprobe 与 build-info.json）。
-2. 设置 > 关于 的「打包提交」应显示 v1.0.0 对应哈希（ffcb563 起）；若显示「构建时含未提交改动」
+1. 官方产物从私有仓库 Release 下载最新版（当前 https://github.com/Adsryen/zhenguojian/releases/tag/v1.0.1）：
+   解压后运行 真果鉴\真果鉴.exe（同目录已带 runtime：sidecar.exe / mpv / ffmpeg / ffprobe 与 build-info.json）。
+   发新版=打 tag：`git tag v1.0.2 && git push origin v1.0.2`，约 6-15 分钟后 Release 出现。
+2. 设置 > 关于 的「打包提交」应显示对应 tag 的哈希（v1.0.1=c0c0051）；若显示「构建时含未提交改动」
    或「未知」说明产物异常。
 3. 若继续用本地一键打包：先删除 zhenguojian\sidecar\vendor 整个目录再跑，让 go mod vendor
    重新快照当前 core（旧 vendor 快照会绕过源码更新，编出缺 setSourceEnabled 的旧核心，
    即柚子开关报「不支持的应用操作」的根源）。
 4. CI 每次 tag v* 自动重发 Release；workflow_dispatch 只出临时工件（保留 14 天）供开发自测。
+
+## v2（Wails 壳）真机冒烟（2026-11-09 增补）
+> v2 是全新前端壳（Vue3+Go，无 Python/Qt），与 v1 并行维护；v1 仍是日常主力。
+
+1. v2 首个可安装包在 Release **v2.0.0-alpha.1**（https://github.com/Adsryen/zhenguojian/releases/tag/v2.0.0-alpha.1）：
+   下载 client-v2.exe 与 build-info.json 放同一目录双击即可（无需安装其它运行库，Windows 10/11 自带 WebView2）。
+   包体已 CI+本地双重验证：内嵌前端产物（2 个 hashed JS chunk）、桥探测字符串在位。
+2. 验收点：首页不再出现「示例数据」横幅；设置→关于「打包提交」显示 b997522 · 2026-11-09；
+   站源切换含柚子（18+ 徽章，出厂停用需手动开）；播放需自备 mpv——把 v1 包里的 runtime/mpv/mpv.exe
+   拷到 exe 同级 runtime\mpv\ 目录（或用环境变量 ZHENGUO_MPV 指向）。
+3. v2 已知未完成（下版补）：下载队列页、追剧日历（需 overlay 移植）、播放窗口内嵌（当前 mpv 独立窗口）。
+4. v2 发版=打 tag：`git tag v2.0.x && git push origin v2.0.x`（v1 的 v* tag 流程互不干扰）。
