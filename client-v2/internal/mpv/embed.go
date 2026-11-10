@@ -12,10 +12,16 @@ package mpv
 //
 // 回退开关：环境变量 ZHENGUO_NO_EMBED ∈ {1,true,yes,on}（大小写不敏感）时
 // PlayerAttach 直接放弃内嵌，mpv 保持现行独立顶层窗行为。
+//
+// 点击穿透带（HitBands）：DOM 覆盖层（标题条/控制条）若叠在视频矩形上，
+// 其像素会被 host 子窗截获（airspace 盖过 DOM）。前端按实际重叠高度上报
+// 上下带，WM_NCHITTEST 命中带内返回 HTTRANSPARENT 让给 WebView2，
+// 带外维持 mpv 原生手势（单击暂停/双击全屏）。判定纯逻辑在本文件。
 
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 // EnvNoEmbed 是内嵌回退开关的环境变量名。
@@ -111,4 +117,67 @@ func EmbedAllowed(getenv func(string) string) bool {
 	default:
 		return true
 	}
+}
+
+// HitBands 是视频 host 窗客户区内「点击穿透到下层 WebView2」的上/下带高度，
+// 单位物理像素（前端已按 devicePixelRatio 换算；0 = 该侧不禁用 mpv 命中）。
+type HitBands struct {
+	Top, Bottom int32
+}
+
+// TransparentAt 判定 host 窗客户区坐标 (localX, localY) 是否落进穿透带。
+// 规则（保守优先：一切异常都不穿透，把鼠标留给 mpv 手势）：
+//   - 带值负数钳到 0；
+//   - width/height <= 0（窗体无效）→ false；
+//   - localY 出界（<0 或 >=height，屏幕坐标换算失败时会出现）→ false；
+//   - 否则命中条件 localY < Top || localY >= height-Bottom；
+//     Top+Bottom >= height 时整窗穿透（覆盖层完全盖住画面的退化场景）。
+//
+// localX/width 当前不参与判定，为左右带扩展预留。
+func (b HitBands) TransparentAt(localX, localY, width, height int32) bool {
+	top, bottom := b.Top, b.Bottom
+	if top < 0 {
+		top = 0
+	}
+	if bottom < 0 {
+		bottom = 0
+	}
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	if localY < 0 || localY >= height {
+		return false
+	}
+	_ = localX // 预留：左右带扩展时参与判定
+	return localY < top || localY >= height-bottom
+}
+
+// hitBandsPacked 是包级原子状态：高 32 位 = Top，低 32 位 = Bottom。
+// 写入方是绑定链 App.PlayerHitBands → player.Service.PlayerSetHitBands →
+// SetHitBands；读取方是 embed_windows.go WndProc 的 WM_NCHITTEST 分支。
+// 非 Windows 平台仅存值、无消费方（embed_stub.go 不建 host 窗），
+// 行为等价 no-op，但让 Linux 单测能断言整条接线。
+var hitBandsPacked atomic.Uint64
+
+// SetHitBands 原子更新穿透带；负值钳 0（前端换算已取整，这里兜底）。
+func SetHitBands(top, bottom int32) {
+	if top < 0 {
+		top = 0
+	}
+	if bottom < 0 {
+		bottom = 0
+	}
+	hitBandsPacked.Store(uint64(uint32(top))<<32 | uint64(uint32(bottom)))
+}
+
+// VideoHitBands 读当前穿透带（WM_NCHITTEST 消费方与单测/诊断用）。
+func VideoHitBands() HitBands {
+	v := hitBandsPacked.Load()
+	return HitBands{Top: int32(v >> 32), Bottom: int32(v & 0xFFFFFFFF)}
+}
+
+// SetVideoHitBands 是 Player 上的便捷透传（与 SetWid 同属 embed 层接线，
+// 不经 mpv IPC；进程存活与否无关，直接写包级状态）。
+func (p *Player) SetVideoHitBands(top, bottom int32) {
+	SetHitBands(top, bottom)
 }

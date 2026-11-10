@@ -463,7 +463,12 @@ export interface AttachResult {
 
 export const embedApi = {
   attach: async (): Promise<AttachResult> => {
-    if (isMock || !hasBridge) return { embedded: false }
+    if (isMock) {
+      // 验证钩子：headless 场景置 window.__zgjMockEmbed=true 谎报「内嵌可用」，
+      // 驱动 PlayerView 的 bounds/hitBands 上报链路（真实 exe 恒 isMock=false）。
+      return { embedded: typeof window !== 'undefined' && !!window.__zgjMockEmbed, reason: 'mock-embed' }
+    }
+    if (!hasBridge) return { embedded: false }
     try {
       return (await callGo<AttachResult>('PlayerAttach')) ?? { embedded: false }
     } catch (err: any) {
@@ -476,6 +481,25 @@ export const embedApi = {
       await callGo('PlayerSetBounds', x, y, w, h)
     } catch {
       /* 几何上报失败不干扰播放 UI（窗口销毁竞态等） */
+    }
+  },
+  /* 覆盖层穿透带（App.PlayerHitBands）：top/bottom=HTML 覆盖层与视频矩形
+     的实际重叠高度（物理像素），0=该侧不禁。桥缺失 no-op；mock 记录到
+     window.__zgjHitBands 供 headless 验证断言。 */
+  playerHitBands: async (top: number, bottom: number): Promise<void> => {
+    if (isMock || !hasBridge) {
+      if (typeof window !== 'undefined') {
+        const rec = window.__zgjHitBands ?? { count: 0, last: null }
+        rec.count += 1
+        rec.last = { top, bottom }
+        window.__zgjHitBands = rec
+      }
+      return
+    }
+    try {
+      await callGo('PlayerHitBands', top, bottom)
+    } catch {
+      /* 同 setBounds：上报失败不干扰播放 UI */
     }
   },
   detach: async (): Promise<void> => {

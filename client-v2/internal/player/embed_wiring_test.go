@@ -107,3 +107,29 @@ func TestSetWidFlowsIntoNextSpawnAndSurvivesRebuild(t *testing.T) {
 		t.Fatalf("attach 先 Open 时首 spawn Wid=%x，期望 %x", w, embedWid)
 	}
 }
+
+// 穿透带接线：Service.PlayerSetHitBands 直写 mpv 包级状态（Linux 可观测，
+// Windows 上由 WM_NCHITTEST 消费）。负值钳 0 语义在 mpv 层已有表驱动测试，
+// 这里只断言透传路径与「与播放会话无关」两点。
+func TestPlayerSetHitBandsForwardsToEmbedState(t *testing.T) {
+	t.Cleanup(func() { mpv.SetHitBands(0, 0) })
+
+	rec := &cfgRecorder{}
+	svc := newRecorderSvc(t, rec)
+
+	svc.PlayerSetHitBands(53, 48)
+	if got := mpv.VideoHitBands(); got != (mpv.HitBands{Top: 53, Bottom: 48}) {
+		t.Fatalf("透传 got=%+v want={53 48}", got)
+	}
+	// 未 Open（无 mpv 会话）也可上报：embed 层状态，进程无关。
+	svc2 := newRecorderSvc(t, &cfgRecorder{})
+	svc2.PlayerSetHitBands(10, 20)
+	if got := mpv.VideoHitBands(); got != (mpv.HitBands{Top: 10, Bottom: 20}) {
+		t.Fatalf("无会话上报 got=%+v want={10 20}", got)
+	}
+	// 清零复位。
+	svc.PlayerSetHitBands(0, 0)
+	if got := mpv.VideoHitBands(); got != (mpv.HitBands{}) {
+		t.Fatalf("清零 got=%+v", got)
+	}
+}

@@ -297,6 +297,13 @@ func (s *Service) SetWid(wid uintptr) {
 	s.wid = wid
 }
 
+// PlayerSetHitBands 更新视频 host 窗的点击穿透带（物理像素上/下高；
+// 0=该侧不禁）。与 SetWid 同属 embed 层接线：不经 mpv 进程/IPC，直写
+// mpv 包级状态，由 WM_NCHITTEST 即时消费；非 Windows 存而无消费（no-op）。
+func (s *Service) PlayerSetHitBands(top, bottom int32) {
+	mpv.SetHitBands(top, bottom)
+}
+
 // assDirPath ASS 输出目录：AssDir → DataDir/ass → ""（WriteAss 临时目录默认）。
 func (s *Service) assDirPath() string {
 	if s.cfg.AssDir != "" {

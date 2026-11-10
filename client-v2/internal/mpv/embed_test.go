@@ -120,3 +120,70 @@ func TestEmbedAllowed(t *testing.T) {
 		t.Fatal("空值应允许内嵌")
 	}
 }
+
+func TestHitBandsTransparentAt(t *testing.T) {
+	t.Parallel()
+	// 窗几何基准：高 400（模拟 720p 播放区物理高度缩小版），宽 960。
+	cases := []struct {
+		name       string
+		bands      HitBands
+		x, y, w, h int32
+		want       bool
+	}{
+		{"无带全窗不穿透", HitBands{0, 0}, 100, 0, 960, 400, false},
+		{"无带底行也不穿透", HitBands{0, 0}, 100, 399, 960, 400, false},
+		{"顶带内命中", HitBands{53, 0}, 480, 52, 960, 400, true},
+		{"顶带边界y==Top不命中", HitBands{53, 0}, 480, 53, 960, 400, false},
+		{"顶带首行命中", HitBands{53, 0}, 0, 0, 960, 400, true},
+		{"底带内命中", HitBands{0, 53}, 480, 380, 960, 400, true},
+		{"底带边界y==h-Bottom命中", HitBands{0, 53}, 480, 347, 960, 400, true},
+		{"底带前一行不命中", HitBands{0, 53}, 480, 346, 960, 400, false},
+		{"底带末行命中", HitBands{0, 53}, 959, 399, 960, 400, true},
+		{"上下带中部不命中", HitBands{40, 60}, 480, 200, 960, 400, false},
+		{"上下带各命中", HitBands{40, 60}, 10, 39, 960, 400, true},
+		{"退化Top+Bottom==全高整窗穿透", HitBands{200, 200}, 480, 200, 960, 400, true},
+		{"退化Top+Bottom>全高整窗穿透", HitBands{300, 250}, 480, 150, 960, 400, true},
+		{"退化时出界y仍不穿透", HitBands{300, 250}, 480, 401, 960, 400, false},
+		{"负Top钳0", HitBands{-10, 0}, 480, 0, 960, 400, false},
+		{"负Bottom钳0", HitBands{0, -10}, 480, 399, 960, 400, false},
+		{"y出界下方不穿透", HitBands{0, 53}, 480, 400, 960, 400, false},
+		{"y出界上方不穿透", HitBands{53, 0}, 480, -1, 960, 400, false},
+		{"零高窗不穿透", HitBands{53, 53}, 0, 0, 960, 0, false},
+		{"负高窗不穿透", HitBands{53, 53}, 0, 0, 960, -5, false},
+		{"零宽窗不穿透", HitBands{53, 53}, 0, 10, 0, 400, false},
+		{"x不影响（当前无左右带）", HitBands{0, 0}, -999, 200, 960, 400, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.bands.TransparentAt(c.x, c.y, c.w, c.h); got != c.want {
+				t.Fatalf("TransparentAt(%d,%d,%d,%d)=%v, want %v", c.x, c.y, c.w, c.h, got, c.want)
+			}
+		})
+	}
+}
+
+func TestSetHitBandsRoundTrip(t *testing.T) {
+	// 包级原子状态，不并行；用 Cleanup 复位避免污染其他用例。
+	t.Cleanup(func() { SetHitBands(0, 0) })
+
+	SetHitBands(53, 48)
+	if got := VideoHitBands(); got != (HitBands{Top: 53, Bottom: 48}) {
+		t.Fatalf("roundtrip got=%+v want={53 48}", got)
+	}
+	SetHitBands(-7, 10)
+	if got := VideoHitBands(); got != (HitBands{Top: 0, Bottom: 10}) {
+		t.Fatalf("负值应钳0 got=%+v", got)
+	}
+	SetHitBands(0, 0)
+	if got := VideoHitBands(); got != (HitBands{}) {
+		t.Fatalf("清零 got=%+v", got)
+	}
+
+	// Player 透传入口与包级一致。
+	p := &Player{}
+	p.SetVideoHitBands(20, 30)
+	if got := VideoHitBands(); got != (HitBands{Top: 20, Bottom: 30}) {
+		t.Fatalf("Player 透传 got=%+v", got)
+	}
+}

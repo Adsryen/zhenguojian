@@ -27,6 +27,8 @@ const (
 	swpNoActivate     = 0x0010
 	hwndTop           = 0 // HWND_TOP：置顶到兄弟窗（WebView2 子窗）之上
 	blackBrushStock   = 4 // GetStockObject(BLACK_BRUSH)：未覆盖区域刷黑，防白闪
+	wmNCHitTest       = 0x0084
+	htTransparent     = ^uintptr(0) // HTTRANSPARENT(-1)：命中让给下层窗口
 	hostFindTimeout   = 2 * time.Second
 	hostFindPollEvery = 50 * time.Millisecond
 )
@@ -43,6 +45,7 @@ func init() {
 		"EnumWindows", "GetWindowThreadProcessId", "GetClassNameW", "GetWindowTextW",
 		"IsWindowVisible", "RegisterClassExW", "CreateWindowExW", "DefWindowProcW",
 		"MoveWindow", "ShowWindow", "SetWindowPos", "DestroyWindow",
+		"ScreenToClient", "GetClientRect",
 	} {
 		procEmbed[n] = user32Embed.NewProc(n)
 	}
@@ -71,9 +74,39 @@ var (
 	embedClassErr  error
 )
 
+// embedWndProc 是 ZgjVideoHost 自有类的窗口过程（无需 SetWindowSubclass）。
+// WM_NCHITTEST 命中穿透带时返回 HTTRANSPARENT，让鼠标落进下方 WebView2
+// 兄弟窗（HTML 覆盖层按钮可点）；其余消息走 DefWindowProcW，带外的
+// 单击/双击照常透给 mpv 原生手势。
 func embedWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	if msg == wmNCHitTest && hitBandsRequest(hwnd, lParam) {
+		return htTransparent
+	}
 	ret, _, _ := procEmbed["DefWindowProcW"].Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
 	return ret
+}
+
+// hitBandsRequest 解 WM_NCHITTEST 的 lParam：屏幕坐标是有符号 16 位对
+// （低 16 位 X、高 16 位 Y，Windows 10+ 多屏下才给全 32 位，16 位截断对
+// 本应用单屏场景足够，且换算失败会走 ScreenToClient 兜底拒绝）。
+// 转客户区坐标后按当前 HitBands 判定；任何 Win32 调用失败都返回 false
+// （宁保守不误伤：保住 mpv 手势优先权）。
+func hitBandsRequest(hwnd windows.HWND, lParam uintptr) bool {
+	if VideoHitBands() == (HitBands{}) {
+		return false // 快路径：未上报任何带
+	}
+	sx := int32(int16(uint16(lParam & 0xFFFF)))
+	sy := int32(int16(uint16((lParam >> 16) & 0xFFFF)))
+	// x/sys v0.39.0 未导出 POINT，用同布局（两个 int32）本地结构接 ScreenToClient。
+	pt := struct{ X, Y int32 }{sx, sy}
+	if ret, _, _ := procEmbed["ScreenToClient"].Call(uintptr(hwnd), uintptr(unsafe.Pointer(&pt))); ret == 0 {
+		return false
+	}
+	var rc windows.Rect
+	if ret, _, _ := procEmbed["GetClientRect"].Call(uintptr(hwnd), uintptr(unsafe.Pointer(&rc))); ret == 0 {
+		return false
+	}
+	return VideoHitBands().TransparentAt(pt.X, pt.Y, rc.Right, rc.Bottom)
 }
 
 func registerEmbedClass() error {

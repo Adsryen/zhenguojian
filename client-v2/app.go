@@ -7,6 +7,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -298,6 +300,35 @@ func (a *App) PlayerSetBounds(x, y, w, h int) (string, error) {
 		return "", err
 	}
 	return marshalJSON(map[string]any{"ok": true})
+}
+
+// PlayerHitBands 上报视频矩形上/下「点击穿透带」高度（物理像素；前端按
+// DOM 覆盖层与 stage 矩形的实际重叠 × devicePixelRatio 计算，0=该侧不禁）。
+// 命中带内的鼠标经 WM_NCHITTEST 返回 HTTRANSPARENT 让给 WebView2（覆盖层
+// 按钮可点），带外维持 mpv 原生手势。未内嵌（attach 未成功/回退开关）
+// no-op 返回 nil；非法入参报错（前端换算应保证非负有限数）。
+func (a *App) PlayerHitBands(top, bottom float64) error {
+	if math.IsNaN(top) || math.IsNaN(bottom) || math.IsInf(top, 0) || math.IsInf(bottom, 0) {
+		return fmt.Errorf("playerHitBands: 非法数值 top=%v bottom=%v", top, bottom)
+	}
+	if top < 0 || bottom < 0 {
+		return fmt.Errorf("playerHitBands: 带宽不得为负 top=%v bottom=%v", top, bottom)
+	}
+	const maxBand = 1 << 30 // 钳到 int32 安全区；超限视同覆盖全窗（TransparentAt 退化分支）
+	qt, qb := math.Round(top), math.Round(bottom)
+	if qt > maxBand {
+		qt = maxBand
+	}
+	if qb > maxBand {
+		qb = maxBand
+	}
+	a.embedMu.Lock()
+	defer a.embedMu.Unlock()
+	if a.embed == nil {
+		return nil // 未内嵌：独立窗/回退态没有 host 窗可判，静默忽略
+	}
+	a.playerSvc.PlayerSetHitBands(int32(qt), int32(qb))
+	return nil
 }
 
 // PlayerDetach 离开播放页：隐藏子窗（含 mpv 子树）。子窗保留复用，

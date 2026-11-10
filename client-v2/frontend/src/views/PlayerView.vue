@@ -8,6 +8,8 @@
    弹幕由 mpv ASS 渲染，本组件 DOM 不画弹幕（任务定案）。
    V2-4 画面内嵌：attach（spawn 前）→ PlayerSetBounds 上报 .pl-stage 物理像素矩形；
    加载/出错/播完/未开播上报零尺寸让位 DOM 覆盖层；离开 detach 隐藏。
+   V2-4b 点击穿透带：随几何上报 PlayerHitBands(top,bottom)——覆盖层与视频
+   矩形的实际重叠高度（物理像素），Go 侧 WM_NCHITTEST 命中带内让给 WebView2。
    mock/无桥/回退开关下 attach 返回 embedded:false，本组件零特殊分支（reportBounds 直通短路）。 */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -24,12 +26,28 @@ const dragPos = ref(0)
 
 /* ── V2-4 内嵌几何上报 ── */
 const stageEl = ref<HTMLElement | null>(null)
+/* 覆盖层穿透带（V2-4b）：标题条/控制条与 stage 的实际重叠才需要让出命中；
+   现行 flex 兄弟布局重叠恒 0（这些像素本就在 host 窗之外），布局若改为
+   叠在画面上（absolute 浮层）自动生效，WndProc 按带返回 HTTRANSPARENT。 */
+const topEl = ref<HTMLElement | null>(null)
+const barEl = ref<HTMLElement | null>(null)
 let embedActive = false
 let stageRO: ResizeObserver | undefined
+let barsRO: ResizeObserver | undefined
 
 function videoShouldShow(): boolean {
   // 仅在实际出画面期间占据视频矩形；其余状态让位给 DOM 覆盖层（原生子窗盖在 DOM 之上）。
   return store.running && !store.loading && !store.error && !store.eof
+}
+
+async function reportHitBands(el: HTMLElement) {
+  const s = el.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  const t = topEl.value?.getBoundingClientRect()
+  const top = t && t.bottom > s.top ? Math.round((t.bottom - s.top) * dpr) : 0
+  const b = barEl.value?.getBoundingClientRect()
+  const bottom = b && b.top < s.bottom ? Math.round((s.bottom - b.top) * dpr) : 0
+  await embedApi.playerHitBands(top, bottom)
 }
 
 async function reportBounds() {
@@ -37,6 +55,7 @@ async function reportBounds() {
   const el = stageEl.value
   if (!el || !videoShouldShow()) {
     await embedApi.setBounds(0, 0, 0, 0)
+    if (el) await reportHitBands(el) // 隐藏态也刷新带：host 已 SW_HIDE，值仅作状态同步
     return
   }
   const r = el.getBoundingClientRect()
@@ -47,6 +66,7 @@ async function reportBounds() {
     Math.round(r.width * dpr),
     Math.round(r.height * dpr)
   )
+  await reportHitBands(el)
 }
 
 watch(
@@ -98,6 +118,12 @@ onMounted(async () => {
       stageRO = new ResizeObserver(() => void reportBounds())
       stageRO.observe(stageEl.value)
     }
+    // 浮层自身高度变化（换行/收起）也可能改变重叠，单独观测重报带宽。
+    barsRO = new ResizeObserver(() => {
+      if (stageEl.value) void reportHitBands(stageEl.value)
+    })
+    if (topEl.value) barsRO.observe(topEl.value)
+    if (barEl.value) barsRO.observe(barEl.value)
     window.addEventListener('resize', onStageResize)
   }
   void reportBounds() // 隐藏态起手（running 尚未翻转，防陈旧矩形残留）
@@ -108,6 +134,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   stageRO?.disconnect()
   stageRO = undefined
+  barsRO?.disconnect()
+  barsRO = undefined
   window.removeEventListener('resize', onStageResize)
   if (embedActive) void embedApi.detach()
   void store.shutdown()
@@ -116,7 +144,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="player">
-    <header class="pl-top">
+    <header class="pl-top" ref="topEl">
       <button class="pl-btn ghost" type="button" @click="closePlayer">← 返回</button>
       <h1 class="pl-title">{{ store.title || '播放器' }}</h1>
       <div class="pl-badges">
@@ -145,7 +173,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <footer class="pl-bar">
+    <footer class="pl-bar" ref="barEl">
       <button class="pl-btn" type="button" :title="store.paused ? '播放' : '暂停'" @click="store.togglePlay()">
         {{ store.paused ? '▶' : '⏸' }}
       </button>

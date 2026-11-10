@@ -199,6 +199,28 @@ export interface DanmakuStatsPayload {
   note: string
 }
 
+/** 一次覆盖层穿透带上报（物理像素；对应绑定 App.PlayerHitBands(top,bottom)） */
+export interface HitBandsReport {
+  top: number
+  bottom: number
+}
+
+/** mock/无桥路径下的记录钩子形状：window.__zgjHitBands（headless 验证断言用） */
+export interface HitBandsRecord {
+  count: number
+  last: HitBandsReport | null
+}
+
+declare global {
+  interface Window {
+    /** embedApi.playerHitBands 在 mock/无桥时的落点（真实 exe 不写） */
+    __zgjHitBands?: HitBandsRecord
+    /** mock 验证钩子：置 true 让 embedApi.attach 谎报 embedded:true，
+        以驱动 PlayerView 的 setBounds/hitBands 上报链路（纯浏览器无副作用） */
+    __zgjMockEmbed?: boolean
+  }
+}
+
 /** 适配层统一接口：wails 实现与 mock 实现同签名 */
 export interface NativeApi {
   ping(): Promise<string> | Promise<unknown>
