@@ -108,7 +108,7 @@ onMounted(async () => {
 <template>
   <div class="page-head">
     <h1 class="page-title">搜索</h1>
-    <SourceSwitch :model-value="store.currentSlug" :sources="store.sources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
+    <SourceSwitch :model-value="store.currentSlug" :sources="store.orderedSources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
   </div>
 
   <div class="search-bar">

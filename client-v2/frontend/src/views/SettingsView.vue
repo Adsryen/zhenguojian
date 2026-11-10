@@ -6,7 +6,7 @@
    播放/网络在核心绑定（ResourceSettings/SaveResourceSettings）就绪前仅存 localStorage，
    带「本地暂存，核心接线后生效」角标——不做假保存成功。 */
 import { computed, onMounted, reactive, ref, watch } from 'vue'
-import SourceCard from '@/components/settings/SourceCard.vue'
+import SourceGrid from '@/components/settings/SourceGrid.vue'
 import { api, MOCK_MODE } from '@/services/api'
 import { locale, setLocale, t } from '@/services/i18n'
 import { applyTheme, loadTheme, type ThemeMode } from '@/styles/theme'
@@ -52,6 +52,11 @@ async function onToggle(slug: string, next: boolean) {
   } finally {
     m.busy = false
   }
+}
+
+/** 拖拽落位提交：store 写 state + localStorage（静默持久化，无 toast） */
+function onReorder(slugs: string[]) {
+  store.setSourceOrder(slugs)
 }
 
 /* ---------------- 播放默认（本地暂存） ---------------- */
@@ -251,20 +256,18 @@ onMounted(async () => {
       </div>
       <div class="sec-hint">
         {{ sourcesHint }}
+        <span class="sec-drag-hint">{{ t('settings.sources.dragHint') }}</span>
         <template v-if="lastSync"><br />{{ lastSync }}</template>
       </div>
       <div v-if="store.sourcesLoading && !store.sources.length" class="sec-hint">…</div>
       <div v-else-if="store.sourcesError" class="sec-error-line">{{ store.sourcesError }}</div>
-      <div v-else class="source-grid">
-        <SourceCard
-          v-for="s in store.sources"
-          :key="s.slug"
-          :source="s"
-          :busy="meta(s.slug).busy"
-          :error="meta(s.slug).err"
-          @toggle="onToggle"
-        />
-      </div>
+      <SourceGrid
+        v-else
+        :sources="store.orderedSources"
+        :meta="meta"
+        @toggle="onToggle"
+        @reorder="onReorder"
+      />
     </section>
 
     <!-- ③ 播放默认 -->
@@ -466,6 +469,9 @@ onMounted(async () => {
   font-size: 12px;
   color: var(--danger);
 }
+.sec-drag-hint {
+  color: var(--muted-2);
+}
 
 .field {
   display: flex;
@@ -563,13 +569,6 @@ onMounted(async () => {
 .save-ok {
   font-size: 12px;
   color: var(--muted);
-}
-
-.source-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 10px;
-  margin-top: 8px;
 }
 
 .kv {

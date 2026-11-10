@@ -48,6 +48,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
         v-for="s in sources"
         :key="s.slug"
         class="ss-item"
+        :data-slug="s.slug"
         :class="{ disabled: !s.implemented, active: s.slug === modelValue }"
         :disabled="!s.implemented"
         :title="s.implemented ? '' : '源未接入，待 V2-x 实现'"

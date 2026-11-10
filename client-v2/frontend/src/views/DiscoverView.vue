@@ -146,7 +146,7 @@ onMounted(async () => {
 <template>
   <div class="page-head">
     <h1 class="page-title">找剧</h1>
-    <SourceSwitch :model-value="store.currentSlug" :sources="store.sources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
+    <SourceSwitch :model-value="store.currentSlug" :sources="store.orderedSources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
     <div class="spacer" />
     <button class="btn" :disabled="loading" @click="loadFirst(true)">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

@@ -67,6 +67,7 @@ const zh: Record<string, string> = {
   'settings.sources.notImplemented': '未接入',
   'settings.sources.adultNote': '18+ 内容，出厂默认停用，需手动打开。',
   'settings.sources.retry': '同步失败，已回滚',
+  'settings.sources.dragHint': '可拖动卡片调整排序，红果默认置顶。',
 
   // ---- 播放默认 ----
   'settings.playback': '播放默认',
@@ -150,6 +151,7 @@ const en: Record<string, string> = {
   'settings.sources.notImplemented': 'Not wired',
   'settings.sources.adultNote': '18+ content, disabled by default; turn on manually.',
   'settings.sources.retry': 'Sync failed, rolled back',
+  'settings.sources.dragHint': 'Drag cards to reorder; Hongguo pinned first by default.',
 
   'settings.playback': 'Playback Defaults',
   'settings.playback.hint': 'Speed/quality/danmaku apply to newly opened episodes; staged locally until core bindings land.',
