@@ -122,6 +122,7 @@ func transcodeCover(src string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), coverTranscodeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, coverFFmpegArgs(src, tmp)...)
+	cmd.SysProcAttr = hideWindowAttr() // GUI 主程序 spawn ffmpeg 不闪控制台窗
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = io.Discard
