@@ -121,29 +121,31 @@ jobs:
             & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.pkg | Out-Null
           }
 
-      - name: Assemble portable zip
+      - name: Assemble runtime zip + single exe
         run: |
-          # 布局对齐 v1 查找链：exe 同级 runtime\mpv\mpv.exe、runtime\ffmpeg\{ffmpeg,ffprobe}.exe
-          $stage = "dist-v2\真果鉴-v2"
+          # 拆包策略：runtime（mpv/ffmpeg，体积大且几乎不变）单独成 zip 一次性下载；
+          # 程序本体保持单 exe，日常更新只拖这个文件。布局对齐 v1 查找链：
+          # exe 同级 runtime\mpv\mpv.exe、runtime\ffmpeg\{ffmpeg,ffprobe}.exe。
+          $stage = "dist-v2\runtime"
           Remove-Item -Recurse -Force dist-v2 -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force "$stage\runtime\mpv", "$stage\runtime\ffmpeg" | Out-Null
-          Copy-Item client-v2\build\bin\client-v2.exe "$stage\真果鉴-v2.exe"
-          Copy-Item client-v2\build\bin\build-info.json "$stage\build-info.json"
+          New-Item -ItemType Directory -Force "$stage\mpv", "$stage\ffmpeg" | Out-Null
           $bin = (Get-ChildItem fftmp -Recurse -Filter ffmpeg.exe | Select-Object -First 1).DirectoryName
-          Copy-Item "$bin\ffmpeg.exe", "$bin\ffprobe.exe" "$stage\runtime\ffmpeg\"
+          Copy-Item "$bin\ffmpeg.exe", "$bin\ffprobe.exe" "$stage\ffmpeg\"
           $mpvbin = (Get-ChildItem mpvtmp -Recurse -Filter mpv.exe | Select-Object -First 1).FullName
-          Copy-Item $mpvbin "$stage\runtime\mpv\mpv.exe"
-          Compress-Archive -Path "$stage" -DestinationPath zhenGuoJian-v2-windows-x64.zip -Force
-          Write-Host ("zip size: " + (Get-Item zhenGuoJian-v2-windows-x64.zip).Length)
+          Copy-Item $mpvbin "$stage\mpv\mpv.exe"
+          Compress-Archive -Path $stage -DestinationPath zhenGuoJian-v2-runtime.zip -Force
+          Copy-Item client-v2\build\bin\client-v2.exe zhenGuoJian-v2.exe
+          Write-Host ("runtime zip size: " + (Get-Item zhenGuoJian-v2-runtime.zip).Length)
+          Write-Host ("exe size: " + (Get-Item zhenGuoJian-v2.exe).Length)
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'push'
         with:
           name: v2-windows-x64
           path: |
-            client-v2/build/bin/client-v2.exe
+            zhenGuoJian-v2.exe
             client-v2/build/bin/build-info.json
-            zhenGuoJian-v2-windows-x64.zip
+            zhenGuoJian-v2-runtime.zip
 
       - name: Release notes
         run: |
@@ -153,10 +155,13 @@ jobs:
 
           | 文件 | 用途 |
           |---|---|
-          | ``zhenGuoJian-v2-windows-x64.zip`` | **推荐下载**。v2 完整便携包：解压后运行 ``真果鉴-v2\真果鉴-v2.exe``，已内置 mpv/ffmpeg，开箱即用 |
-          | ``client-v2.exe`` | v2 裸壳（约 20MB，不含 mpv/ffmpeg）。仅当你自行准备 runtime\ 目录时才用这个。任何产物都**内置 F12 调试**：窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错） |
-          | ``build-info.json`` | 构建指纹（revision/commitTime）。手动替换 exe 时放同级目录，设置页「打包提交」才会显示哈希 |
+          | ``zhenGuoJian-v2.exe`` | **程序本体（单文件，约 20MB）。日常更新只下载这一个**，直接覆盖旧目录里的同名 exe。内置 F12 调试：窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错） |
+          | ``zhenGuoJian-v2-runtime.zip`` | **运行库（约 150MB，首次装一次）内容仅 mpv/ffmpeg，几乎不更新**。解压后把 ``runtime`` 文件夹放到 exe 同级即可 |
+          | ``build-info.json`` | 构建指纹（revision/commitTime）。与 exe 同级放置后，设置页「打包提交」才会显示哈希 |
           | ``Source code (zip)`` | GitHub 自动生成的源码快照，普通用户忽略 |
+
+          首次安装：下载 ``zhenGuoJian-v2.exe`` + ``zhenGuoJian-v2-runtime.zip``（+ 可选 ``build-info.json``）放同一目录。
+          之后升级：只需要 ``zhenGuoJian-v2.exe`` 这一个文件。
 
           构建提交：``$sha``（版本内查看：设置 > 关于 > 打包提交）
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
@@ -167,6 +172,6 @@ jobs:
         with:
           body_path: client-v2/build/bin/RELEASE-NOTES.md
           files: |
-            client-v2/build/bin/client-v2.exe
+            zhenGuoJian-v2.exe
             client-v2/build/bin/build-info.json
-            zhenGuoJian-v2-windows-x64.zip
+            zhenGuoJian-v2-runtime.zip
