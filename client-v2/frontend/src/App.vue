@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import NavRail from '@/components/NavRail.vue'
 import { useAppStore } from '@/stores/app'
+import { setupContextMenu } from '@/services/contextMenu' // V2-6 右键菜单：全局一处挂载
 
 const store = useAppStore()
+setupContextMenu()
 </script>
 
 <template>

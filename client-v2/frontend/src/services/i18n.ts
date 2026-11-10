@@ -108,7 +108,13 @@ const zh: Record<string, string> = {
   'settings.storage.core': '本地核心',
   'settings.storage.coreConnected': '已连接',
   'settings.storage.coreDisconnected': '未连接',
-  'settings.storage.readFail': '读取失败'
+  'settings.storage.readFail': '读取失败',
+
+  // ---- 右键菜单（contextMenu 服务） ----
+  'ctx.copy': '复制',
+  'ctx.cut': '剪切',
+  'ctx.paste': '粘贴',
+  'ctx.selectAll': '全选'
 }
 
 const en: Record<string, string> = {
@@ -181,7 +187,13 @@ const en: Record<string, string> = {
   'settings.storage.core': 'Local Core',
   'settings.storage.coreConnected': 'Connected',
   'settings.storage.coreDisconnected': 'Not connected',
-  'settings.storage.readFail': 'Read failed'
+  'settings.storage.readFail': 'Read failed',
+
+  // ---- Context menu (contextMenu service) ----
+  'ctx.copy': 'Copy',
+  'ctx.cut': 'Cut',
+  'ctx.paste': 'Paste',
+  'ctx.selectAll': 'Select All'
 }
 
 const dicts: Record<Locale, Record<string, string>> = { zh, en }
