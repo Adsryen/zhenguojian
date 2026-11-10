@@ -145,7 +145,7 @@ func TestLookupFFmpeg(t *testing.T) {
 	})
 	t.Run("全失败 → 固定文案", func(t *testing.T) {
 		got, err := lookupFFmpeg(env(nil), filepath.Join(dir, "empty-dir"), noLookPath)
-		if err == nil || err.Error() != "缺少 ffmpeg 组件，无法显示海报" || got != "" {
+		if err == nil || err.Error() != "未找到 ffmpeg：缺少 ffmpeg 组件，无法显示海报" || got != "" {
 			t.Fatalf("got=%q err=%v want 缺少 ffmpeg 文案", got, err)
 		}
 	})
@@ -266,7 +266,7 @@ func TestTranscodeCover(t *testing.T) {
 		t.Setenv("ZHENGUO_FFMPEG", filepath.Join(dir, "ghost-ffmpeg"))
 		_, err := transcodeCover(src)
 		// 本机 PATH 可能真有 ffmpeg，只断言不是 panic 且文案二选一
-		if err != nil && !strings.Contains(err.Error(), "缺少 ffmpeg 组件") &&
+		if err != nil && !strings.Contains(err.Error(), "未找到 ffmpeg：缺少 ffmpeg 组件") &&
 			!strings.Contains(err.Error(), "海报转码失败") {
 			t.Fatalf("unexpected err: %v", err)
 		}

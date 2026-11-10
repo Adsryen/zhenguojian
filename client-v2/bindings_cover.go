@@ -102,7 +102,8 @@ func coverFFmpegArgs(src, dst string) []string {
 
 // transcodeCover 把 HEIC 源转为缓存 JPEG，返回产物路径。
 // 命中缓存条件（三者同时）：产物存在、size>0、mtime 不早于源文件 mtime。
-// 找不到 ffmpeg → 「缺少 ffmpeg 组件，无法显示海报」；转码失败 → 「海报转码失败」。
+// 找不到 ffmpeg → 「未找到 ffmpeg：缺少 ffmpeg 组件，无法显示海报」（统一前缀，
+// 前端 covers.ts 据此分类 missing-ffmpeg 弹引导条）；转码失败 → 「海报转码失败」。
 func transcodeCover(src string) (string, error) {
 	dst := coverCachePath(src)
 	srcSt, srcErr := os.Stat(src)
@@ -182,7 +183,7 @@ func lookupFFmpeg(getenv func(string) string, exeDir string, lookPath func(strin
 			return p, nil
 		}
 	}
-	return "", errors.New("缺少 ffmpeg 组件，无法显示海报")
+	return "", errors.New("未找到 ffmpeg：缺少 ffmpeg 组件，无法显示海报")
 }
 
 // lookupFFmpegFromDisk 生产入口：exeDir 取自身可执行文件目录，env/PATH 走系统面。

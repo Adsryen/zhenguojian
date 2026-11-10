@@ -1,6 +1,12 @@
 <script setup lang="ts">
 /* PosterGrid —— 虚拟滚动海报网格：
-   - 列数按容器宽度自适应（min 列宽 160px）
+   - 列数按「行实际渲染宽度」自适应（min 列宽 160px）：行宽 = scroller.clientWidth
+     扣掉左右 padding（PAD_X×2）；colW 向下取整两位小数，保证 n×colW+gaps ≤ 行宽，
+     杜绝任何收缩（历史 bug：colW 按含 padding 的 clientWidth 算、行盒又额外 24px
+     内缩 → 每行恒溢出 96px → flex-shrink 统一收缩，而 nowrap 长标题卡片被
+     min-width:auto 卡在 min-content → 该卡（常为搜索首条全名命中）比同排其余大）
+   - 卡片 flex-shrink:0 + min-width:0，封面区固定 aspect 1:1.4 + img object-fit:cover，
+     首卡/加载中/图未回一律同尺寸
    - 行高 = 列宽×1.4(3:4 封面) + 标题区
    - 只渲染视口 ±1 屏行（绝对定位 + transform 位移）
    - 卡片：封面走 resolveCover（核心下载 + HEIC→JPEG 转码 → data URL；mock 原样 URL），
@@ -36,13 +42,18 @@ const MIN_COL = 160
 const GAP = 14
 const TITLE_H = 54
 const BUFFER_ROWS = 1
+// PAD_X 必须与 CSS .pg-scroller 左右 padding 一致：行内容可用宽 = clientWidth - PAD_X*2
+const PAD_X = 24
 
-const cols = computed(() => Math.max(1, Math.floor((viewW.value + GAP) / (MIN_COL + GAP))))
+// rowW：行盒的实际内容宽（历史 bug 根因即此处曾直接用含 padding 的 viewW）
+const rowW = computed(() => Math.max(0, viewW.value - PAD_X * 2))
+const cols = computed(() => Math.max(1, Math.floor((rowW.value + GAP) / (MIN_COL + GAP))))
 const colW = computed(() => {
   const n = cols.value
-  return (viewW.value - GAP * (n - 1)) / n
+  // 向下取整到 0.01px：保证 n×colW + (n-1)×GAP ≤ rowW，绝不触发收缩
+  return Math.floor(((rowW.value - GAP * (n - 1)) / n) * 100) / 100
 })
-const coverH = computed(() => colW.value * 1.4)
+const coverH = computed(() => Math.round(colW.value * 1.4 * 100) / 100)
 const rowH = computed(() => coverH.value + TITLE_H + GAP)
 const rowCount = computed(() => Math.ceil(props.items.length / cols.value))
 const totalH = computed(() => rowCount.value * rowH.value)
@@ -207,8 +218,10 @@ function fallbackChar(d: Drama) {
 .pg-row {
   position: absolute;
   top: 0;
-  left: 24px;
-  right: 24px;
+  /* 行盒满宽 = viewport 内容宽（scroller padding 已扣）；历史 left/right 24px 与
+     padding 双重内缩导致每行恒溢出 96px，是首卡/长标题卡被 flex 收缩拉大的根因 */
+  left: 0;
+  right: 0;
   display: flex;
 }
 .pg-skeleton {
@@ -231,6 +244,10 @@ function fallbackChar(d: Drama) {
   cursor: pointer;
   border-radius: var(--guo-radius);
   outline: none;
+  /* 关键：禁收缩 + 清 min-width:auto —— 否则长标题（nowrap 首行）的 min-content
+     会卡住该卡收缩下限，溢出时该卡比同排其余宽（首卡变大的直接机制） */
+  flex-shrink: 0;
+  min-width: 0;
 }
 .poster:focus-visible .cover,
 .poster:hover .cover {
@@ -245,6 +262,9 @@ function fallbackChar(d: Drama) {
   background: var(--surface-3);
   border: 1px solid var(--border);
   transition: box-shadow 0.15s, border-color 0.15s;
+  /* 封面区固定 1:1.4（与内联 height=colW*1.4 等价，双保险：宽度由卡片列宽决定，
+     高度不随图片 intrinsic/加载状态变化 → 首卡/加载中/图未回尺寸一致） */
+  aspect-ratio: 1 / 1.4;
 }
 .cover img {
   width: 100%;

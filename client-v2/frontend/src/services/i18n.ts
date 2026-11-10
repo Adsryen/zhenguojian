@@ -115,7 +115,13 @@ const zh: Record<string, string> = {
   'ctx.copy': '复制',
   'ctx.cut': '剪切',
   'ctx.paste': '粘贴',
-  'ctx.selectAll': '全选'
+  'ctx.selectAll': '全选',
+
+  // ---- 封面失败警示条（covers 诊断 → DiscoverView banner） ----
+  'covers.banner.missingFfmpeg':
+    '海报转码组件 ffmpeg 未找到：请下载 zhenGuoJian-v2-runtime.zip 解压到程序目录，使 runtime\\ffmpeg\\ffmpeg.exe 就位；或设置 ZHENGUO_FFMPEG 指向 ffmpeg.exe',
+  'covers.banner.partial': '部分封面加载失败（F12 查看原因）',
+  'covers.banner.dismiss': '关闭提示'
 }
 
 const en: Record<string, string> = {
@@ -195,7 +201,13 @@ const en: Record<string, string> = {
   'ctx.copy': 'Copy',
   'ctx.cut': 'Cut',
   'ctx.paste': 'Paste',
-  'ctx.selectAll': 'Select All'
+  'ctx.selectAll': 'Select All',
+
+  // ---- Cover failure banner (covers diagnostics → DiscoverView banner) ----
+  'covers.banner.missingFfmpeg':
+    'Poster transcoder ffmpeg not found: download zhenGuoJian-v2-runtime.zip and extract it into the app directory so runtime/ffmpeg/ffmpeg.exe is in place, or set ZHENGUO_FFMPEG to your ffmpeg.exe',
+  'covers.banner.partial': 'Some covers failed to load (press F12 for details)',
+  'covers.banner.dismiss': 'Dismiss'
 }
 
 const dicts: Record<Locale, Record<string, string>> = { zh, en }

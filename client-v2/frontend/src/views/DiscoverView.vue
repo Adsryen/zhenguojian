@@ -2,12 +2,14 @@
 /* Discover —— 找剧：SourceSwitch + 分类 chips + 虚拟滚动海报墙（catalog 分页，lane=discover）
    分类来源：browseFilters(groups[key=category])；默认构建无 overlay → 兜底 hongguo 三分类
    （值取自 guoapp-src core/provider_hongguo_catalog.go hongguoAppGenres）。 */
-import { onMounted, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { ApiError, type Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
+import { t } from '@/services/i18n'
+import { coverDiagnostics, onCoverDiagnostics, type CoverDiagnostics } from '@/services/covers'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 
@@ -31,6 +33,25 @@ const activeChip = ref('')
 const toast = ref('')
 let toastTimer: number | undefined
 let requestSeq = 0
+
+/* ---- 封面失败警示条（covers.ts 诊断驱动；修「全部首字占位但看不到报错」） ---- */
+const COVER_FAIL_THRESHOLD = 5
+/** '' | 'missing-ffmpeg' | 'error' */
+const coverBanner = ref('')
+/** 本页会话内关闭后不再弹（组件卸载重挂视为新会话） */
+let coverBannerDismissed = false
+let unsubCoverDiag: (() => void) | undefined
+
+function applyCoverDiag(d: CoverDiagnostics) {
+  if (coverBannerDismissed) return
+  coverBanner.value =
+    d.failCount >= COVER_FAIL_THRESHOLD ? (d.lastKind === 'missing-ffmpeg' ? 'missing-ffmpeg' : 'error') : ''
+}
+
+function dismissCoverBanner() {
+  coverBannerDismissed = true
+  coverBanner.value = ''
+}
 
 const FALLBACK_CHIPS: Chip[] = [
   { id: '', name: '全部' },
@@ -135,11 +156,18 @@ watch(
 )
 
 onMounted(async () => {
+  unsubCoverDiag = onCoverDiagnostics(applyCoverDiag)
+  applyCoverDiag(coverDiagnostics()) // 先吃历史累计（如搜索页已失败的）
   await store.loadSources()
   if (store.currentSlug) {
     await loadChips(store.currentSlug)
     await loadFirst(false)
   }
+})
+
+onBeforeUnmount(() => {
+  unsubCoverDiag?.()
+  unsubCoverDiag = undefined
 })
 </script>
 
@@ -161,6 +189,18 @@ onMounted(async () => {
       <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
     </svg>
     {{ warning }}
+  </div>
+
+  <div v-if="coverBanner" class="banner" :class="{ warn: coverBanner === 'missing-ffmpeg' }" data-testid="cover-banner">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+    </svg>
+    <span class="cover-banner-text">{{
+      coverBanner === 'missing-ffmpeg' ? t('covers.banner.missingFfmpeg') : t('covers.banner.partial')
+    }}</span>
+    <button class="btn banner-close" :aria-label="t('covers.banner.dismiss')" data-testid="cover-banner-close" @click="dismissCoverBanner">
+      ×
+    </button>
   </div>
 
   <div class="chips">
@@ -201,6 +241,18 @@ onMounted(async () => {
 <style scoped>
 .spacer {
   flex: 1;
+}
+.cover-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.5;
+}
+.banner-close {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 10px;
+  font-size: 15px;
+  line-height: 1.4;
 }
 .chips {
   display: flex;
