@@ -714,3 +714,68 @@ export function mockMergeCancel(id: string): { ok: boolean } {
   }
   return { ok: true }
 }
+
+/* ---------------------------------------------------------------- V2-2 剧库推荐（有状态 mock）
+   形状对齐真实核心探针实录（2026-11-10，client-v2 zz 探针）：
+   recommendations(short_play) 首屏 18 条 / more 返回「累计合并表」36 条
+   （前 18 条 id 与首屏逐条相同——去重责任在壳层/前端，见 app_recommendations.go:105-122）。
+   剧本设计：
+   - short_play：36 条封顶、每页新增 18——more 全量重发 → 验证前端 known_ids 去重不重复渲染。
+   - comic_series：恒 8 条但 hasMore 永真——more 返回同一累计表（0 新增）→ 验证「连续 2 空页停止」。
+     （真实核心该场景走 error「暂时没有新的推荐…」；mock 取不报错变体专门验证壳层计数规则，
+      前端 error 分支另有断言覆盖。）
+   - ai_series：首屏即空 + warning → 验证空态文案。
+   「全部」tab 走 mockCatalog（api.catalog 面），本块不重复实现。仅 VITE_MOCK 使用。 */
+
+interface LibState {
+  cursor: number // 已累计交付条数
+  pages: number // 仅用于回显 page 字段（真实核心同款：首屏 1、more 递增）
+}
+
+const LIB_SPECS: Record<string, { total: number; step: number; forever: boolean }> = {
+  short_play: { total: 36, step: 18, forever: false },
+  comic_series: { total: 8, step: 8, forever: true },
+  ai_series: { total: 0, step: 0, forever: false }
+}
+
+let libStates: Record<string, LibState> = {}
+
+function libEntry(pool: Drama[], category: string, i: number): Drama {
+  const base = pool[i % pool.length]
+  return {
+    ...base,
+    id: `hongguo:mock-lib-${category}-${i}`,
+    sourceId: `mock-lib-${category}-${i}`,
+    title: `${base.title}·${i + 1}`
+  }
+}
+
+export function mockLibraryRecommendations(category: string, force: boolean, more: boolean): CatalogResult {
+  const spec = LIB_SPECS[category] ?? { total: 0, step: 0, forever: false }
+  const pool = items.filter((it) => it.source === 'hongguo')
+  let st = libStates[category]
+  if (!st || force || !more) {
+    // 首屏/刷新：重置累计窗口（真实核心 force=重开推荐状态机）
+    st = { cursor: Math.min(spec.step, spec.total), pages: 1 }
+    libStates[category] = st
+  } else {
+    st.cursor = Math.min(st.cursor + spec.step, spec.total)
+    st.pages += 1
+  }
+  const cum: Drama[] = []
+  for (let i = 0; i < st.cursor; i++) cum.push(libEntry(pool, category, i))
+  const hasMore = spec.forever ? spec.total > 0 : st.cursor < spec.total
+  return {
+    items: cum,
+    hasMore,
+    page: st.pages,
+    warning: cum.length === 0 ? `${category} 暂无推荐（示例数据）` : 'VITE_MOCK 示例数据，非真实引擎结果',
+    localSearch: false,
+    fresh: true
+  }
+}
+
+/** 壳层页码游标重置（对应 App.RecommendationPageReset；mock 面清空全部累计状态） */
+export function mockLibraryPageReset(): void {
+  libStates = {}
+}

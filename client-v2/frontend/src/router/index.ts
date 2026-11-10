@@ -39,7 +39,7 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/library',
     name: 'library',
-    component: () => import('@/views/PlaceholderView.vue'),
+    component: () => import('@/views/LibraryView.vue'),
     meta: { title: '剧库推荐', phase: 'V2-2' }
   },
   {

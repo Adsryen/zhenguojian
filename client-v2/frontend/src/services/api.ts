@@ -23,6 +23,7 @@ import type {
   WatchRow,
 } from './types'
 import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDownloadControl, mockDownloadControlAll, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
   deleteHistoryEntry,
@@ -101,6 +102,9 @@ const realApi: NativeApi = {
       p.lane ?? '',
       p.force ?? false
     ),
+  // ── V2-2 剧库推荐：App.{Recommendations,RecommendationPageReset}（bindings_library.go，位置参数）──
+  recommendations: (category, force, more) => callGo<CatalogResult>('Recommendations', category, force, more),
+  recommendationPageReset: () => callGo<{ ok: boolean }>('RecommendationPageReset'),
   // Detail 绑定是 dramaJSON 位置参数
   detail: (drama: Drama) => callGo<DetailResult>('Detail', JSON.stringify(drama)),
   // Cover 绑定是 (dramaJSON, force)；返回 data URL 裸字符串非 JSON → callGoRaw
@@ -232,6 +236,15 @@ const mockApi: NativeApi = {
   catalog: async (p: CatalogParams) => {
     await delay(300 + Math.random() * 350)
     return mockCatalog(p.source, p.query ?? '', p.page ?? 1)
+  },
+  // V2-2 剧库推荐 mock：累计合并表语义（照真实核心 app_recommendations.go:105-122 探针实录）
+  recommendations: async (category, force, more) => {
+    await delay(200 + Math.random() * 220)
+    return mockLibraryRecommendations(category, force, more)
+  },
+  recommendationPageReset: async () => {
+    mockLibraryPageReset()
+    return { ok: true }
   },
   detail: async (drama: Drama) => {
     await delay(250 + Math.random() * 300)
