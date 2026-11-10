@@ -37,9 +37,13 @@ export interface CoverDiagnostics {
   lastKind: CoverErrorKind | ''
   /** 最近一次失败的原始错误消息 */
   lastMessage: string
+  /** 各分类累计失败次数（缺 ffmpeg 与转码/网络异常此前分不开=警示条文案不准根因） */
+  kindCounts: Partial<Record<CoverErrorKind, number>>
+  /** 最近一次失败的 dramaID（复制诊断定位用） */
+  lastDramaId: string
 }
 
-const diag: CoverDiagnostics = { failCount: 0, lastKind: '', lastMessage: '' }
+const diag: CoverDiagnostics = { failCount: 0, lastKind: '', lastMessage: '', kindCounts: {}, lastDramaId: '' }
 const listeners = new Set<(d: CoverDiagnostics) => void>()
 
 /** 当前诊断快照（组件挂载时先读一次，再订阅增量）。 */
@@ -67,9 +71,24 @@ function reportCoverFailure(err: unknown, dramaId: string): void {
   diag.failCount += 1
   diag.lastKind = kind
   diag.lastMessage = message
+  diag.lastDramaId = dramaId
+  diag.kindCounts = { ...diag.kindCounts, [kind]: (diag.kindCounts[kind] ?? 0) + 1 }
   console.warn('[covers]', kind, message, dramaId)
-  const snap = { ...diag }
+  const snap: CoverDiagnostics = { ...diag, kindCounts: { ...diag.kindCounts } }
   for (const cb of [...listeners]) cb(snap)
+}
+
+/** 面向用户/反馈的诊断摘要（「复制诊断」按钮与警示条共用）。 */
+export function coverDiagnosticText(d: CoverDiagnostics = coverDiagnostics()): string {
+  const parts = (Object.entries(d.kindCounts) as [CoverErrorKind, number][])
+    .map(([k, n]) => `${k === 'missing-ffmpeg' ? '缺ffmpeg' : '转码/网络'}×${n}`)
+    .join('，')
+  return [
+    `真果鉴 v2 封面诊断 @${new Date().toISOString()}`,
+    `失败 ${d.failCount} 次（${parts || '无分类'}）`,
+    `最近：[${d.lastKind}] ${d.lastMessage}`,
+    `drama：${d.lastDramaId}`
+  ].join('\n')
 }
 
 function cacheGet(id: string): string | undefined {

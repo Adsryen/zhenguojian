@@ -134,7 +134,9 @@ jobs:
           $mpvbin = (Get-ChildItem mpvtmp -Recurse -Filter mpv.exe | Select-Object -First 1).FullName
           Copy-Item $mpvbin "$stage\mpv\mpv.exe"
           Compress-Archive -Path $stage -DestinationPath zhenGuoJian-v2-runtime.zip -Force
-          # 程序本体经 zip 交付：GitHub 会裁资产名的中文字符，zip 内条目名则安全
+          # 双轨交付：裸资产沿用旧名 zhenGuoJian-v2.exe（日常更新只换它）；
+          # 另附 app.zip，内层是中文名 真果鉴.exe（GitHub 会裁资产名的中文字符，zip 内条目名则安全）
+          Copy-Item client-v2\build\bin\client-v2.exe zhenGuoJian-v2.exe
           $exeCn = [char]0x771F + [char]0x679C + [char]0x9274 + '.exe'   # 真果鉴.exe
           New-Item -ItemType Directory -Force "exepack\$($exeCn -replace '\.exe$','')" | Out-Null
           Copy-Item client-v2\build\bin\client-v2.exe "exepack\$($exeCn -replace '\.exe$','')\$exeCn"
@@ -147,6 +149,7 @@ jobs:
         with:
           name: v2-windows-x64
           path: |
+            zhenGuoJian-v2.exe
             zhenGuoJian-v2-app.zip
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-runtime.zip
@@ -159,13 +162,14 @@ jobs:
 
           | 文件 | 用途 |
           |---|---|
-          | ``zhenGuoJian-v2-app.zip`` | **程序本体（内含 真果鉴.exe 单文件，约 20MB）。日常更新只下载这一个**，解压覆盖旧目录里的 真果鉴.exe。内置 F12 调试：窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错）。GitHub 上传中文文件名资产会被裁前缀，所以中文名走 zip 内层 |
+          | ``zhenGuoJian-v2.exe`` | **程序本体（单文件，约 20MB，与旧版同名）。日常更新只下载这一个**，直接覆盖旧目录里的同名 exe。内置调试面板：按 **Ctrl+Shift+F12** 弹出 Chromium DevTools（Console/Network 可排错；wails 生产构建的固定组合键，单按 F12 无效） |
+          | ``zhenGuoJian-v2-app.zip`` | 同一个程序，zip 内层为中文名 **真果鉴.exe**（GitHub 会裁裸资产中文名前缀，故中文名走 zip 内层）；与上一行二选一即可 |
           | ``zhenGuoJian-v2-runtime.zip`` | **运行库（约 150MB，首次装一次）内容仅 mpv/ffmpeg，几乎不更新**。解压后把 ``runtime`` 文件夹放到 exe 同级即可 |
           | ``build-info.json`` | 构建指纹（revision/commitTime）。与 exe 同级放置后，设置页「打包提交」才会显示哈希 |
           | ``Source code (zip)`` | GitHub 自动生成的源码快照，普通用户忽略 |
 
-          首次安装：下载 ``zhenGuoJian-v2-app.zip`` + ``zhenGuoJian-v2-runtime.zip``（+ 可选 ``build-info.json``），解压后 真果鉴.exe 与 runtime 文件夹、build-info.json 放同一目录。
-          之后升级：只需要 ``zhenGuoJian-v2-app.zip``，解压覆盖 真果鉴.exe。
+          首次安装：下载 ``zhenGuoJian-v2.exe``（或 app.zip 取中文名 真果鉴.exe）+ ``zhenGuoJian-v2-runtime.zip``（+ 可选 ``build-info.json``）放同一目录。
+          之后升级：只需要 ``zhenGuoJian-v2.exe`` 这一个文件。
 
           构建提交：``$sha``（版本内查看：设置 > 关于 > 打包提交）
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
@@ -176,6 +180,7 @@ jobs:
         with:
           body_path: client-v2/build/bin/RELEASE-NOTES.md
           files: |
+            zhenGuoJian-v2.exe
             zhenGuoJian-v2-app.zip
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-runtime.zip

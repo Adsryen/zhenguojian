@@ -8,8 +8,8 @@ import { useAppStore } from '@/stores/app'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { ApiError, type Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
-import { t } from '@/services/i18n'
-import { coverDiagnostics, onCoverDiagnostics, type CoverDiagnostics } from '@/services/covers'
+import { t, tf } from '@/services/i18n'
+import { coverDiagnosticText, coverDiagnostics, onCoverDiagnostics, type CoverDiagnostics } from '@/services/covers'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 
@@ -38,14 +38,41 @@ let requestSeq = 0
 const COVER_FAIL_THRESHOLD = 5
 /** '' | 'missing-ffmpeg' | 'error' */
 const coverBanner = ref('')
+const coverFailCount = ref(0)
 /** 本页会话内关闭后不再弹（组件卸载重挂视为新会话） */
 let coverBannerDismissed = false
 let unsubCoverDiag: (() => void) | undefined
 
 function applyCoverDiag(d: CoverDiagnostics) {
+  coverFailCount.value = d.failCount
   if (coverBannerDismissed) return
-  coverBanner.value =
-    d.failCount >= COVER_FAIL_THRESHOLD ? (d.lastKind === 'missing-ffmpeg' ? 'missing-ffmpeg' : 'error') : ''
+  if (d.failCount < COVER_FAIL_THRESHOLD) {
+    coverBanner.value = ''
+    return
+  }
+  // 缺 ffmpeg 只要出现过就优先引导（可操作），否则泛化报错
+  coverBanner.value = (d.kindCounts['missing-ffmpeg'] ?? 0) > 0 ? 'missing-ffmpeg' : 'error'
+}
+
+async function copyCoverDiagnostics() {
+  const text = coverDiagnosticText()
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const app = (window as any).go?.main?.App
+    if (app?.ClipboardWrite) {
+      try {
+        await app.ClipboardWrite(text)
+      } catch (e: any) {
+        showToast(`复制失败：${e?.message ?? e}`)
+        return
+      }
+    } else {
+      showToast('复制失败：剪贴板不可用')
+      return
+    }
+  }
+  showToast(t('covers.banner.copied'))
 }
 
 function dismissCoverBanner() {
@@ -196,8 +223,13 @@ onBeforeUnmount(() => {
       <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
     </svg>
     <span class="cover-banner-text">{{
-      coverBanner === 'missing-ffmpeg' ? t('covers.banner.missingFfmpeg') : t('covers.banner.partial')
+      coverBanner === 'missing-ffmpeg'
+        ? t('covers.banner.missingFfmpeg')
+        : tf('covers.banner.partialN', { n: coverFailCount })
     }}</span>
+    <button v-if="coverBanner === 'error'" class="btn banner-copy" data-testid="cover-banner-copy" @click="copyCoverDiagnostics">
+      {{ t('covers.banner.copy') }}
+    </button>
     <button class="btn banner-close" :aria-label="t('covers.banner.dismiss')" data-testid="cover-banner-close" @click="dismissCoverBanner">
       ×
     </button>
@@ -253,6 +285,11 @@ onBeforeUnmount(() => {
   padding: 2px 10px;
   font-size: 15px;
   line-height: 1.4;
+}
+.banner-copy {
+  flex-shrink: 0;
+  padding: 2px 10px;
+  font-size: 12px;
 }
 .chips {
   display: flex;

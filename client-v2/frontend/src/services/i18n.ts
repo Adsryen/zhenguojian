@@ -121,6 +121,9 @@ const zh: Record<string, string> = {
   'covers.banner.missingFfmpeg':
     '海报转码组件 ffmpeg 未找到：请下载 zhenGuoJian-v2-runtime.zip 解压到程序目录，使 runtime\\ffmpeg\\ffmpeg.exe 就位；或设置 ZHENGUO_FFMPEG 指向 ffmpeg.exe',
   'covers.banner.partial': '部分封面加载失败（F12 查看原因）',
+  'covers.banner.partialN': '部分封面加载失败 {n} 次：点「复制诊断」发回即可定位',
+  'covers.banner.copy': '复制诊断',
+  'covers.banner.copied': '诊断信息已复制，粘贴发给开发者即可',
   'covers.banner.dismiss': '关闭提示',
 
   // ---- 搜索页「全部来源」扇出（SearchView / SearchGroups / searchAll） ----
@@ -329,6 +332,9 @@ const en: Record<string, string> = {
   'covers.banner.missingFfmpeg':
     'Poster transcoder ffmpeg not found: download zhenGuoJian-v2-runtime.zip and extract it into the app directory so runtime/ffmpeg/ffmpeg.exe is in place, or set ZHENGUO_FFMPEG to your ffmpeg.exe',
   'covers.banner.partial': 'Some covers failed to load (press F12 for details)',
+  'covers.banner.partialN': 'Some covers failed to load ({n} times): press "Copy diagnostics" and send it back',
+  'covers.banner.copy': 'Copy diagnostics',
+  'covers.banner.copied': 'Diagnostics copied - paste it to the developer',
   'covers.banner.dismiss': 'Dismiss',
 
   // ---- Search page "all sources" fan-out (SearchView / SearchGroups / searchAll) ----
