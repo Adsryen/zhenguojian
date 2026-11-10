@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, Drama, DownloadEntry, DownloadJobRow } from '@/services/types'
 import { chapterEpisode, playerRoute } from '@/services/dramaRef'
+import { t, tf } from '@/services/i18n'
 import { useDownloadsStore } from '@/stores/downloads'
 
 type Tab = 'queue' | 'merges' | 'archive'
@@ -47,29 +48,39 @@ onUnmounted(() => {
 
 /* ---------------------------------------------------------------- 展示辅助 */
 
-const STATE_TEXT: Record<string, string> = {
-  queued: '排队中',
-  downloading: '下载中',
-  paused: '已暂停',
-  completed: '已完成',
-  failed: '失败',
-  removing: '删除中'
-}
+// 状态标签表：computed 包 t() 键，切语言即时更新
+const STATE_TEXT = computed<Record<string, string>>(() => ({
+  queued: t('downloads.state.queued'),
+  downloading: t('downloads.state.downloading'),
+  paused: t('downloads.state.paused'),
+  completed: t('downloads.state.completed'),
+  failed: t('downloads.state.failed'),
+  removing: t('downloads.state.removing')
+}))
 
 function stateText(job: DownloadJobRow): string {
-  return STATE_TEXT[job.state] ?? job.state
+  return STATE_TEXT.value[job.state] ?? job.state
 }
 
-const MERGE_STATE_TEXT: Record<string, string> = {
-  queued: '排队中',
-  running: '合并中',
-  done: '已完成',
-  failed: '失败',
-  canceled: '已取消'
-}
+const MERGE_STATE_TEXT = computed<Record<string, string>>(() => ({
+  queued: t('downloads.state.queued'),
+  running: t('downloads.state.merging'),
+  done: t('downloads.state.completed'),
+  failed: t('downloads.state.failed'),
+  canceled: t('downloads.state.canceled')
+}))
 
 function mergeStateText(state: string): string {
-  return MERGE_STATE_TEXT[state] ?? state
+  return MERGE_STATE_TEXT.value[state] ?? state
+}
+
+/** 合并任务集号区间文案（原模板内联 padStart 逻辑收进函数） */
+function mergeRangeText(m: { episodes: number[]; count: number }): string {
+  return tf('downloads.epRange', {
+    a: String(m.episodes[0] ?? 0).padStart(3, '0'),
+    b: String(m.episodes[m.episodes.length - 1] ?? 0).padStart(3, '0'),
+    n: m.count
+  })
 }
 
 // 集号：核心协议 index=真实集号（1-based，app_downloads.go 校验 <1 拒绝）；
@@ -82,12 +93,13 @@ function epNo(job: DownloadJobRow): number {
 }
 
 function epLabel(job: DownloadJobRow): string {
+  const base = tf('downloads.epNo', { n: epNo(job) })
   const c = job.chapter?.title?.trim()
-  return c && !/^第\s*\d+\s*集$/.test(c) ? `第${epNo(job)}集 · ${c}` : `第${epNo(job)}集`
+  return c && !/^第\s*\d+\s*集$/.test(c) ? `${base} · ${c}` : base
 }
 
 function titleOf(job: DownloadJobRow): string {
-  return job.drama?.title?.trim() || job.chapter?.title?.trim() || '未知剧集'
+  return job.drama?.title?.trim() || job.chapter?.title?.trim() || t('downloads.unknownDrama')
 }
 
 function fmtBytes(n: number): string {
@@ -110,9 +122,9 @@ function fmtSpeed(n?: number): string {
 function fmtEta(sec?: number): string {
   if (!sec || sec <= 0 || !Number.isFinite(sec)) return ''
   const s = Math.ceil(sec)
-  if (s < 60) return `剩余 ${s}s`
-  if (s < 3600) return `剩余 ${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s`
-  return `剩余 ${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m`
+  if (s < 60) return tf('downloads.eta', { t: `${s}s` })
+  if (s < 3600) return tf('downloads.eta', { t: `${Math.floor(s / 60)}m${String(s % 60).padStart(2, '0')}s` })
+  return tf('downloads.eta', { t: `${Math.floor(s / 3600)}h${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}m` })
 }
 
 function pctOf(job: DownloadJobRow): number {
@@ -126,7 +138,7 @@ function sizeText(job: DownloadJobRow): string {
   // 下载中但尚未解析出体积（核心 resolve 前置窗口 bytes/total/progress 全 0）：
   // 显示占位文案，避免出现空白或 0 B / 0 B（待 i18n 收敛）
   if (job.state === 'downloading' || job.state === 'queued') {
-    return job.bytes > 0 ? fmtBytes(job.bytes) : '解析资源中…'
+    return job.bytes > 0 ? fmtBytes(job.bytes) : t('downloads.resolving')
   }
   return job.bytes > 0 ? fmtBytes(job.bytes) : ''
 }
@@ -136,7 +148,7 @@ function sizeText(job: DownloadJobRow): string {
 function goPlay(job: DownloadJobRow) {
   const d: Drama = job.drama ?? { id: '', source: '', title: '' }
   if (!d.id) {
-    showToast('任务缺少剧集信息，无法播放')
+    showToast(t('downloads.toastNoDrama'))
     return
   }
   router.push(playerRoute(d, epNo(job), 0, job.chapter ?? undefined))
@@ -172,12 +184,12 @@ const selectedSingleDrama = computed(() => {
 
 async function onMergeSeason(drama: Drama) {
   const res = await store.mergeSeason(drama)
-  if (res) showToast(`已加入合并队列：${drama.title}`)
+  if (res) showToast(tf('downloads.toastMerged', { t: drama.title }))
 }
 
 async function onMergeSelected() {
   const res = await store.mergeSelected([...selected.value])
-  if (res) showToast('已加入合并队列')
+  if (res) showToast(t('downloads.toastMergedPlain'))
 }
 
 async function onRemoveBatch() {
@@ -185,7 +197,11 @@ async function onRemoveBatch() {
   const res = await store.removeBatch(ids)
   if (!res) return
   const fails = Object.keys(res.failures ?? {}).length
-  showToast(fails ? `删除 ${res.completed.length} 个，失败 ${fails} 个` : `已删除 ${res.completed.length} 个任务`)
+  showToast(
+    fails
+      ? tf('downloads.toastRemovePartial', { n: res.completed.length, f: fails })
+      : tf('downloads.toastRemoved', { n: res.completed.length })
+  )
   selected.value = new Set()
 }
 
@@ -211,7 +227,7 @@ async function onSaveSettings() {
   savingSettings.value = true
   const ok = await store.saveSettings(conc.value, bySource.value, verify.value)
   savingSettings.value = false
-  if (ok) showToast('下载设置已保存')
+  if (ok) showToast(t('downloads.toastSettingsSaved'))
 }
 
 /* ---------------------------------------------------------------- 添加下载（搜索→详情→多选→入队） */
@@ -231,12 +247,12 @@ const enqueuing = ref(false)
 // 核心把 quality 当作“目标实际档位”处理（nativePlaybackChoices：0=自动选最高，
 // 其余按 360/540/720/1080 匹配，档位不存在则回落默认最高）。v1 亦恒传 0。
 // 旧 0/1/2 枚举与核心语义不符（省流从未生效），改为真实档位值。（待 i18n 收敛）
-const QUALITY_OPTIONS = [
-  { value: 0, label: '自动（最高画质）' },
-  { value: 540, label: '省流 540P' },
-  { value: 720, label: '高清 720P' },
-  { value: 1080, label: '超清 1080P' }
-]
+const QUALITY_OPTIONS = computed(() => [
+  { value: 0, label: t('downloads.quality.auto') },
+  { value: 540, label: t('downloads.quality.p540') },
+  { value: 720, label: t('downloads.quality.p720') },
+  { value: 1080, label: t('downloads.quality.p1080') }
+])
 
 function resetAddPanel() {
   showAdd.value = false
@@ -255,9 +271,9 @@ async function onSearch() {
   try {
     const res = await api.catalog({ source: addSource.value, query: q, page: 1 })
     searchResults.value = res?.items ?? []
-    if (!searchResults.value.length) showToast('没有找到匹配的剧集')
+    if (!searchResults.value.length) showToast(t('downloads.toastNoResult'))
   } catch (e) {
-    showToast(`搜索失败：${(e as Error).message}`)
+    showToast(tf('downloads.toastSearchFailed', { m: (e as Error).message }))
   } finally {
     searching.value = false
   }
@@ -272,9 +288,9 @@ async function onPick(d: Drama) {
     const res = await api.detail(d)
     const list = Array.isArray(res?.chapters) ? res.chapters : []
     chapters.value = list
-    if (!list.length) chapterErr.value = '该剧暂无可下载分集'
+    if (!list.length) chapterErr.value = t('downloads.toastNoChapters')
   } catch (e) {
-    chapterErr.value = `分集加载失败：${(e as Error).message}`
+    chapterErr.value = tf('downloads.toastChapterFail', { m: (e as Error).message })
   }
 }
 
@@ -307,12 +323,12 @@ async function onEnqueue() {
   enqueuing.value = true
   try {
     const res = await api.downloadStart(drama, entries, quality.value)
-    showToast(`已加入下载队列 ${res?.added ?? entries.length} 集`)
+    showToast(tf('downloads.toastEnqueued', { n: res?.added ?? entries.length }))
     resetAddPanel()
     tab.value = 'queue'
     await store.refresh()
   } catch (e) {
-    showToast(`入队失败：${(e as Error).message}`)
+    showToast(tf('downloads.toastEnqueueFail', { m: (e as Error).message }))
   } finally {
     enqueuing.value = false
   }
@@ -321,14 +337,14 @@ async function onEnqueue() {
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">下载与合并</h1>
-    <span v-if="MOCK_MODE" class="chip static sample-chip">VITE_MOCK 示例数据</span>
+    <h1 class="page-title">{{ t('downloads.title') }}</h1>
+    <span v-if="MOCK_MODE" class="chip static sample-chip">{{ t('downloads.mockChip') }}</span>
     <div class="spacer" />
-    <button class="btn" :disabled="!!store.busyId" @click="store.controlAll('pauseAll')">全部暂停</button>
-    <button class="btn" :disabled="!!store.busyId" @click="store.controlAll('resumeAll')">全部开始</button>
-    <button class="btn" :class="{ primary: showSettings }" @click="showSettings = !showSettings">并发设置</button>
+    <button class="btn" :disabled="!!store.busyId" @click="store.controlAll('pauseAll')">{{ t('downloads.pauseAll') }}</button>
+    <button class="btn" :disabled="!!store.busyId" @click="store.controlAll('resumeAll')">{{ t('downloads.resumeAll') }}</button>
+    <button class="btn" :class="{ primary: showSettings }" @click="showSettings = !showSettings">{{ t('downloads.concurrencyBtn') }}</button>
     <button class="btn primary" :class="{ pressed: showAdd }" @click="showAdd ? resetAddPanel() : (showAdd = true)">
-      {{ showAdd ? '收起添加' : '添加下载' }}
+      {{ showAdd ? t('downloads.collapseAdd') : t('downloads.addDownload') }}
     </button>
   </div>
 
@@ -337,18 +353,18 @@ async function onEnqueue() {
   <!-- 并发设置（对齐核心 resourceSettings.downloadConcurrency，1..8） -->
   <div v-if="showSettings" class="card panel">
     <div class="panel-row">
-      <label class="p-label">并发下载数</label>
+      <label class="p-label">{{ t('downloads.concurrencyLabel') }}</label>
       <input v-model.number="conc" class="num" type="number" min="1" max="8" step="1" />
-      <span class="text-muted p-hint">同时下载的分集数（核心默认 2）</span>
+      <span class="text-muted p-hint">{{ t('downloads.concurrencyHint') }}</span>
     </div>
     <div class="panel-row">
-      <label class="p-check"><input v-model="bySource" type="checkbox" />按来源并行（每来源各一组槽位）</label>
-      <label class="p-check"><input v-model="verify" type="checkbox" />合并前完整解码校验（耗时但更稳）</label>
+      <label class="p-check"><input v-model="bySource" type="checkbox" />{{ t('downloads.bySource') }}</label>
+      <label class="p-check"><input v-model="verify" type="checkbox" />{{ t('downloads.verifyDecode') }}</label>
     </div>
     <div v-if="store.settings?.warning" class="p-warn text-muted">{{ store.settings.warning }}</div>
     <div class="panel-row">
       <button class="btn primary" :disabled="savingSettings" @click="onSaveSettings">
-        {{ savingSettings ? '保存中…' : '保存设置' }}
+        {{ savingSettings ? t('downloads.saving') : t('downloads.save') }}
       </button>
     </div>
   </div>
@@ -356,25 +372,25 @@ async function onEnqueue() {
   <!-- 添加下载：搜索 → 选剧 → 分集多选 → 入队 -->
   <div v-if="showAdd" class="card panel">
     <div class="panel-row">
-      <input v-model="addQuery" class="textin" placeholder="搜索剧名，回车搜索" @keyup.enter="onSearch" />
+      <input v-model="addQuery" class="textin" :placeholder="t('downloads.searchPh')" @keyup.enter="onSearch" />
       <button class="btn" :disabled="searching || !addQuery.trim()" @click="onSearch">
-        {{ searching ? '搜索中…' : '搜索' }}
+        {{ searching ? t('downloads.searching') : t('downloads.search') }}
       </button>
     </div>
     <div v-if="searchResults.length && !pickedDrama" class="result-list">
       <button v-for="d in searchResults" :key="d.id" class="result-item" @click="onPick(d)">
         <span class="r-title">{{ d.title }}</span>
-        <span class="r-sub text-muted">{{ d.source }}{{ d.episodes ? ` · 全${d.episodes}集` : '' }}</span>
+        <span class="r-sub text-muted">{{ d.source }}{{ d.episodes ? ' · ' + tf('downloads.episodesTotal', { n: d.episodes }) : '' }}</span>
       </button>
     </div>
     <template v-if="pickedDrama">
       <div class="panel-row">
         <span class="picked-title">{{ pickedDrama.title }}</span>
         <button class="btn small" @click="pickAllChapters">
-          {{ pickedChapters.size === chapters.length ? '取消全选' : '全选' }}
+          {{ pickedChapters.size === chapters.length ? t('downloads.unselectAll') : t('downloads.selectAll') }}
         </button>
-        <span class="text-muted p-hint">已选 {{ pickedChapters.size }} 集</span>
-        <label class="p-label q-label">清晰度</label>
+        <span class="text-muted p-hint">{{ tf('downloads.selectedN', { n: pickedChapters.size }) }}</span>
+        <label class="p-label q-label">{{ t('downloads.quality') }}</label>
         <select v-model.number="quality" class="sel">
           <option v-for="o in QUALITY_OPTIONS" :key="o.value" :value="o.value">{{ o.label }}</option>
         </select>
@@ -393,9 +409,9 @@ async function onEnqueue() {
       </div>
       <div class="panel-row">
         <button class="btn primary" :disabled="!pickedChapters.size || enqueuing" @click="onEnqueue">
-          {{ enqueuing ? '入队中…' : '加入下载队列' }}
+          {{ enqueuing ? t('downloads.enqueuing') : t('downloads.enqueue') }}
         </button>
-        <button class="btn" @click="resetAddPanel">取消</button>
+        <button class="btn" @click="resetAddPanel">{{ t('downloads.cancel') }}</button>
       </div>
     </template>
   </div>
@@ -403,29 +419,29 @@ async function onEnqueue() {
   <!-- 分页 -->
   <div class="tabs">
     <button class="tab" :class="{ on: tab === 'queue' }" @click="tab = 'queue'">
-      下载队列<em>{{ store.activeJobs.length }}</em>
+      {{ t('downloads.tabQueue') }}<em>{{ store.activeJobs.length }}</em>
     </button>
     <button class="tab" :class="{ on: tab === 'merges' }" @click="tab = 'merges'">
-      合并队列<em>{{ store.merges.length }}</em>
+      {{ t('downloads.tabMerges') }}<em>{{ store.merges.length }}</em>
     </button>
     <button class="tab" :class="{ on: tab === 'archive' }" @click="tab = 'archive'">
-      归档<em>{{ store.archivedJobs.length }}</em>
+      {{ t('downloads.tabArchive') }}<em>{{ store.archivedJobs.length }}</em>
     </button>
   </div>
 
   <!-- 下载队列 -->
   <template v-if="tab === 'queue'">
     <div v-if="store.mergeGroups.length || selectedJobs.length" class="merge-bar card">
-      <span class="mb-label">合并入口</span>
+      <span class="mb-label">{{ t('downloads.mergeEntry') }}</span>
       <button
         v-for="g in store.mergeGroups"
         :key="g.dramaId"
         class="chip"
         :disabled="!!store.busyId"
-        :title="`已完成 ${g.jobs.length} 集，整季合并`"
+        :title="tf('downloads.mergeSeasonTip', { n: g.jobs.length })"
         @click="onMergeSeason(g.drama)"
       >
-        《{{ g.title }}》整季（{{ g.jobs.length }}集）
+        {{ tf('downloads.mergeSeason', { t: g.title, n: g.jobs.length }) }}
       </button>
       <button
         v-if="selectedJobs.length >= 2 && selectedCompletable && selectedSingleDrama"
@@ -433,20 +449,20 @@ async function onEnqueue() {
         :disabled="!!store.busyId"
         @click="onMergeSelected"
       >
-        合并所选（{{ selectedJobs.length }}集）
+        {{ tf('downloads.mergeSelected', { n: selectedJobs.length }) }}
       </button>
       <button v-if="selectedJobs.length" class="chip danger-chip" :disabled="!!store.busyId" @click="onRemoveBatch">
-        删除所选（{{ selectedJobs.length }}）
+        {{ tf('downloads.removeSelected', { n: selectedJobs.length }) }}
       </button>
       <span v-if="selectedJobs.length && !(selectedCompletable && selectedSingleDrama)" class="text-muted mb-hint">
-        合并所选需同一部剧且全部完成
+        {{ t('downloads.mergeSelHint') }}
       </span>
     </div>
 
     <div v-if="!store.activeJobs.length" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16" /></svg>
-      <div>下载队列为空。</div>
-      <div class="text-muted hint">点右上角「添加下载」搜索剧集并选择分集。</div>
+      <div>{{ t('downloads.queueEmpty') }}</div>
+      <div class="text-muted hint">{{ t('downloads.queueEmptyHint') }}</div>
     </div>
 
     <div v-else class="card list">
@@ -479,14 +495,14 @@ async function onEnqueue() {
           </div>
         </div>
         <div class="r-ops">
-          <button v-if="job.state === 'completed'" class="btn small" @click="goPlay(job)">播放</button>
+          <button v-if="job.state === 'completed'" class="btn small" @click="goPlay(job)">{{ t('downloads.play') }}</button>
           <button
             v-if="job.state === 'downloading' || job.state === 'queued'"
             class="btn small"
             :disabled="!!store.busyId"
             @click="store.control(job, 'pause')"
           >
-            暂停
+            {{ t('downloads.pause') }}
           </button>
           <button
             v-if="job.state === 'paused'"
@@ -494,7 +510,7 @@ async function onEnqueue() {
             :disabled="!!store.busyId"
             @click="store.control(job, 'resume')"
           >
-            续传
+            {{ t('downloads.resume') }}
           </button>
           <button
             v-if="job.state === 'failed'"
@@ -502,7 +518,7 @@ async function onEnqueue() {
             :disabled="!!store.busyId"
             @click="store.retry(job)"
           >
-            重试
+            {{ t('search.retry') }}
           </button>
           <button
             v-if="job.state === 'completed'"
@@ -510,14 +526,14 @@ async function onEnqueue() {
             :disabled="!!store.busyId"
             @click="store.control(job, 'archive')"
           >
-            归档
+            {{ t('downloads.archive') }}
           </button>
           <button
             class="btn small danger"
             :disabled="!!store.busyId || job.state === 'removing'"
             @click="store.control(job, 'remove')"
           >
-            {{ job.state === 'removing' ? '删除中…' : '删除' }}
+            {{ job.state === 'removing' ? t('downloads.removing') : t('downloads.remove') }}
           </button>
         </div>
       </div>
@@ -527,19 +543,19 @@ async function onEnqueue() {
   <!-- 合并队列 -->
   <template v-if="tab === 'merges'">
     <div v-if="store.merges.length" class="mb-bar">
-      <button class="btn danger" :disabled="!!store.busyId" @click="store.mergeCancel('')">停止全部合并</button>
+      <button class="btn danger" :disabled="!!store.busyId" @click="store.mergeCancel('')">{{ t('downloads.stopAllMerges') }}</button>
     </div>
     <div v-if="!store.merges.length" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="12" rx="2" /><path d="M9 10l5 2-5 2z" /></svg>
-      <div>暂无合并任务。</div>
-      <div class="text-muted hint">在「下载队列」页勾选已完成分集，或点整季合并入口。</div>
+      <div>{{ t('downloads.mergeEmpty') }}</div>
+      <div class="text-muted hint">{{ t('downloads.mergeEmptyHint') }}</div>
     </div>
     <div v-else class="card list">
       <div v-for="(m, i) in store.merges" :key="m.id" class="row" :class="{ divided: i > 0 }">
         <div class="r-main">
           <div class="r-line1">
             <span class="r-title">{{ m.title }}</span>
-            <span class="r-ep text-muted">全{{ String(m.episodes[0] ?? 0).padStart(3, '0') }}-{{ String(m.episodes[m.episodes.length - 1] ?? 0).padStart(3, '0') }}集（{{ m.count }}集）</span>
+            <span class="r-ep text-muted">{{ mergeRangeText(m) }}</span>
             <span class="pill" :class="'pill-' + m.state">{{ mergeStateText(m.state) }}</span>
           </div>
           <div class="r-line2">
@@ -556,7 +572,7 @@ async function onEnqueue() {
             :disabled="!!store.busyId"
             @click="store.mergeCancel(m.id)"
           >
-            取消
+            {{ t('downloads.cancel') }}
           </button>
         </div>
       </div>
@@ -568,18 +584,18 @@ async function onEnqueue() {
     <!-- 界面自证：归档任务来自核心下载索引，索引文件位于下列目录（v1 语义=下载目录） -->
     <div v-if="store.downloadDir" class="dir-line text-muted">
       <span class="dir-ic">📂</span>
-      <span>归档索引目录：{{ store.downloadDir.directory }}</span>
-      <span v-if="!store.downloadDir.exists" class="pill pill-failed">目录不存在</span>
+      <span>{{ t('downloads.archiveDirPrefix') }}{{ store.downloadDir.directory }}</span>
+      <span v-if="!store.downloadDir.exists" class="pill pill-failed">{{ t('downloads.dirMissing') }}</span>
     </div>
     <div v-if="!store.archivedJobs.length" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
       <!-- 待 i18n 收敛 -->
-      <div v-if="store.downloadDir && !store.downloadDir.exists">下载目录不存在：{{ store.downloadDir.directory }}</div>
-      <div v-else>暂无归档任务。</div>
+      <div v-if="store.downloadDir && !store.downloadDir.exists">{{ tf('downloads.dirMissingLine', { d: store.downloadDir.directory }) }}</div>
+      <div v-else>{{ t('downloads.archiveEmpty') }}</div>
       <div v-if="store.downloadDir && !store.downloadDir.exists" class="text-muted hint">
-        核心在此目录维护下载索引（index.json）。目录缺失通常意味着从未成功下载，或该路径不是你的旧版下载目录；v1 客户端默认下载目录在程序目录「下载」下，与当前路径可能不同。
+        {{ t('downloads.dirMissingHint') }}
       </div>
-      <div v-else class="text-muted hint">已完成分集点「归档」后在这里找回。</div>
+      <div v-else class="text-muted hint">{{ t('downloads.archiveHint') }}</div>
     </div>
     <div v-else class="card list">
       <div v-for="(job, i) in store.archivedJobs" :key="job.id" class="row" :class="{ divided: i > 0, busy: store.busyId === job.id }">
@@ -588,20 +604,19 @@ async function onEnqueue() {
           <div class="r-line1">
             <span class="r-title">{{ titleOf(job) }}</span>
             <span class="r-ep text-muted">{{ epLabel(job) }}</span>
-            <span class="pill pill-completed">已完成·归档</span>
+            <span class="pill pill-completed">{{ t('downloads.state.completedArchived') }}</span>
           </div>
         </div>
         <div class="r-ops">
-          <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">恢复</button>
-          <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">删除</button>
+          <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
+          <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
         </div>
       </div>
     </div>
   </template>
 
   <p class="footnote text-muted">
-    任务与合并进度由 Go 下载服务每 {{ MOCK_MODE ? '1500' : '1500' }}ms 推送（downloads:update）；
-    {{ MOCK_MODE ? '当前为 VITE_MOCK 示例数据：下载/合并均为本地模拟，非真实引擎结果。' : '合并流水线与 v1 media.MergeTask 对齐（解密→规范化→拼接→校验→成品）。' }}
+    {{ t('downloads.footnote') }} {{ MOCK_MODE ? t('downloads.footnoteMock') : t('downloads.footnoteReal') }}
   </p>
 
   <div v-if="toast" class="toast">{{ toast }}</div>

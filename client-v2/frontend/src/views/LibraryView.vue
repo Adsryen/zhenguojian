@@ -18,6 +18,7 @@ import { useAppStore } from '@/stores/app'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { ApiError, type CatalogResult, type Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
+import { t, tf } from '@/services/i18n'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 
@@ -39,7 +40,6 @@ const activeChip = ref('')
 const hasMore = ref(true)
 const serverMore = ref(true) // 连续 2 空页规则（与核心 hasMore 分离）
 const retryPending = ref('') // 非空 = v1 retry_request：more 失败待重试
-const statusText = ref('')
 
 const knownIds = new Set<string>()
 let allPage = 0 // 「全部」tab 壳层页码游标，仅成功后 +1
@@ -48,15 +48,40 @@ let requestSeq = 0
 let retrySnapshot: { force: boolean; more: boolean } | null = null
 
 // v1 main.py:44 同款表；真实题材名以 browseFilters 为准，静态表兜底
+// 展示走 i18n 键（genreLabel），name 字段仅作兜底数据，不再直接渲染
 const GENRES: Array<{ id: string; name: string }> = [
-  { id: '', name: '全部' },
-  { id: 'short_play', name: '真人剧' },
-  { id: 'comic_series', name: '漫剧' },
-  { id: 'ai_series', name: 'AI剧' }
+  { id: '', name: t('library.genre.all') },
+  { id: 'short_play', name: t('library.genre.short_play') },
+  { id: 'comic_series', name: t('library.genre.comic_series') },
+  { id: 'ai_series', name: t('library.genre.ai_series') }
 ]
 // 核心 recommendations 仅认这 3 个 genre（provider_hongguo_recommendations.go:25-31），交集防呆
 const GENRE_IDS = new Set(['short_play', 'comic_series', 'ai_series'])
-const GENRE_NAMES: Record<string, string> = { short_play: '真人剧', comic_series: '漫剧', ai_series: 'AI剧' }
+const GENRE_LABEL_KEY: Record<string, string> = {
+  short_play: 'library.genre.short_play',
+  comic_series: 'library.genre.comic_series',
+  ai_series: 'library.genre.ai_series'
+}
+
+/** 题材 chip 展示名：已知 genre 走 i18n 键（切语言即时更新），其余用核心返回名兜底 */
+function genreLabel(c: Chip): string {
+  if (!c.id) return t('library.genre.all')
+  const key = GENRE_LABEL_KEY[c.id]
+  return key ? t(key) : c.name || c.id
+}
+
+/** 横幅兜底文案响应式（res.warning 为数据侧内容，原样展示） */
+const warningText = computed(
+  () => warning.value || (MOCK_MODE ? t('banner.mock') : DEGRADED ? t('banner.degraded') : '')
+)
+
+/** 底部状态行：随 locale/items/retryPending 响应，替代原 updateStatus 手动刷 */
+const statusText = computed(() => {
+  if (retryPending.value) return tf('library.loadFailedMsg', { m: retryPending.value })
+  return items.value.length
+    ? `${tf('library.loadedCount', { n: items.value.length })} · ${hasMore.value && serverMore.value ? t('library.scrollMore') : t('library.allLoaded')}`
+    : ''
+})
 
 const canLoadMore = computed(() => !loading.value && !loadingMore.value && hasMore.value && serverMore.value && !retryPending.value && !error.value && items.value.length > 0)
 
@@ -66,10 +91,10 @@ async function loadChips(source: string) {
     const cat = res.groups?.find((g) => g.key === 'category')
     const opts = (cat?.options ?? []).filter((o) => GENRE_IDS.has(o.id))
     if (opts.length) {
-      chips.value = [{ id: '', name: '全部' }, ...opts.map((o) => ({ id: o.id, name: o.name || GENRE_NAMES[o.id] || o.id }))]
+      chips.value = [{ id: '', name: t('library.genre.all') }, ...opts.map((o) => ({ id: o.id, name: o.name || o.id }))]
       return
     }
-    throw new ApiError('无 category 组', 'empty_filters')
+    throw new ApiError('browseFilters: no category group', 'empty_filters')
   } catch (e: any) {
     if (e?.code !== 'discovery_unavailable') console.warn('browseFilters 兜底:', e?.message ?? e)
     chips.value = GENRES
@@ -77,19 +102,7 @@ async function loadChips(source: string) {
 }
 
 function applyWarning(res: CatalogResult) {
-  warning.value =
-    res.warning ||
-    (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : DEGRADED ? '原生桥不可用，当前显示本机缓存数据' : '')
-}
-
-function updateStatus() {
-  if (retryPending.value) {
-    statusText.value = `加载失败：${retryPending.value}`
-    return
-  }
-  statusText.value = items.value.length
-    ? `已加载 ${items.value.length} 部 · ${hasMore.value && serverMore.value ? '下滑继续浏览' : '已全部加载'}`
-    : ''
+  warning.value = res.warning || ''
 }
 
 function takeResult(res: CatalogResult, more: boolean) {
@@ -161,7 +174,6 @@ async function loadFirst(force = false) {
   } finally {
     if (seq === requestSeq) {
       loading.value = false
-      updateStatus()
     }
   }
 }
@@ -175,13 +187,11 @@ async function loadMore() {
     const res = await fetchOne(true, false)
     if (seq !== requestSeq) return
     takeResult(res, true)
-    updateStatus()
   } catch (e: any) {
     if (seq !== requestSeq) return
     // v1 retry_request：保留已加载内容，挂起「重试加载」，禁止后续自动翻页
     retryPending.value = e?.message ?? String(e)
     retrySnapshot = { force: false, more: true }
-    updateStatus()
   } finally {
     if (seq === requestSeq) loadingMore.value = false
   }
@@ -227,7 +237,7 @@ onMounted(async () => {
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">剧库推荐</h1>
+    <h1 class="page-title">{{ t('library.title') }}</h1>
     <SourceSwitch
       :model-value="store.currentSlug"
       :sources="store.orderedSources"
@@ -248,11 +258,11 @@ onMounted(async () => {
       >
         <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
       </svg>
-      刷新
+      {{ t('library.refresh') }}
     </button>
   </div>
 
-  <div v-if="warning" class="banner">
+  <div v-if="warningText" class="banner">
     <svg
       viewBox="0 0 24 24"
       width="15"
@@ -264,7 +274,7 @@ onMounted(async () => {
     >
       <path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
     </svg>
-    {{ warning }}
+    {{ warningText }}
   </div>
 
   <div class="chips">
@@ -276,32 +286,32 @@ onMounted(async () => {
       :data-testid="`lib-chip-${c.id || 'all'}`"
       @click="pickChip(c)"
     >
-      {{ c.name }}
+      {{ genreLabel(c) }}
     </button>
   </div>
 
   <div v-if="store.sourcesError" class="state-block">
-    <div>源列表获取失败：{{ store.sourcesError }}</div>
-    <button class="btn" @click="store.loadSources(true)">重试</button>
+    <div>{{ t('library.sourcesFail') }}{{ store.sourcesError }}</div>
+    <button class="btn" @click="store.loadSources(true)">{{ t('search.retry') }}</button>
   </div>
   <div v-else-if="error && !loading" class="state-block" data-testid="lib-error">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5.01" />
     </svg>
     <div>{{ error }}</div>
-    <button class="btn" @click="loadFirst(true)">重试</button>
+    <button class="btn" @click="loadFirst(true)">{{ t('search.retry') }}</button>
   </div>
   <div v-else-if="!loading && !items.length" class="state-block" data-testid="lib-empty">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="12" cy="12" r="9" /><path d="M8.5 12h7" />
     </svg>
-    <div>{{ warning || '暂时没有推荐内容' }}</div>
-    <button class="btn" @click="loadFirst(true)">重试</button>
+    <div>{{ warningText || t('library.empty') }}</div>
+    <button class="btn" @click="loadFirst(true)">{{ t('search.retry') }}</button>
   </div>
   <template v-else>
     <div v-if="retryPending" class="banner warn" data-testid="lib-retry">
-      加载失败：{{ retryPending }}
-      <button class="btn banner-btn" @click="retryLoad">重试加载</button>
+      {{ tf('library.loadFailedMsg', { m: retryPending }) }}
+      <button class="btn banner-btn" @click="retryLoad">{{ t('library.retryLoad') }}</button>
     </div>
     <div v-if="statusText" class="lib-status" data-testid="lib-status">{{ statusText }}</div>
     <PosterGrid
@@ -312,8 +322,8 @@ onMounted(async () => {
       @select="(d: Drama) => router.push(detailRoute(d))"
     />
     <div class="lib-foot">
-      <button v-if="canLoadMore" class="btn" data-testid="lib-more" @click="loadMore">加载更多</button>
-      <span v-else-if="!loading && items.length && (hasMore ? !serverMore : true)" class="lib-foot-hint">已加载全部推荐</span>
+      <button v-if="canLoadMore" class="btn" data-testid="lib-more" @click="loadMore">{{ t('library.loadMore') }}</button>
+      <span v-else-if="!loading && items.length && (hasMore ? !serverMore : true)" class="lib-foot-hint">{{ t('library.allRecommendLoaded') }}</span>
     </div>
   </template>
 
