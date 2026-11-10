@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
   push:
     tags:
-      - "v*"
+      # 仅 v1 线标签；v2.* 由 build-v2.yml 负责，避免同 Release 混入两套资产
+      - "v1.*"
 
 env:
   APP_NAME: 真果鉴
