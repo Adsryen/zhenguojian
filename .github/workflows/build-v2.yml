@@ -134,16 +134,24 @@ jobs:
           $mpvbin = (Get-ChildItem mpvtmp -Recurse -Filter mpv.exe | Select-Object -First 1).FullName
           Copy-Item $mpvbin "$stage\mpv\mpv.exe"
           Compress-Archive -Path $stage -DestinationPath zhenGuoJian-v2-runtime.zip -Force
-          Copy-Item client-v2\build\bin\client-v2.exe zhenGuoJian-v2.exe
+          Compress-Archive -Path zhenguojian-v2-raw.exe -DestinationPath 'zhenGuoJian-v2-app.zip' -Force
+          # zip 内条目改中文名片段：用临时目录保真名
+          $nm = [char]0x771F + [char]0x679C + [char]0x9274
+          New-Item -ItemType Directory -Force "exepack\$nm" | Out-Null
+          Copy-Item zhenguojian-v2-raw.exe "exepack\$nm\$nm.exe"
+          Remove-Item -Force 'zhenGuoJian-v2-app.zip'
+          Compress-Archive -Path "exepack\$nm" -DestinationPath 'zhenGuoJian-v2-app.zip' -Force
+          Copy-Item client-v2\build\bin\client-v2.exe "zhenguojian-v2-raw.exe"
+          $exeCn = [char]0x771F + [char]0x679C + [char]0x9274 + '.exe'   # 真果鉴.exe：CJK 名只进 zip，GitHub 裸资产会被裁前缀
           Write-Host ("runtime zip size: " + (Get-Item zhenGuoJian-v2-runtime.zip).Length)
-          Write-Host ("exe size: " + (Get-Item zhenGuoJian-v2.exe).Length)
+          Write-Host ("exe size: " + (Get-Item zhenguojian-v2-raw.exe).Length)
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'push'
         with:
           name: v2-windows-x64
           path: |
-            zhenGuoJian-v2.exe
+            zhenGuoJian-v2-app.zip
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-runtime.zip
 
@@ -155,13 +163,13 @@ jobs:
 
           | 文件 | 用途 |
           |---|---|
-          | ``zhenGuoJian-v2.exe`` | **程序本体（单文件，约 20MB）。日常更新只下载这一个**，直接覆盖旧目录里的同名 exe。内置 F12 调试：窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错） |
+          | ``zhenGuoJian-v2-app.zip`` | **程序本体（内含 真果鉴.exe 单文件，约 20MB）。日常更新只下载这一个**，解压覆盖旧目录里的 真果鉴.exe。内置 F12 调试：窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错）。GitHub 上传中文文件名资产会被裁前缀，所以中文名走 zip 内层 |
           | ``zhenGuoJian-v2-runtime.zip`` | **运行库（约 150MB，首次装一次）内容仅 mpv/ffmpeg，几乎不更新**。解压后把 ``runtime`` 文件夹放到 exe 同级即可 |
           | ``build-info.json`` | 构建指纹（revision/commitTime）。与 exe 同级放置后，设置页「打包提交」才会显示哈希 |
           | ``Source code (zip)`` | GitHub 自动生成的源码快照，普通用户忽略 |
 
-          首次安装：下载 ``zhenGuoJian-v2.exe`` + ``zhenGuoJian-v2-runtime.zip``（+ 可选 ``build-info.json``）放同一目录。
-          之后升级：只需要 ``zhenGuoJian-v2.exe`` 这一个文件。
+          首次安装：下载 ``zhenGuoJian-v2-app.zip`` + ``zhenGuoJian-v2-runtime.zip``（+ 可选 ``build-info.json``），解压后 真果鉴.exe 与 runtime 文件夹、build-info.json 放同一目录。
+          之后升级：只需要 ``zhenGuoJian-v2-app.zip``，解压覆盖 真果鉴.exe。
 
           构建提交：``$sha``（版本内查看：设置 > 关于 > 打包提交）
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
@@ -172,6 +180,6 @@ jobs:
         with:
           body_path: client-v2/build/bin/RELEASE-NOTES.md
           files: |
-            zhenGuoJian-v2.exe
+            zhenGuoJian-v2-app.zip
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-runtime.zip
