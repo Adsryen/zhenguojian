@@ -10,6 +10,7 @@
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
+import { resolveCover } from '@/services/covers'
 import { detailRoute, playerRoute } from '@/services/dramaRef'
 import { useCalendarStore, calDateLabel, todayYmd, type CalendarRow } from '@/stores/calendar'
 
@@ -36,6 +37,29 @@ const pendingRows = computed(() => store.pendingRows)
 function coverUrl(c?: string): string {
   if (!c) return ''
   return /^(https?:|data:|blob:)/i.test(c) ? c : c.startsWith('/') ? c : `/${c}`
+}
+
+/* 封面解析（海报管线）：行封面走 resolveCover —— 真实桥下 raw cover 可能是签名 HEIC
+   （<img> 直绑必挂），Go 端转码后回 data URL；mock/降级返回 fixture 本地 svg 原路径。
+   rows 为整组替换（load/loadMore 都重赋 store.rows），watch 一次覆盖两个 tab 的行。 */
+const coverMap = ref(new Map<string, string>())
+watch(
+  () => store.rows,
+  (rs) => {
+    for (const row of rs) {
+      const d = row.drama
+      if (!d || !d.cover || coverMap.value.has(d.id)) continue
+      void resolveCover(d).then((src) => {
+        if (src && coverMap.value.get(d.id) !== src) {
+          coverMap.value = new Map(coverMap.value).set(d.id, src)
+        }
+      })
+    }
+  },
+  { immediate: true }
+)
+function resolvedCover(row: CalendarRow): string {
+  return coverMap.value.get(row.drama.id) || ''
 }
 
 function goDetail(row: CalendarRow) {
@@ -105,7 +129,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
     <div class="cal-list">
       <div v-for="row in onlineRows" :key="row.id" class="cal-row card">
         <div class="cal-cover" @click="goDetail(row)">
-          <img v-if="coverUrl(row.drama.cover)" :src="coverUrl(row.drama.cover)" :alt="row.drama.title" />
+          <img v-if="resolvedCover(row)" :src="coverUrl(resolvedCover(row))" :alt="row.drama.title" />
           <div v-else class="cover-ph" />
           <span v-if="row.badge" class="cover-badge">{{ row.badge }}</span>
         </div>
@@ -134,7 +158,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
       <div v-if="pendingRows.length" class="section-title text-muted">待上线</div>
       <div v-for="row in pendingRows" :key="row.id" class="cal-row card">
         <div class="cal-cover" @click="goDetail(row)">
-          <img v-if="coverUrl(row.drama.cover)" :src="coverUrl(row.drama.cover)" :alt="row.drama.title" />
+          <img v-if="resolvedCover(row)" :src="coverUrl(resolvedCover(row))" :alt="row.drama.title" />
           <div v-else class="cover-ph" />
           <span v-if="row.badge" class="cover-badge">{{ row.badge }}</span>
         </div>

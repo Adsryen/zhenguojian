@@ -207,6 +207,8 @@ export interface NativeApi {
   setSourceEnabled(slug: string, enabled: boolean): Promise<void>
   catalog(params: CatalogParams): Promise<CatalogResult>
   detail(drama: Drama): Promise<DetailResult>
+  /** 封面管线（Go bindings_cover.go）：核心下载 + HEIC→JPEG 转码，resolve 为 data URL 字符串 */
+  cover(dramaJSON: string, force: boolean): Promise<string>
   browseFilters(source: string): Promise<BrowseFiltersResult>
   resolve(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<ResolvePlan>
   // ── V2-3c 播放桥（app.go「V2-3c 播放绑定」；事件 player:tick/ended/error + danmaku:stats，见 stores/player.ts）──

@@ -3,10 +3,12 @@
    - 列数按容器宽度自适应（min 列宽 160px）
    - 行高 = 列宽×1.4(3:4 封面) + 标题区
    - 只渲染视口 ±1 屏行（绝对定位 + transform 位移）
-   - 卡片：懒加载封面，失败/未加载给 surface2 占位+标题首字兜底；
+   - 卡片：封面走 resolveCover（核心下载 + HEIC→JPEG 转码 → data URL；mock 原样 URL），
+     解析完成前/失败给 surface2 占位+标题首字兜底（不渲染 raw HEIC，避免必挂的 <img>）；
      VIP / 18+ badge 槽、更新角标；click emit('select', drama) */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Drama } from '@/services/types'
+import { resolveCover } from '@/services/covers'
 import SkeletonCard from './SkeletonCard.vue'
 
 const props = withDefaults(
@@ -64,6 +66,28 @@ const rows = computed(() => {
   }
   return out
 })
+
+// 封面解析：coverSrc.get(d.id) 仅在解析出可用 src（data URL / mock 原 URL）后填充。
+// 可见窗口（含 ±BUFFER 行）每次变化都触发 ensureCovers；resolveCover 自带
+// LRU + in-flight 去重，重复调用同一 id 安全（命中缓存即刻返回）。
+const coverSrc = ref(new Map<string, string>())
+function setCoverSrc(id: string, src: string) {
+  if (coverSrc.value.get(id) === src) return
+  coverSrc.value = new Map(coverSrc.value).set(id, src)
+}
+function ensureCovers(list: Drama[]) {
+  for (const d of list) {
+    if (!d || !d.cover || coverSrc.value.has(d.id)) continue
+    void resolveCover(d).then((src) => {
+      if (src) setCoverSrc(d.id, src)
+    })
+  }
+}
+watch(
+  rows,
+  (rs) => ensureCovers(rs.flatMap((r) => r.slice.map((s) => s.d))),
+  { immediate: true }
+)
 
 // 底部加载触发：渲染最后一段时通知父级（IntersectionObserver 过重，滚动距离判断够用）
 watch(
@@ -137,8 +161,8 @@ function fallbackChar(d: Drama) {
         >
           <div class="cover" :style="{ height: coverH + 'px' }">
             <img
-              v-if="d.cover && !broken.has(d.id)"
-              :src="d.cover"
+              v-if="coverSrc.get(d.id) && !broken.has(d.id)"
+              :src="coverSrc.get(d.id)"
               :alt="d.title"
               loading="lazy"
               decoding="async"

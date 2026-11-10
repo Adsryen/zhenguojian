@@ -10,6 +10,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, DetailResult, Drama } from '@/services/types'
+import { resolveCover } from '@/services/covers'
 import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
 import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -231,6 +232,22 @@ function coverUrl(c?: string): string {
   return c.startsWith('/') ? c : `/${c}`
 }
 
+/* 主封面走 resolveCover（真实桥 = 核心下载 + HEIC→JPEG 转码 data URL；mock = 原路径）。
+   raw meta.cover 可能是签名 HEIC，不再直绑 <img>；解析出前/失败显 cover-empty 兜底。 */
+const coverResolved = ref('')
+watch(
+  () => [meta.value.id, meta.value.cover] as const,
+  () => {
+    coverResolved.value = ''
+    const d = meta.value
+    if (!d.cover) return
+    void resolveCover(d).then((src) => {
+      if (meta.value.id === d.id) coverResolved.value = src
+    })
+  },
+  { immediate: true }
+)
+
 </script>
 
 <template>
@@ -238,7 +255,7 @@ function coverUrl(c?: string): string {
     <!-- 头区：模糊封面铺底（v1 BlurCoverBackground） -->
     <div v-if="drama" class="hero">
       <div class="hero-bg" aria-hidden="true">
-        <img v-if="coverUrl(meta.cover)" :src="coverUrl(meta.cover)" alt="" />
+        <img v-if="coverResolved" :src="coverUrl(coverResolved)" alt="" />
       </div>
       <div class="hero-main">
         <div class="hero-side">
@@ -246,8 +263,8 @@ function coverUrl(c?: string): string {
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
             返回
           </button>
-          <div class="cover-box" :class="{ empty: !coverUrl(meta.cover) }">
-            <img v-if="coverUrl(meta.cover)" :src="coverUrl(meta.cover)" :alt="meta.title" />
+          <div class="cover-box" :class="{ empty: !coverResolved }">
+            <img v-if="coverResolved" :src="coverUrl(coverResolved)" :alt="meta.title" />
             <div v-else class="cover-empty">{{ (meta.title || drama.id).slice(0, 4) }}</div>
           </div>
         </div>

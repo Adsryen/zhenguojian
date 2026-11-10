@@ -9,7 +9,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
-import type { CalendarItem } from '@/services/types'
+import type { CalendarItem, Drama } from '@/services/types'
+import { resolveCover } from '@/services/covers'
 import { detailRoute } from '@/services/dramaRef'
 import { formatTime, readReservations } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -126,6 +127,26 @@ function coverUrl(c?: string): string {
   if (!c) return ''
   return /^(https?:|data:|blob:)/i.test(c) ? c : c.startsWith('/') ? c : `/${c}`
 }
+
+/* 封面解析（海报管线）：日历行 + 追更行的 drama 都走 resolveCover —— 真实桥下
+   raw cover 可能是签名 HEIC（<img> 直绑必挂），Go 端转码后回 data URL；
+   mock/降级返回 fixture 本地 svg 原路径。解析出前显 cover-ph 占位（与现状一致）。 */
+const coverMap = ref(new Map<string, string>())
+function ensureCovers(list: (Drama | undefined | null)[]) {
+  for (const d of list) {
+    if (!d || !d.cover || coverMap.value.has(d.id)) continue
+    void resolveCover(d).then((src) => {
+      if (src && coverMap.value.get(d.id) !== src) {
+        coverMap.value = new Map(coverMap.value).set(d.id, src)
+      }
+    })
+  }
+}
+function resolvedCover(d?: Drama | null): string {
+  return (d && coverMap.value.get(d.id)) || ''
+}
+watch(dayItems, (list) => ensureCovers(list.map((it) => it.drama)), { immediate: true })
+watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: true })
 </script>
 
 <template>
@@ -167,7 +188,7 @@ function coverUrl(c?: string): string {
       <div class="cal-list">
         <div v-for="it in dayItems" :key="it.drama?.id" class="cal-row card">
           <div class="cal-cover" @click="goDetail(it.drama!.id)">
-            <img v-if="coverUrl(it.drama?.cover)" :src="coverUrl(it.drama?.cover)" :alt="it.drama?.title" />
+            <img v-if="resolvedCover(it.drama)" :src="coverUrl(resolvedCover(it.drama))" :alt="it.drama?.title" />
             <div v-else class="cover-ph" />
           </div>
           <div class="cal-body">
@@ -211,7 +232,7 @@ function coverUrl(c?: string): string {
     <div v-else class="cal-list">
       <div v-for="f in follows" :key="f.id" class="cal-row card">
         <div class="cal-cover" @click="router.push(detailRoute(f.drama))">
-          <img v-if="coverUrl(f.drama.cover)" :src="coverUrl(f.drama.cover)" :alt="f.drama.title" />
+          <img v-if="resolvedCover(f.drama)" :src="coverUrl(resolvedCover(f.drama))" :alt="f.drama.title" />
           <div v-else class="cover-ph" />
         </div>
         <div class="cal-body">

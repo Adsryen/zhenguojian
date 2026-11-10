@@ -103,6 +103,8 @@ const realApi: NativeApi = {
     ),
   // Detail 绑定是 dramaJSON 位置参数
   detail: (drama: Drama) => callGo<DetailResult>('Detail', JSON.stringify(drama)),
+  // Cover 绑定是 (dramaJSON, force)；返回 data URL 裸字符串非 JSON → callGoRaw
+  cover: (dramaJSON: string, force: boolean) => callGoRaw('Cover', dramaJSON, force),
   resolve: (drama: Drama, chapter: Chapter, index: number, quality: number) =>
     callGo<ResolvePlan>('Resolve', JSON.stringify(drama), JSON.stringify(chapter), index, quality),
   // BrowseFilters 绑定是 (source, category) 位置参数
@@ -234,6 +236,14 @@ const mockApi: NativeApi = {
   detail: async (drama: Drama) => {
     await delay(250 + Math.random() * 300)
     return mockDetail(drama)
+  },
+  // mock 面：fixture cover 是本地 /posters/pN.svg，<img> 可直接渲染，原样返回
+  cover: async (dramaJSON: string) => {
+    try {
+      return (JSON.parse(dramaJSON) as Drama).cover ?? ''
+    } catch {
+      return ''
+    }
   },
   resolve: async (drama: Drama, chapter: Chapter, index: number) => {
     await delay(150)
