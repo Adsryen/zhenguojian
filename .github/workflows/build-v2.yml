@@ -39,6 +39,13 @@ jobs:
           if (-not $inst) { exit 1 }
           npm run build
 
+      - name: Windows resources (icon/manifest/version)
+        working-directory: client-v2/scripts/genres
+        run: |
+          $ver = "${env:GITHUB_REF_NAME}" -replace "^v", ""
+          if (-not $ver) { $ver = "2.0.0" }
+          go run . -icon ../../build/windows/icon.ico -out ../../zhenguojian-res.syso -version $ver
+
       - name: Overlay + build (v2overlay)
         working-directory: client-v2
         env:

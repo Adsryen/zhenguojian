@@ -22,3 +22,4 @@ client-v2/build/bin/
 client-v2/build/*.json
 
 client-v2/.vite/
+client-v2/*.syso
