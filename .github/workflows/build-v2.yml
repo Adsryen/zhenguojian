@@ -138,10 +138,27 @@ jobs:
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-windows-x64.zip
 
-      - name: Release (tag v2.*)
-        if: github.event_name == 'push'
+      - name: Release notes
+        run: |
+          $sha = "${env:GITHUB_SHA}".Substring(0,12)
+          @"
+          ## 本 Release 资产说明
+
+          | 文件 | 用途 |
+          |---|---|
+          | ``zhenGuoJian-v2-windows-x64.zip`` | **推荐下载**。v2 完整便携包：解压后运行 ``真果鉴-v2\真果鉴-v2.exe``，已内置 mpv/ffmpeg，开箱即用 |
+          | ``client-v2.exe`` | v2 裸壳（约 20MB，不含 mpv/ffmpeg）。仅当你自行准备 runtime\ 目录时才用这个 |
+          | ``build-info.json`` | 构建指纹（revision/commitTime）。手动替换 exe 时放同级目录，设置页「打包提交」才会显示哈希 |
+          | ``Source code (zip)`` | GitHub 自动生成的源码快照，普通用户忽略 |
+
+          构建提交：``$sha``（版本内查看：设置 > 关于 > 打包提交）
+          "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
+        shell: pwsh
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v2.')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: client-v2/build/bin/RELEASE-NOTES.md
           files: |
             client-v2/build/bin/client-v2.exe
             client-v2/build/bin/build-info.json
