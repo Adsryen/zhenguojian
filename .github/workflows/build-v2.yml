@@ -60,6 +60,16 @@ jobs:
           go build -tags "v2overlay production" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
           if (-not (Test-Path build/bin/client-v2.exe)) { throw "client-v2.exe 未产出" }
 
+      - name: Devtools build (F12 debug edition)
+        working-directory: client-v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          go build -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2-devtools.exe .
+          if (-not (Test-Path build/bin/client-v2-devtools.exe)) { throw "client-v2-devtools.exe 未产出" }
+
       - name: Build info
         working-directory: client-v2
         run: |
@@ -142,6 +152,7 @@ jobs:
           name: v2-windows-x64
           path: |
             client-v2/build/bin/client-v2.exe
+            client-v2/build/bin/client-v2-devtools.exe
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-windows-x64.zip
 
@@ -155,6 +166,7 @@ jobs:
           |---|---|
           | ``zhenGuoJian-v2-windows-x64.zip`` | **推荐下载**。v2 完整便携包：解压后运行 ``真果鉴-v2\真果鉴-v2.exe``，已内置 mpv/ffmpeg，开箱即用 |
           | ``client-v2.exe`` | v2 裸壳（约 20MB，不含 mpv/ffmpeg）。仅当你自行准备 runtime\ 目录时才用这个 |
+          | ``client-v2-devtools.exe`` | **开发者版**：功能与裸壳一致，但窗口内按 F12 弹出 Chromium 调试面板（Console/Network 可排错）。要报 bug 时优先用它抓现场；也可直接替换便携包里的 ``真果鉴-v2.exe`` 用 |
           | ``build-info.json`` | 构建指纹（revision/commitTime）。手动替换 exe 时放同级目录，设置页「打包提交」才会显示哈希 |
           | ``Source code (zip)`` | GitHub 自动生成的源码快照，普通用户忽略 |
 
@@ -168,5 +180,6 @@ jobs:
           body_path: client-v2/build/bin/RELEASE-NOTES.md
           files: |
             client-v2/build/bin/client-v2.exe
+            client-v2/build/bin/client-v2-devtools.exe
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-windows-x64.zip
