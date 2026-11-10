@@ -3,7 +3,6 @@ package core
 import (
 	"context"
 	"errors"
-	"net/http"
 	"strconv"
 	"strings"
 )
@@ -72,7 +71,7 @@ func (downloader *Downloader) fetchHongguoRecommendations(ctx context.Context, q
 	if query.Offset > 0 {
 		payload["client_req_type"] = 2
 	}
-	result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/reading/distribution/category/landpage/v/", nil, payload)
+	result, err := downloader.hongguoLandpage(ctx, payload)
 	if err != nil {
 		return page, err
 	}

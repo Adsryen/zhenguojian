@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -124,7 +123,7 @@ func (downloader *Downloader) fetchHongguoAppCatalogCategory(ctx context.Context
 			var pageErr error
 			newItems := 0
 			for attempt := 0; attempt < 2; attempt++ {
-				result, err := downloader.hongguoAppRequest(ctx, http.MethodPost, "/reading/distribution/category/landpage/v/", nil, payload)
+				result, err := downloader.hongguoLandpage(ctx, payload)
 				retryable := err == nil || cursor.SessionID != ""
 				items = nil
 				if err == nil {
