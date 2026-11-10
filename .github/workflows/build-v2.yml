@@ -134,17 +134,13 @@ jobs:
           $mpvbin = (Get-ChildItem mpvtmp -Recurse -Filter mpv.exe | Select-Object -First 1).FullName
           Copy-Item $mpvbin "$stage\mpv\mpv.exe"
           Compress-Archive -Path $stage -DestinationPath zhenGuoJian-v2-runtime.zip -Force
-          Compress-Archive -Path zhenguojian-v2-raw.exe -DestinationPath 'zhenGuoJian-v2-app.zip' -Force
-          # zip 内条目改中文名片段：用临时目录保真名
-          $nm = [char]0x771F + [char]0x679C + [char]0x9274
-          New-Item -ItemType Directory -Force "exepack\$nm" | Out-Null
-          Copy-Item zhenguojian-v2-raw.exe "exepack\$nm\$nm.exe"
-          Remove-Item -Force 'zhenGuoJian-v2-app.zip'
-          Compress-Archive -Path "exepack\$nm" -DestinationPath 'zhenGuoJian-v2-app.zip' -Force
-          Copy-Item client-v2\build\bin\client-v2.exe "zhenguojian-v2-raw.exe"
-          $exeCn = [char]0x771F + [char]0x679C + [char]0x9274 + '.exe'   # 真果鉴.exe：CJK 名只进 zip，GitHub 裸资产会被裁前缀
+          # 程序本体经 zip 交付：GitHub 会裁资产名的中文字符，zip 内条目名则安全
+          $exeCn = [char]0x771F + [char]0x679C + [char]0x9274 + '.exe'   # 真果鉴.exe
+          New-Item -ItemType Directory -Force "exepack\$($exeCn -replace '\.exe$','')" | Out-Null
+          Copy-Item client-v2\build\bin\client-v2.exe "exepack\$($exeCn -replace '\.exe$','')\$exeCn"
+          Compress-Archive -Path "exepack\$($exeCn -replace '\.exe$','')" -DestinationPath 'zhenGuoJian-v2-app.zip' -Force
           Write-Host ("runtime zip size: " + (Get-Item zhenGuoJian-v2-runtime.zip).Length)
-          Write-Host ("exe size: " + (Get-Item zhenguojian-v2-raw.exe).Length)
+          Write-Host ("app zip size: " + (Get-Item zhenGuoJian-v2-app.zip).Length)
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'push'
