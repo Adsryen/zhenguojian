@@ -1,14 +1,28 @@
 <script setup lang="ts">
-/* Search —— 搜索：输入 + 按钮 + 最近搜索(localStorage 每源≤10) + 结果 PosterGrid
-   走 catalog source=当前源 query=… lane=search（同 lane 新搜索自动取消旧搜索，v1 语义）。 */
+/* Search —— 搜索：输入 + 「全部来源」勾选 + 最近搜索(localStorage 每源≤10) + 结果
+   单源（默认）：catalog source=当前源 lane=search（同 lane 新搜索自动取消旧搜索，v1 语义）。
+   全部来源：orderedSources 里 enabled && implemented 的源并行扇出（worker 池并发≤4，
+   各源 page1，lane=search:<slug> 分源互不取消），结果按源分组流式渲染；
+   单源失败只落该组失败行，全组皆败才出整体 error 条。勾选态持久化 zgj.search.all。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/services/api'
 import type { Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
+import { t } from '@/services/i18n'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
+import SearchGroups from '@/components/SearchGroups.vue'
+import {
+  fetchGroup,
+  fanoutTargets,
+  loadAllPref,
+  makeGroups,
+  runFanout,
+  saveAllPref,
+  type SearchGroup
+} from '@/stores/searchAll'
 
 const store = useAppStore()
 const router = useRouter()
@@ -23,6 +37,13 @@ const loadingMore = ref(false)
 const error = ref('')
 const searched = ref(false)
 let requestSeq = 0
+
+/* ── 全部来源（扇出）态 ── */
+const searchAll = ref(loadAllPref())
+const groups = ref<SearchGroup[]>([])
+const allGroupsFailed = computed(
+  () => groups.value.length > 0 && groups.value.every((g) => g.status === 'error')
+)
 
 const recents = ref<string[]>([])
 const recentKey = computed(() => `zgj.recent.${store.currentSlug}`)
@@ -44,6 +65,20 @@ function clearRecents() {
   localStorage.removeItem(recentKey.value)
 }
 
+async function doSearchAll(term: string, seq: number) {
+  // 刷新后立即点搜索：站源表可能还没回来，先等 loadSources（loadSources 自带并发去重/缓存）
+  if (!store.sources.length) await store.loadSources()
+  if (seq !== requestSeq) return
+  const targets = fanoutTargets(store.orderedSources)
+  if (!targets.length) {
+    groups.value = []
+    if (seq === requestSeq) error.value = t('search.noSources')
+    return
+  }
+  groups.value = makeGroups(targets)
+  await runFanout(groups.value, term, () => seq !== requestSeq)
+}
+
 async function doSearch(q?: string) {
   const term = (q ?? query.value).trim().slice(0, 64)
   if (!term) return
@@ -55,6 +90,13 @@ async function doSearch(q?: string) {
   error.value = ''
   searched.value = true
   items.value = []
+  if (searchAll.value) {
+    await doSearchAll(term, seq)
+    if (seq !== requestSeq) return
+    loading.value = false
+    return
+  }
+  groups.value = []
   hasMore.value = true
   try {
     const res = await api.catalog({ source: store.currentSlug, query: term, page: 1, lane: 'search' })
@@ -87,16 +129,35 @@ async function loadMore() {
   }
 }
 
+/* 失败组的单源重试：仅动这一组，其他组结果保留 */
+async function retryGroup(slug: string) {
+  const g = groups.value.find((x) => x.slug === slug)
+  if (!g || !active.value || loading.value) return
+  const seq = requestSeq
+  await fetchGroup(g, active.value, () => seq !== requestSeq)
+}
+
 function clearSearch() {
   searched.value = false
   items.value = []
+  groups.value = []
   active.value = ''
   error.value = ''
 }
 
+watch(searchAll, (on) => {
+  saveAllPref(on)
+  if (!on) {
+    // 取消勾选：清空分组态；有在搜的词则回到单源结果
+    groups.value = []
+    if (searched.value && active.value) void doSearch(active.value)
+  }
+})
+
 watch(() => store.currentSlug, () => {
   loadRecents()
-  if (active.value) doSearch(active.value)
+  // 扇出模式覆盖全部源，切当前源不影响分组结果，不重搜
+  if (active.value && !searchAll.value) void doSearch(active.value)
 })
 
 onMounted(async () => {
@@ -127,6 +188,10 @@ onMounted(async () => {
       {{ loading ? '搜索中…' : '搜索' }}
     </button>
     <button v-if="searched" class="btn" @click="clearSearch">清除</button>
+    <label class="all-src" :title="t('search.allHint')">
+      <input v-model="searchAll" type="checkbox" class="all-src-box" data-testid="search-all" />
+      <span>{{ t('search.all') }}</span>
+    </label>
   </div>
 
   <div v-if="!searched && recents.length" class="recents">
@@ -138,13 +203,21 @@ onMounted(async () => {
     <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
       <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
     </svg>
-    <div>输入关键词搜索当前源（{{ store.current?.displayName || store.current?.name || '未选源' }}）</div>
+    <div>{{ searchAll ? t('search.hintAll') : `输入关键词搜索当前源（${store.current?.displayName || store.current?.name || '未选源'}）` }}</div>
   </div>
 
   <div v-if="searched && error" class="state-block">
-    <div>搜索失败：{{ error }}</div>
-    <button class="btn" @click="doSearch(active)">重试</button>
+    <div>{{ t('search.failed') }}{{ error }}</div>
+    <button class="btn" @click="doSearch(active)">{{ t('search.retry') }}</button>
   </div>
+  <SearchGroups
+    v-else-if="searched && searchAll && groups.length"
+    :groups="groups"
+    :all-failed="allGroupsFailed && !loading"
+    @retry="retryGroup"
+    @retry-all="doSearch(active)"
+    @select="(d) => router.push(detailRoute(d))"
+  />
   <div v-else-if="searched && !loading && !items.length" class="state-block">
     <div>没有找到与「{{ active }}」相关的剧</div>
   </div>
@@ -187,6 +260,23 @@ onMounted(async () => {
   color: var(--text);
   font-size: 13.5px;
   padding: 9px 0;
+}
+.all-src {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.all-src-box {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 .recents {
   display: flex;

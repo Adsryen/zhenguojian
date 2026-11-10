@@ -121,7 +121,21 @@ const zh: Record<string, string> = {
   'covers.banner.missingFfmpeg':
     '海报转码组件 ffmpeg 未找到：请下载 zhenGuoJian-v2-runtime.zip 解压到程序目录，使 runtime\\ffmpeg\\ffmpeg.exe 就位；或设置 ZHENGUO_FFMPEG 指向 ffmpeg.exe',
   'covers.banner.partial': '部分封面加载失败（F12 查看原因）',
-  'covers.banner.dismiss': '关闭提示'
+  'covers.banner.dismiss': '关闭提示',
+
+  // ---- 搜索页「全部来源」扇出（SearchView / SearchGroups / searchAll） ----
+  'search.all': '全部来源',
+  'search.allHint': '对所有已启用且已接入的站源并行搜索',
+  'search.hintAll': '勾选了「全部来源」：回车将并行搜索所有已启用且已接入的站源',
+  'search.noSources': '没有已启用且已接入的站源，请先在设置中开启',
+  'search.failed': '搜索失败：',
+  'search.retry': '重试',
+  'search.allFailed': '全部站源均搜索失败',
+  'search.groupLoading': '搜索中…',
+  'search.groupCountSuffix': ' 条',
+  'search.groupEmpty': '该源无匹配结果',
+  'search.groupFailed': '该源搜索失败：',
+  'search.groupRetry': '重试该源'
 }
 
 const en: Record<string, string> = {
@@ -207,7 +221,21 @@ const en: Record<string, string> = {
   'covers.banner.missingFfmpeg':
     'Poster transcoder ffmpeg not found: download zhenGuoJian-v2-runtime.zip and extract it into the app directory so runtime/ffmpeg/ffmpeg.exe is in place, or set ZHENGUO_FFMPEG to your ffmpeg.exe',
   'covers.banner.partial': 'Some covers failed to load (press F12 for details)',
-  'covers.banner.dismiss': 'Dismiss'
+  'covers.banner.dismiss': 'Dismiss',
+
+  // ---- Search page "all sources" fan-out (SearchView / SearchGroups / searchAll) ----
+  'search.all': 'All sources',
+  'search.allHint': 'Search every enabled & wired source in parallel',
+  'search.hintAll': '"All sources" is checked: Enter searches every enabled & wired source in parallel',
+  'search.noSources': 'No enabled & wired sources — turn some on in Settings first',
+  'search.failed': 'Search failed: ',
+  'search.retry': 'Retry',
+  'search.allFailed': 'All sources failed to search',
+  'search.groupLoading': 'Searching…',
+  'search.groupCountSuffix': ' results',
+  'search.groupEmpty': 'No matches from this source',
+  'search.groupFailed': 'This source failed: ',
+  'search.groupRetry': 'Retry this source'
 }
 
 const dicts: Record<Locale, Record<string, string>> = { zh, en }
