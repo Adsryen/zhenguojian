@@ -72,17 +72,22 @@ function mergeStateText(state: string): string {
   return MERGE_STATE_TEXT[state] ?? state
 }
 
+// 集号：核心协议 index=真实集号（1-based，app_downloads.go 校验 <1 拒绝）；
+// 兼容旧记录（index 0-based）：优先 chapter.currentEpisode，index<1 时回退 index+1。
 function epNo(job: DownloadJobRow): number {
-  return (job.index ?? 0) + 1
+  const cur = Number(job.chapter?.currentEpisode ?? 0)
+  if (Number.isFinite(cur) && cur >= 1) return cur
+  const ix = Number(job.index ?? 0)
+  return ix >= 1 ? ix : ix + 1
 }
 
 function epLabel(job: DownloadJobRow): string {
-  const c = job.chapter?.title
+  const c = job.chapter?.title?.trim()
   return c && !/^第\s*\d+\s*集$/.test(c) ? `第${epNo(job)}集 · ${c}` : `第${epNo(job)}集`
 }
 
 function titleOf(job: DownloadJobRow): string {
-  return job.drama?.title || '未知剧集'
+  return job.drama?.title?.trim() || job.chapter?.title?.trim() || '未知剧集'
 }
 
 function fmtBytes(n: number): string {
@@ -116,8 +121,13 @@ function pctOf(job: DownloadJobRow): number {
 }
 
 function sizeText(job: DownloadJobRow): string {
-  if (job.state === 'completed') return fmtBytes(job.total)
+  if (job.state === 'completed') return job.total > 0 ? fmtBytes(job.total) : fmtBytes(job.bytes)
   if (job.total > 0) return `${fmtBytes(job.bytes)} / ${fmtBytes(job.total)}`
+  // 下载中但尚未解析出体积（核心 resolve 前置窗口 bytes/total/progress 全 0）：
+  // 显示占位文案，避免出现空白或 0 B / 0 B（待 i18n 收敛）
+  if (job.state === 'downloading' || job.state === 'queued') {
+    return job.bytes > 0 ? fmtBytes(job.bytes) : '解析资源中…'
+  }
   return job.bytes > 0 ? fmtBytes(job.bytes) : ''
 }
 
@@ -215,13 +225,17 @@ const pickedDrama = ref<Drama | null>(null)
 const chapters = ref<Chapter[]>([])
 const chapterErr = ref('')
 const pickedChapters = ref<Set<number>>(new Set())
-const quality = ref(2)
+const quality = ref(0)
 const enqueuing = ref(false)
 
+// 核心把 quality 当作“目标实际档位”处理（nativePlaybackChoices：0=自动选最高，
+// 其余按 360/540/720/1080 匹配，档位不存在则回落默认最高）。v1 亦恒传 0。
+// 旧 0/1/2 枚举与核心语义不符（省流从未生效），改为真实档位值。（待 i18n 收敛）
 const QUALITY_OPTIONS = [
-  { value: 0, label: '省流' },
-  { value: 1, label: '高清' },
-  { value: 2, label: '超清' }
+  { value: 0, label: '自动（最高画质）' },
+  { value: 540, label: '省流 540P' },
+  { value: 720, label: '高清 720P' },
+  { value: 1080, label: '超清 1080P' }
 ]
 
 function resetAddPanel() {
@@ -281,9 +295,15 @@ function pickAllChapters() {
 async function onEnqueue() {
   const drama = pickedDrama.value
   if (!drama || !pickedChapters.value.size || enqueuing.value) return
+  // 核心协议 index=真实集号（1-based）；传 0（旧代码 i）会触发「下载集数无效」
+  // 导致整批入队失败。优先取 chapter.currentEpisode，兜底列表位序+1。
   const entries: DownloadEntry[] = [...pickedChapters.value]
     .sort((a, b) => a - b)
-    .map((i) => ({ chapter: chapters.value[i], index: i }))
+    .map((i) => {
+      const ch = chapters.value[i]
+      const cur = Number(ch?.currentEpisode ?? 0)
+      return { chapter: ch, index: Number.isFinite(cur) && cur >= 1 ? cur : i + 1 }
+    })
   enqueuing.value = true
   try {
     const res = await api.downloadStart(drama, entries, quality.value)
@@ -545,10 +565,21 @@ async function onEnqueue() {
 
   <!-- 归档 -->
   <template v-if="tab === 'archive'">
+    <!-- 界面自证：归档任务来自核心下载索引，索引文件位于下列目录（v1 语义=下载目录） -->
+    <div v-if="store.downloadDir" class="dir-line text-muted">
+      <span class="dir-ic">📂</span>
+      <span>归档索引目录：{{ store.downloadDir.directory }}</span>
+      <span v-if="!store.downloadDir.exists" class="pill pill-failed">目录不存在</span>
+    </div>
     <div v-if="!store.archivedJobs.length" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
-      <div>暂无归档任务。</div>
-      <div class="text-muted hint">已完成分集点「归档」后在这里找回。</div>
+      <!-- 待 i18n 收敛 -->
+      <div v-if="store.downloadDir && !store.downloadDir.exists">下载目录不存在：{{ store.downloadDir.directory }}</div>
+      <div v-else>暂无归档任务。</div>
+      <div v-if="store.downloadDir && !store.downloadDir.exists" class="text-muted hint">
+        核心在此目录维护下载索引（index.json）。目录缺失通常意味着从未成功下载，或该路径不是你的旧版下载目录；v1 客户端默认下载目录在程序目录「下载」下，与当前路径可能不同。
+      </div>
+      <div v-else class="text-muted hint">已完成分集点「归档」后在这里找回。</div>
     </div>
     <div v-else class="card list">
       <div v-for="(job, i) in store.archivedJobs" :key="job.id" class="row" :class="{ divided: i > 0, busy: store.busyId === job.id }">
@@ -587,6 +618,16 @@ async function onEnqueue() {
 .status-line {
   margin: 0 24px 6px;
   font-size: 12px;
+}
+.dir-line {
+  margin: 0 24px 8px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dir-ic {
+  font-size: 13px;
 }
 .hint {
   font-size: 12px;

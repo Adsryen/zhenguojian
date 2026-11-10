@@ -2,15 +2,18 @@ package main
 
 // 下载与合并壳层绑定（V2-3）。事件契约：downloadsvc 轮询变化时
 // EventsEmit("downloads:update", payloadJSON)，payload =
-// {jobs:[{id,drama,state,index,bytes,total,progress,speed,eta,error,…}],
-//  merges:[{id,dramaId,title,episodes,count,state,stage,progress,detail,output,bytes}],
+// {jobs:[{id,drama,chapter,index(集号,1-based),state,archived,bytes,total,
+//   progress(0..1),quality,actualQuality,speed,eta,error,…}],
+//  merges:[{id,dramaId,title,episodes(1-based集号),count,state,stage,progress,detail,output,bytes}],
 //  status:string, mergeVerify:bool}——字段与前端 types.DownloadSnapshot 对齐。
 
 import (
 	"encoding/json"
 	"errors"
+	"os"
 
 	"zhenguojian/client-v2/internal/downloadsvc"
+	"zhenguojian/client-v2/internal/native"
 )
 
 func (a *App) getDownloadSvc() (*downloadsvc.Service, error) {
@@ -34,7 +37,8 @@ func (a *App) DownloadList() (string, error) {
 }
 
 // DownloadStart 选集入队：entriesJSON = [{chapter, index}]（前端由 detail chapters
-// 勾选拼装，index=数组下标）→ 核心 enqueueDownloads。→ JSON {added}
+// 勾选拼装，index=真实集号，1-based；核心 enqueueDownloads 要求 ≥1，否则整批
+// 报「下载集数无效」）→ 核心 enqueueDownloads。→ JSON {added}
 func (a *App) DownloadStart(dramaJSON, entriesJSON string, quality float64) (string, error) {
 	svc, err := a.getDownloadSvc()
 	if err != nil {
@@ -214,6 +218,24 @@ func (a *App) MergeList() (string, error) {
 		return "", err
 	}
 	return marshalJSON(svc.MergeList())
+}
+
+// DownloadDirectory → JSON {directory, exists}：核心下载根目录（分集成品在
+// <root>/<jobId>/media.mp4，合并成品在 <root>/合并/），供归档页签自证扫描位置，
+// 并区分「目录不存在」与「目录存在但暂无归档」。
+func (a *App) DownloadDirectory() (string, error) {
+	data, err := native.Call("downloadDirectory", nil)
+	if err != nil {
+		return "", err
+	}
+	dir, _ := data["directory"].(string)
+	exists := false
+	if dir != "" {
+		if st, serr := os.Stat(dir); serr == nil && st.IsDir() {
+			exists = true
+		}
+	}
+	return marshalJSON(map[string]any{"directory": dir, "exists": exists})
 }
 
 func decodeStringArray(s string) ([]string, error) {

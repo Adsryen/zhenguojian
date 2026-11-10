@@ -11,6 +11,7 @@ import type {
   Chapter,
   DanmakuWindowResult,
   DetailResult,
+  DownloadDirectoryInfo,
   DownloadSettingsSnapshot,
   DownloadSnapshot,
   Drama,
@@ -22,7 +23,7 @@ import type {
   SourceListItem,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDownloadControl, mockDownloadControlAll, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
@@ -167,7 +168,8 @@ const realApi: NativeApi = {
       drama ? JSON.stringify(drama) : '',
       JSON.stringify(jobIds)
     ),
-  mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id)
+  mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id),
+  downloadDirectory: () => callGo<DownloadDirectoryInfo>('DownloadDirectory')
 }
 
 /* mock 播放内核（V2-3c 契约）：500ms 模拟 tick（与真实事件源同频），
@@ -452,7 +454,8 @@ const mockApi: NativeApi = {
   saveDownloadSettings: async (concurrency, bySource, mergeVerify) =>
     mockSaveDownloadSettings(concurrency, bySource, mergeVerify),
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
-  mergeCancel: async (id) => mockMergeCancel(id)
+  mergeCancel: async (id) => mockMergeCancel(id),
+  downloadDirectory: async () => mockDownloadDirectory()
 }
 
 /* 降级策略：真实 exe 里桥必在；若 WebView2 初始化竞态导致 window.go 短暂缺失，

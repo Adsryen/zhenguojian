@@ -83,6 +83,12 @@ func testJob(id, state string, index int) map[string]any {
 		"bytes":  float64(0),
 		"total":  float64(0),
 		"folder": "d1/" + id,
+		// 真实核心快照里 job 恒带 chapter（currentEpisode=集号，1-based），
+		// 合并集号解析（episodeOfJob）以此为准。
+		"chapter": map[string]any{
+			"title":          fmt.Sprintf("第%d集", index),
+			"currentEpisode": float64(index),
+		},
 	}
 }
 
@@ -447,7 +453,7 @@ func mergeFixture(t *testing.T, h *harness) (ep1, ep2 string) {
 		}
 	}
 	h.core.handlers["downloads"] = func(map[string]any) (map[string]any, error) {
-		return jobsResult(testJob("j1", "completed", 0), testJob("j2", "completed", 1)), nil
+		return jobsResult(testJob("j1", "completed", 1), testJob("j2", "completed", 2)), nil
 	}
 	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
 		return map[string]any{"directory": root}, nil
@@ -455,7 +461,7 @@ func mergeFixture(t *testing.T, h *harness) (ep1, ep2 string) {
 	h.core.handlers["localPlayback"] = func(p map[string]any) (map[string]any, error) {
 		idx := p["index"].(int)
 		path := ep1
-		if idx == 1 {
+		if idx == 2 {
 			path = ep2
 		}
 		return map[string]any{"local": true, "url": path}, nil

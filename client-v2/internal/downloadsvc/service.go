@@ -644,7 +644,7 @@ func (s *Service) MergeStart(mode string, drama map[string]any, jobIDs []string)
 	sort.SliceStable(selected, func(i, j int) bool { return jobIndex(selected[i]) < jobIndex(selected[j]) })
 	episodes := make([]int, 0, len(selected))
 	for _, job := range selected {
-		episodes = append(episodes, jobIndex(job)+1)
+		episodes = append(episodes, episodeOfJob(job))
 	}
 	if title == "" {
 		title = jobTitle(selected[0])
@@ -851,6 +851,23 @@ func numField(v any) float64 {
 }
 
 func jobIndex(job map[string]any) int { return int(numField(job["index"])) }
+
+// episodeOfJob 解析 job 的真实集号（1-based）。
+// 核心协议里 index 即集号（enqueueDownloads 要求 ≥1，"下载集数无效"），
+// chapter.currentEpisode 是最可靠锚点；历史 0-based 记录（旧前端按下标提交）
+// 用 currentEpisode 纠正，两者皆缺时按旧规则 index+1 兜底。
+func episodeOfJob(job map[string]any) int {
+	ix := jobIndex(job)
+	if ch, ok := job["chapter"].(map[string]any); ok {
+		if cur := int(numField(ch["currentEpisode"])); cur > 0 {
+			return cur
+		}
+	}
+	if ix >= 1 {
+		return ix
+	}
+	return ix + 1
+}
 
 func jobDramaID(job map[string]any) string {
 	drama, _ := job["drama"].(map[string]any)

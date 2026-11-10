@@ -282,6 +282,13 @@ export interface NativeApi {
   saveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): Promise<DownloadSettingsSnapshot>
   mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
   mergeCancel(id: string): Promise<{ ok: boolean }>
+  downloadDirectory(): Promise<DownloadDirectoryInfo>
+}
+
+/** 核心下载根目录（bindings_download.go DownloadDirectory：core action downloadDirectory + os.Stat） */
+export interface DownloadDirectoryInfo {
+  directory: string
+  exists: boolean
 }
 
 /** watchstore 追剧行（v1 follow 行同构子集；字段表见主代理契约） */

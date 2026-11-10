@@ -441,6 +441,9 @@ const mockDlShan: Drama = {
   episodes: 82
 }
 
+// index 语义与真实核心一致：集号 1-based（app_downloads.go 要求 ≥1）；
+// chapter.currentEpisode 恒等于集号；created 为 UnixMilli；quality=请求档位(0=自动)，
+// actualQuality=实际落盘档位（真实样例 1080）。
 function seedJob(
   state: MockDlState,
   drama: Drama,
@@ -453,16 +456,16 @@ function seedJob(
   const job: DownloadJobRow = {
     id: `mock${String(++state.seq).padStart(4, '0')}`,
     drama,
-    chapter: { title: `第${index + 1}集`, currentEpisode: index + 1, duration: 132 + (index % 7) * 9 },
+    chapter: { title: `第${index}集`, currentEpisode: index, duration: 132 + (index % 7) * 9 },
     index,
-    quality: 2,
-    actualQuality: 2,
-    bitrate: 2800000,
+    quality: 0,
+    actualQuality: 1080,
+    bitrate: 965601,
     state: st,
     bytes,
     total: totalBytes,
     progress: totalBytes > 0 ? Math.min(1, bytes / totalBytes) : 0,
-    created: Math.floor(Date.now() / 1000) - 3600 - index * 7,
+    created: Date.now() - (3600 + index * 7) * 1000,
     revision: 1 + index,
     ...extra
   }
@@ -473,16 +476,16 @@ function seedJob(
 function mockDlSeed(): MockDlState {
   const mb = 1024 * 1024
   const state: MockDlState = { seq: 0, jobs: [], merges: [], status: '示例数据：模拟核心下载队列（VITE_MOCK）' }
-  // 一世之尊：1/2 已完成（可整季合并），3 下载中，4 排队，5 失败，6 已暂停
-  for (const i of [0, 1]) seedJob(state, mockDlHongguo, i, 96 * mb, 96 * mb, 'completed')
-  seedJob(state, mockDlHongguo, 2, 102 * mb, 37 * mb, 'downloading')
-  seedJob(state, mockDlHongguo, 3, 99 * mb, 0, 'queued')
-  seedJob(state, mockDlHongguo, 4, 94 * mb, 12 * mb, 'failed', { error: '解析下载直链失败：线路超时' })
-  seedJob(state, mockDlHongguo, 5, 101 * mb, 55 * mb, 'paused')
+  // 一世之尊：1/2 已完成（可整季合并），3 下载中，4 排队，5 失败，6 已暂停（index=集号 1-based）
+  for (const i of [1, 2]) seedJob(state, mockDlHongguo, i, 96 * mb, 96 * mb, 'completed')
+  seedJob(state, mockDlHongguo, 3, 102 * mb, 37 * mb, 'downloading')
+  seedJob(state, mockDlHongguo, 4, 99 * mb, 0, 'queued')
+  seedJob(state, mockDlHongguo, 5, 94 * mb, 12 * mb, 'failed', { error: '解析下载直链失败：线路超时' })
+  seedJob(state, mockDlHongguo, 6, 101 * mb, 55 * mb, 'paused')
   // 闪婚老公是大佬：1/2/3 已完成
-  for (const i of [0, 1, 2]) seedJob(state, mockDlShan, i, 88 * mb, 88 * mb, 'completed')
+  for (const i of [1, 2, 3]) seedJob(state, mockDlShan, i, 88 * mb, 88 * mb, 'completed')
   // 归档一条
-  seedJob(state, mockDlShan, 3, 86 * mb, 86 * mb, 'completed', { archived: true })
+  seedJob(state, mockDlShan, 4, 86 * mb, 86 * mb, 'completed', { archived: true })
   // 合并历史：一世之尊 全001-002集 已完成
   state.merges.push({
     id: `${mockDlHongguo.id}#001-002`,
@@ -587,6 +590,8 @@ export function mockDownloadStart(drama: Drama, entries: DownloadEntry[], qualit
   let added = 0
   const mb = 1024 * 1024
   for (const e of entries) {
+    // 镜像核心校验（app_downloads.go enqueueContext：index<1 → 「下载集数无效」，整批失败）
+    if (!Number.isFinite(e.index) || e.index < 1) throw new Error('下载集数无效')
     if (state.jobs.some((j) => j.drama?.id === drama.id && j.index === e.index && !j.archived)) continue
     const total = (85 + ((e.index * 7) % 25)) * mb
     seedJob(state, drama, e.index, total, 0, 'queued', { quality, chapter: e.chapter })
@@ -681,7 +686,14 @@ export function mockMergeStart(mode: 'season' | 'selected', drama: Drama | null,
   }
   candidates.sort((a, b) => a.index - b.index)
   const d = drama ?? (candidates[0].drama as Drama)
-  const episodes = candidates.map((j) => j.index + 1)
+  // 集号解析与 Go 侧 downloadsvc.episodeOfJob 同规则：chapter.currentEpisode 优先，
+  // 缺失时 index>=1 直接用（旧 0-based 记录回退 index+1）。
+  const episodes = candidates.map((j) => {
+    const cur = Number(j.chapter?.currentEpisode ?? 0)
+    if (Number.isFinite(cur) && cur >= 1) return cur
+    const ix = Number(j.index ?? 0)
+    return ix >= 1 ? ix : ix + 1
+  })
   const first = episodes[0]
   const last = episodes[episodes.length - 1]
   const id = `${d.id}#${String(first).padStart(3, '0')}-${String(last).padStart(3, '0')}`
@@ -713,6 +725,11 @@ export function mockMergeCancel(id: string): { ok: boolean } {
     m.detail = id ? '已取消排队' : '合并已取消'
   }
   return { ok: true }
+}
+
+/** 下载根目录 mock（真实面：DownloadDirectory 绑定 = core downloadDirectory + os.Stat） */
+export function mockDownloadDirectory(): { directory: string; exists: boolean } {
+  return { directory: 'D:\\ZhenguoJian\\downloads（示例数据）', exists: true }
 }
 
 /* ---------------------------------------------------------------- V2-2 剧库推荐（有状态 mock）

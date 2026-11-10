@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { api, MOCK_MODE } from '@/services/api'
 import type {
+  DownloadDirectoryInfo,
   DownloadJobRow,
   DownloadSettingsSnapshot,
   DownloadSnapshot,
@@ -34,6 +35,8 @@ export interface DownloadsStoreState {
   status: string
   mergeVerify: boolean
   settings: DownloadSettingsSnapshot | null
+  /** 核心下载根目录（bindings DownloadDirectory），归档页自证扫描位置 */
+  downloadDir: DownloadDirectoryInfo | null
   attached: boolean
   lastError: string
   busyId: string
@@ -47,6 +50,7 @@ export const useDownloadsStore = defineStore('downloads', {
     status: '',
     mergeVerify: true,
     settings: null,
+    downloadDir: null,
     attached: false,
     lastError: '',
     busyId: ''
@@ -86,6 +90,7 @@ export const useDownloadsStore = defineStore('downloads', {
       if (this.attached) return
       this.attached = true
       void this.refresh()
+      void this.loadDirectory()
       if (MOCK_MODE) {
         this.ticker = setInterval(() => void this.refresh(), POLL_MS)
         return
@@ -138,6 +143,15 @@ export const useDownloadsStore = defineStore('downloads', {
         this.mergeVerify = this.settings.mergeVerify !== false
       } catch (err) {
         this.lastError = err instanceof Error ? err.message : String(err)
+      }
+    },
+
+    /** 下载根目录：归档 tab 头部展示「当前在哪个目录找文件」，空态区分目录不存在 */
+    async loadDirectory() {
+      try {
+        this.downloadDir = await api.downloadDirectory()
+      } catch {
+        this.downloadDir = null
       }
     },
 

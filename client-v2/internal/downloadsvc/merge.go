@@ -60,7 +60,7 @@ func (s *Service) runMerge(ctx context.Context, entry *MergeEntry) (map[string]a
 	}
 	episodes := make([]int, 0, len(jobs))
 	for _, job := range jobs {
-		episodes = append(episodes, jobIndex(job)+1)
+		episodes = append(episodes, episodeOfJob(job))
 	}
 	first, last := episodes[0], episodes[len(episodes)-1]
 	for i, ep := range episodes {
