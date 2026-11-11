@@ -14,7 +14,7 @@ package main
 //	  heic==true → ffmpeg 单帧转 JPEG（参数逐字对齐 v1 media.export_cover），
 //	               产物落 TempDir/zhenguojian-covers/<sha1(源path+".v1")>.jpg，
 //	               新鲜缓存直用（存在 && size>0 && mtime 不早于源文件），
-//	               原子写：<dst>.<pid>.tmp → rename。
+//	               原子写：<dst>.<pid>.tmp.jpg → rename（.jpg 结尾让 ffmpeg 认得出 muxer）。
 //	  读取文件（≤4MB）按 magic 定 mime → 返回 "data:<mime>;base64,…"。
 //
 // ffmpeg 查找链与 internal/downloadsvc/executor.go commandExecutor.Look 同序
@@ -119,7 +119,9 @@ func transcodeCover(src string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return "", fmt.Errorf("海报转码失败：%w", err)
 	}
-	tmp := dst + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	// 真机教训：临时名以 .tmp 结尾时 ffmpeg 按扩展猜不出输出格式，报
+	// 「Error opening output files: Invalid argument」；保持 .jpg 结尾。
+	tmp := dst + "." + strconv.Itoa(os.Getpid()) + ".tmp.jpg"
 	ctx, cancel := context.WithTimeout(context.Background(), coverTranscodeTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, ffmpeg, coverFFmpegArgs(src, tmp)...)
