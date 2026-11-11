@@ -174,6 +174,15 @@ const zh: Record<string, string> = {
   'update.banner.go': '去设置更新',
   'update.banner.skip': '跳过此版本',
 
+  // ---- 系统托盘（V-TRAY）----
+  // tray.menu.* 与 Go 侧 internal/tray/tray.go 中文字面量镜像（原生 Win32 菜单不经
+  // Vue i18n，英文态豁免）；此处键供未来菜单国际化与文档对照，当前无 Vue 消费方。
+  'tray.menu.show': '显示真果鉴',
+  'tray.menu.check': '检查更新',
+  'tray.menu.quit': '退出程序',
+  'tray.latest': '当前已是最新版本',
+  'tray.hint': '关闭主窗口后程序在系统托盘继续运行（下载不中断）：双击托盘图标恢复窗口，右键菜单可显示 / 检查更新 / 退出',
+
   // ---- 存储与关于 ----
   'settings.storage': '存储与关于',
   'settings.storage.hint': '真果鉴 V2 · 短剧聚合客户端（站源适配参考 guoapp）。以下信息只读。',
@@ -308,12 +317,25 @@ const zh: Record<string, string> = {
   'downloads.mergeEmptyHint': '在「下载队列」页勾选已完成分集，或点整季合并入口。',
   'downloads.archiveEmpty': '暂无归档任务。',
   'downloads.epRange': '全{a}-{b}集（{n}集）',
-  'downloads.archiveDirPrefix': '归档索引目录：',
+  'downloads.archiveDirPrefix': '归档扫描目录：',
   'downloads.dirMissing': '目录不存在',
   'downloads.dirMissingLine': '下载目录不存在：{d}',
   'downloads.dirMissingHint':
     '核心在此目录维护下载索引（index.json）。目录缺失通常意味着从未成功下载，或该路径不是你的旧版下载目录；v1 客户端默认下载目录在程序目录「下载」下，与当前路径可能不同。',
   'downloads.archiveHint': '已完成分集点「归档」后在这里找回。',
+  // ── 归档目录扫描（交付 C：App.ArchiveScan 分组视图）──
+  'downloads.archive.scanning': '正在扫描归档目录…',
+  'downloads.archive.rescan': '重新扫描',
+  'downloads.archive.copyPath': '复制路径',
+  'downloads.archive.copied': '已复制目录路径',
+  'downloads.archive.copyFail': '复制失败，请手动选择路径',
+  'downloads.archive.episodesN': '{n} 集',
+  'downloads.archive.mergedBadge': '含合并',
+  'downloads.archive.orphanBadge': '未在索引',
+  'downloads.archive.mergedSize': '合并成品 {s}',
+  'downloads.archive.mtime': '更新于 {d}',
+  'downloads.archive.noMedia': '目录存在，但未找到已完成的媒体文件；可点「重新扫描」刷新。',
+  'downloads.archive.openTip': '打开：{p}',
   'downloads.restore': '恢复',
   'downloads.footnote': '任务与合并进度由 Go 下载服务每 1500ms 推送（downloads:update）；',
   'downloads.footnoteMock': '当前为 VITE_MOCK 示例数据：下载/合并均为本地模拟，非真实引擎结果。',
@@ -611,6 +633,15 @@ const en: Record<string, string> = {
   'update.banner.go': 'Update in Settings',
   'update.banner.skip': 'Skip this version',
 
+  // ---- System tray (V-TRAY) ----
+  // Mirror of Go literals in internal/tray/tray.go (native Win32 menu is not i18n-driven;
+  // English-mode exemption noted in the task). Kept for docs / future native menu i18n.
+  'tray.menu.show': 'Show ZhenGuoJian',
+  'tray.menu.check': 'Check for updates',
+  'tray.menu.quit': 'Exit',
+  'tray.latest': 'You are on the latest version',
+  'tray.hint': 'Closing the window keeps the app running in the system tray (downloads continue): double-click the tray icon to restore, right-click for Show / Check updates / Exit',
+
   'settings.storage': 'Storage & About',
   'settings.storage.hint': 'ZhenGuoJian V2 · short-drama aggregator (source adapters reference guoapp). Read-only below.',
   'settings.storage.dataDir': 'Data Directory',
@@ -741,12 +772,25 @@ const en: Record<string, string> = {
   'downloads.mergeEmptyHint': 'Tick completed episodes in the Queue tab, or use a full-season merge entry.',
   'downloads.archiveEmpty': 'No archived tasks.',
   'downloads.epRange': 'Eps {a}-{b} ({n})',
-  'downloads.archiveDirPrefix': 'Archive index directory: ',
+  'downloads.archiveDirPrefix': 'Archive scan directory: ',
   'downloads.dirMissing': 'Directory missing',
   'downloads.dirMissingLine': 'Download directory not found: {d}',
   'downloads.dirMissingHint':
     'The core maintains its download index (index.json) in this directory. A missing directory usually means nothing has downloaded successfully yet, or this is not your old download directory; the v1 client defaulted to a "Downloads" folder under the app directory, which may differ from this path.',
   'downloads.archiveHint': 'Episodes land here after you click "Archive" on a completed one.',
+  // ── Archive folder scan (delivery C: App.ArchiveScan grouped view) ──
+  'downloads.archive.scanning': 'Scanning archive folder…',
+  'downloads.archive.rescan': 'Rescan',
+  'downloads.archive.copyPath': 'Copy path',
+  'downloads.archive.copied': 'Directory path copied',
+  'downloads.archive.copyFail': 'Copy failed; select the path manually',
+  'downloads.archive.episodesN': '{n} eps',
+  'downloads.archive.mergedBadge': 'incl. merged',
+  'downloads.archive.orphanBadge': 'not indexed',
+  'downloads.archive.mergedSize': 'merged file {s}',
+  'downloads.archive.mtime': 'updated {d}',
+  'downloads.archive.noMedia': 'The folder exists but no finished media was found. Hit "Rescan" to refresh.',
+  'downloads.archive.openTip': 'Open: {p}',
   'downloads.restore': 'Restore',
   'downloads.footnote': 'Task & merge progress is pushed every 1500ms by the Go download service (downloads:update); ',
   'downloads.footnoteMock': 'VITE_MOCK sample data: downloading/merging are local simulations, not real engine results.',

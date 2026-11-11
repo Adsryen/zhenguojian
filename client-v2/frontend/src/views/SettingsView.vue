@@ -721,6 +721,7 @@ onMounted(async () => {
         </div>
       </div>
       <div class="sec-hint upd-sub-hint">{{ t('update.autocheck.hint') }}</div>
+      <div class="sec-hint upd-sub-hint">{{ t('tray.hint') }}</div>
       <div class="field">
         <label class="field-label">{{ t('update.prerelease') }}</label>
         <div class="field-control">

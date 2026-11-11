@@ -15,6 +15,9 @@ import (
 // manualCooldown 手动检查冷却（照抄参照 guoapp app_update.go 语义 30s）。
 const manualCooldown = 30 * time.Second
 
+// defaultAutoCheckEvery V-TRAY：后台自动检查周期（启动一次 + 每 6h 静默复查）。
+const defaultAutoCheckEvery = 6 * time.Hour
+
 // Emiter 事件出口（绑定层注入 runtime.EventsEmit 包装；测试注入 channel 收集器）。
 type Emiter func(event string, data map[string]any)
 
@@ -49,6 +52,9 @@ type Service struct {
 	DataDir  string
 	Local    LocalVersion
 	Settings *SettingsStore
+	// Notify 原生提示出口（V-TRAY：托盘「检查更新」手动路径）：Windows 侧接
+	// tray.ShowInfoBox（MessageBoxW），非 Windows 由绑定层回落 EventsEmit。nil=静默。
+	Notify func(title, text string)
 
 	checkClient *http.Client
 	dlClient    *http.Client
@@ -66,18 +72,25 @@ type Service struct {
 
 	startupOnce  sync.Once
 	StartupDelay time.Duration // 决策：3s；测试缩短
+	// autoCheckEvery V-TRAY 扩展语义：启动检查一次后，每周期静默再查（默认 6h；
+	// 测试注入毫秒级）。<=0 = 只查一次（旧语义）。
+	autoCheckEvery time.Duration
+	stopCh         chan struct{}
+	stopOnce       sync.Once
 }
 
 // NewService 构造服务。emit 可为 nil（纯测试）。
 func NewService(dataDir string, local LocalVersion, settingsPath string, emit Emiter) *Service {
 	return &Service{
-		DataDir:      dataDir,
-		Local:        local,
-		Settings:     NewSettingsStore(settingsPath),
-		checkClient:  &http.Client{Timeout: perCandidateTimeout},
-		dlClient:     NewDownloadClient(),
-		emit:         emit,
-		StartupDelay: 3 * time.Second,
+		DataDir:        dataDir,
+		Local:          local,
+		Settings:       NewSettingsStore(settingsPath),
+		checkClient:    &http.Client{Timeout: perCandidateTimeout},
+		dlClient:       NewDownloadClient(),
+		emit:           emit,
+		StartupDelay:   3 * time.Second,
+		autoCheckEvery: defaultAutoCheckEvery,
+		stopCh:         make(chan struct{}),
 	}
 }
 
@@ -370,31 +383,102 @@ func (s *Service) PrepareApply(tempDir string, pid int) (*PrepareApplyResult, er
 }
 
 // Startup 懒触发启动自动检查（决策：前端 mount 调 updateStartup，绑定内首次调用起 goroutine）。
-// 3s 延迟给壳启动让路；settings.autocheck 关闭或被跳过版本命中时不发事件。
+// V-TRAY 扩展语义：3s 延迟给壳启动让路先查一次，此后每 autoCheckEvery（默认 6h）
+// 静默复查；每轮现读 settings.autocheck（关=本轮跳过，循环不停，开启后下轮恢复），
+// 跳过版本命中不发事件（runCheck 内部语义）。
 func (s *Service) Startup() {
 	s.startupOnce.Do(func() {
 		go func() {
 			time.Sleep(s.StartupDelay)
-			set := s.Settings.Get()
-			if !set.Autocheck {
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-			defer cancel()
-			res := s.runCheck(ctx, set)
-			s.mu.Lock()
-			s.lastCheck = res
-			if res.CheckedAt > 0 {
-				_ = s.Settings.Save(withLastCheckAt(set, res.CheckedAt))
-			}
-			s.mu.Unlock()
-			if res.Available && res.Release != nil {
-				s.fireEvent("update:available", map[string]any{
-					"tag": res.Release.Tag, "version": res.Release.Version, "publishedAt": res.Release.PublishedAt,
-					"body": res.Release.Body, "current": res.Current, "dev": res.Dev, "channel": res.Channel,
-					"assets": res.Release.SelectableAssets(),
-				})
+			for {
+				s.autoCheckRound()
+				interval := s.autoCheckEvery
+				if interval <= 0 {
+					return // 显式关闭周期（仅查一次=旧语义）
+				}
+				t := time.NewTimer(interval)
+				select {
+				case <-s.stopCh:
+					t.Stop()
+					return
+				case <-t.C:
+				}
 			}
 		}()
 	})
+}
+
+// autoCheckRound 一轮静默检查：结果进 lastCheck/lastCheckAt，有更新发
+// update:available（复用 App.vue 横幅）。失败静默，下轮重试。
+func (s *Service) autoCheckRound() {
+	set := s.Settings.Get()
+	if !set.Autocheck {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	res := s.runCheck(ctx, set)
+	s.mu.Lock()
+	s.lastCheck = res
+	if res.CheckedAt > 0 {
+		_ = s.Settings.Save(withLastCheckAt(set, res.CheckedAt))
+	}
+	s.mu.Unlock()
+	if res.Available && res.Release != nil {
+		s.fireEvent("update:available", availablePayload(res))
+	}
+}
+
+// StopAutoCheck 停后台周期检查循环（幂等；测试收尾用，生产进程生命周期内不调也行）。
+func (s *Service) StopAutoCheck() {
+	s.stopOnce.Do(func() { close(s.stopCh) })
+}
+
+// availablePayload 组装 update:available 事件数据（Startup/CheckManual 共用，
+// 字段与前端 App.vue 横幅契约一致，勿单点改动）。
+func availablePayload(res *CheckResult) map[string]any {
+	return map[string]any{
+		"tag": res.Release.Tag, "version": res.Release.Version, "publishedAt": res.Release.PublishedAt,
+		"body": res.Release.Body, "current": res.Current, "dev": res.Dev, "channel": res.Channel,
+		"assets": res.Release.SelectableAssets(),
+	}
+}
+
+// CheckManual V-TRAY 托盘「检查更新」入口：复用 Check 的 30s 手动冷却
+// （force=false，防连点猛查 GitHub）。有更新时照常发 update:available
+// 复用主窗横幅；同时经 Notify 弹原生结果框（Windows=MessageBoxW，其他平台
+// 由绑定层回落 EventsEmit）——含新版本号或「当前已是最新版本」或失败原因。
+func (s *Service) CheckManual(ctx context.Context) *CheckResult {
+	res, _ := s.Check(ctx, false)
+	if res == nil {
+		res = &CheckResult{Current: s.Local.Version, Dev: s.Local.Dev, Channel: s.Channel(), CheckedAt: time.Now().Unix(), Error: "检查进行中，请稍候"}
+	}
+	if res.Available && res.Release != nil {
+		s.fireEvent("update:available", availablePayload(res))
+	}
+	if s.Notify != nil {
+		s.Notify("真果鉴", manualCheckText(res))
+	}
+	return res
+}
+
+// manualCheckText 原生结果框文案（纯函数，可测）。
+func manualCheckText(res *CheckResult) string {
+	switch {
+	case res.Error != "":
+		return "检查更新失败：" + res.Error
+	case res.Available && res.Release != nil:
+		return "发现新版本 " + res.Release.Version + "，可在主窗口顶部横幅下载更新。"
+	case res.SkippedTag != "":
+		return "版本 " + res.SkippedTag + " 已被跳过，解除忽略前不会提醒。"
+	default:
+		text := "当前已是最新版本"
+		if res.Current != "" && res.Current != "dev" {
+			text += "（" + res.Current + "）"
+		}
+		if res.Cooldown {
+			text += "·30 秒内沿用上次结果"
+		}
+		return text
+	}
 }

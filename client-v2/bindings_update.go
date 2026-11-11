@@ -98,6 +98,7 @@ func (a *App) UpdateApply() (string, error) {
 	}
 	go func() {
 		time.Sleep(300 * time.Millisecond) // 让 bat 进入轮询，再走 Wails 正常退出
+		a.allowQuit()                      // V-TRAY：放行 beforeClose（否则 X-拦截逻辑会只隐藏不退出，bat 永远等不到进程结束）
 		runtime.Quit(a.ctx)
 	}()
 	return marshalJSON(map[string]any{"kind": "restart", "restarting": true})

@@ -315,3 +315,109 @@ func TestUpdateDirSanitizesTag(t *testing.T) {
 		t.Errorf("tag not sanitized: %s", got)
 	}
 }
+
+// TestServiceAutoCheckTicker V-TRAY 扩展语义：启动查一次 + 注入短周期反复静默查；
+// StopAutoCheck 生效且幂等；autocheck 关闭时每轮跳过不发事件（循环不停）。
+func TestServiceAutoCheckTicker(t *testing.T) {
+	_, base, _ := newComboServer(t)
+	svc := newTestService(t, base, LocalVersion{Version: "v2.0.0"})
+	t.Cleanup(svc.StopAutoCheck)
+	var evs atomic.Int64
+	svc.emit = func(ev string, data map[string]any) {
+		if ev == "update:available" {
+			evs.Add(1)
+		}
+	}
+	svc.autoCheckEvery = 40 * time.Millisecond
+	svc.Startup()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && evs.Load() < 3 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if evs.Load() < 3 {
+		t.Fatalf("ticker must re-check repeatedly, events=%d", evs.Load())
+	}
+	svc.StopAutoCheck()
+	svc.StopAutoCheck() // 幂等：二次 close 不得 panic
+	n := evs.Load()
+	time.Sleep(200 * time.Millisecond)
+	if evs.Load() != n {
+		t.Errorf("no events after StopAutoCheck: %d -> %d", n, evs.Load())
+	}
+
+	svc2 := newTestService(t, base, LocalVersion{Version: "v2.0.0"})
+	t.Cleanup(svc2.StopAutoCheck)
+	if err := svc2.Settings.Save(Settings{Autocheck: false}); err != nil {
+		t.Fatal(err)
+	}
+	var off atomic.Int64
+	svc2.emit = func(ev string, data map[string]any) {
+		if ev == "update:available" {
+			off.Add(1)
+		}
+	}
+	svc2.autoCheckEvery = 40 * time.Millisecond
+	svc2.Startup()
+	time.Sleep(300 * time.Millisecond)
+	if off.Load() != 0 {
+		t.Errorf("autocheck off must not emit, got %d", off.Load())
+	}
+}
+
+// TestServiceCheckManualNotify V-TRAY 托盘入口：available 同时走事件 + Notify 原生框。
+func TestServiceCheckManualNotify(t *testing.T) {
+	_, base, _ := newComboServer(t)
+	svc := newTestService(t, base, LocalVersion{Version: "v2.0.0"})
+	var (
+		mu    sync.Mutex
+		boxes []string
+	)
+	var evs atomic.Int64
+	svc.emit = func(ev string, data map[string]any) {
+		if ev == "update:available" {
+			evs.Add(1)
+		}
+	}
+	svc.Notify = func(title, text string) {
+		mu.Lock()
+		boxes = append(boxes, title+"|"+text)
+		mu.Unlock()
+	}
+	res := svc.CheckManual(context.Background())
+	if res == nil || !res.Available {
+		t.Fatalf("expected available, got %+v", res)
+	}
+	if evs.Load() != 1 {
+		t.Errorf("want 1 update:available, got %d", evs.Load())
+	}
+	mu.Lock()
+	got := boxes
+	mu.Unlock()
+	if len(got) != 1 || got[0] != "真果鉴|发现新版本 v9.9.9，可在主窗口顶部横幅下载更新。" {
+		t.Fatalf("notify wrong: %+v", got)
+	}
+	// Notify=nil（非托盘路径）不得 panic
+	svc.Notify = nil
+	if res2 := svc.CheckManual(context.Background()); res2 == nil {
+		t.Fatal("nil Notify must still return result")
+	}
+}
+
+func TestManualCheckTextTable(t *testing.T) {
+	cases := []struct {
+		in   CheckResult
+		want string
+	}{
+		{CheckResult{Error: "boom"}, "检查更新失败：boom"},
+		{CheckResult{Available: true, Release: &Release{Version: "v9.9.9"}}, "发现新版本 v9.9.9，可在主窗口顶部横幅下载更新。"},
+		{CheckResult{SkippedTag: "v1.2.3"}, "版本 v1.2.3 已被跳过，解除忽略前不会提醒。"},
+		{CheckResult{Current: "v2.0.0"}, "当前已是最新版本（v2.0.0）"},
+		{CheckResult{Current: "v2.0.0", Cooldown: true}, "当前已是最新版本（v2.0.0）·30 秒内沿用上次结果"},
+		{CheckResult{Current: "dev"}, "当前已是最新版本"},
+	}
+	for _, c := range cases {
+		if got := manualCheckText(&c.in); got != c.want {
+			t.Errorf("manualCheckText(%+v)=%q want %q", c.in, got, c.want)
+		}
+	}
+}
