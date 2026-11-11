@@ -224,6 +224,10 @@ declare global {
     __zgjSuggestCalls?: number
     /** mock 验证钩子：mockApi.openDownloadPath 最近一次路径 */
     __zgjOpenPath?: string
+    /** mock 验证钩子：置 '1' 让 mockApi.soraniLogin 强制失败（M5 登录失败路径断言用） */
+    __zgj?: { mockLoginFail?: string }
+    /** mock 验证钩子：mockApi.soraniLogin 最近一次入参（M8 track 形状断言用；真实桥不写） */
+    __zgjSoraniLastLogin?: SoraniLoginAttempt | null
   }
 }
 
@@ -348,6 +352,15 @@ export interface NativeApi {
   updateApply(): Promise<UpdateApplyResult>
   updateSettingsGet(): Promise<UpdateSettings>
   updateSettingsSet(patch: Partial<UpdateSettings>): Promise<UpdateSettings>
+  // ── 青空次元账号（bindings_sorani.go App.SoraniAccount 单绑定，api 层按 command 映射四方法）──
+  /** command ""：登录态 {loggedIn,name} */
+  soraniStatus(): Promise<SoraniStatus>
+  /** command captcha：滑块验证码（图为 base64 data URL，原图 600×360 / 模板 110×360） */
+  soraniCaptcha(): Promise<SoraniCaptcha>
+  /** command login：accountJSON={identifier,password,captchaId,track}（Go 侧再嵌 account 键） */
+  soraniLogin(identifier: string, password: string, captchaId: string, track: SoraniTrack): Promise<SoraniStatus>
+  /** command logout：清会话，返回空态 */
+  soraniLogout(): Promise<SoraniStatus>
 }
 
 /** 核心下载根目录（bindings_download.go DownloadDirectory：core action downloadDirectory + os.Stat） */
@@ -635,5 +648,57 @@ export interface UpdateApplyResult {
   restarting?: boolean
   updateDir?: string
   hint?: string
+}
+
+// ── 青空次元账号（协议只读参考 guoapp-src provider_sorani_account.go:84-116；
+//    v1 采集语义 zhenguojian/app/zhenguojian/sorani_login.py:138-220）──
+
+/** 轨迹单点：type down|move|up；t=相对 startTime 毫秒（down 恒为 0） */
+export interface SoraniTrackPoint {
+  x: number
+  y: number
+  type: 'down' | 'move' | 'up'
+  t: number
+}
+
+/** 拖动轨迹（v2 语义：按 captcha 应答原图空间归一上报，v1 报显示空间 ≤300px；
+    真实上游一般 600×360 / 模板 110×360，但一切以 captcha 应答字段动态计算） */
+export interface SoraniTrack {
+  bgImageWidth: number
+  bgImageHeight: number
+  templateImageWidth: number
+  templateImageHeight: number
+  /** epoch 毫秒（按下时刻） */
+  startTime: number
+  /** epoch 毫秒（释放时刻，>= startTime） */
+  stopTime: number
+  /** 2..5000 点（采集上限 4000）；首点恒 {x:0,y:0,type:'down',t:0}，尾点 type='up'；
+      x=clamp(round(dx·bgImageWidth/显示宽), 0, bgImageWidth−templateImageWidth) */
+  trackList: SoraniTrackPoint[]
+}
+
+/** captcha 应答：图为 base64 data URL；尺寸=原图像素 */
+export interface SoraniCaptcha {
+  id: string
+  backgroundImage: string
+  templateImage: string
+  backgroundWidth: number
+  backgroundHeight: number
+  templateWidth: number
+  templateHeight: number
+}
+
+/** status/logout/login 应答 */
+export interface SoraniStatus {
+  loggedIn: boolean
+  name: string
+}
+
+/** mock 面 login 入参快照（window.__zgjSoraniLastLogin，headless 断言用） */
+export interface SoraniLoginAttempt {
+  identifier: string
+  password: string
+  captchaId: string
+  track: SoraniTrack
 }
 

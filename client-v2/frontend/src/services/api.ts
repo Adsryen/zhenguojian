@@ -25,6 +25,8 @@ import type {
   RankingsResult,
   ResolvePlan,
   ResourceSettingsSnapshot,
+  SoraniCaptcha,
+  SoraniStatus,
   SourceListItem,
   UpdateApplyResult,
   UpdateAvailableEvent,
@@ -354,7 +356,15 @@ const realApi: NativeApi = {
       }
     }
     return out.slice(0, 10)
-  }
+  },
+  // ── 青空次元账号（bindings_sorani.go App.SoraniAccount(command, accountJSON) 单绑定；
+  //    status/captcha/logout 的 accountJSON 传 "{}"，login 传 {identifier,password,captchaId,track}
+  //    （Go 侧再嵌 account 键——顶层平铺会被 nativeInput 静默丢掉））──
+  soraniStatus: () => callGo<SoraniStatus>('SoraniAccount', '', '{}'),
+  soraniCaptcha: () => callGo<SoraniCaptcha>('SoraniAccount', 'captcha', '{}'),
+  soraniLogin: (identifier, password, captchaId, track) =>
+    callGo<SoraniStatus>('SoraniAccount', 'login', JSON.stringify({ identifier, password, captchaId, track })),
+  soraniLogout: () => callGo<SoraniStatus>('SoraniAccount', 'logout', '{}')
 }
 
 /* mock 播放内核（V2-3c 契约）：500ms 模拟 tick（与真实事件源同频），
@@ -407,6 +417,27 @@ function mockSimStart() {
     }
   }, 500)
 }
+
+/* ── 青空次元账号 mock 面素材（字段形状对齐 provider_sorani_account.go 真实应答；
+   图为假 SVG data URL，尺寸与真实一致：背景 600×360、模板 110×360）── */
+const soraniMock = { loggedIn: false, name: '', seq: 0 }
+const svgDataURL = (svg: string) => 'data:image/svg+xml;utf8,' + encodeURIComponent(svg)
+const MOCK_SORANI_BG = svgDataURL(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="360">' +
+    '<rect width="600" height="360" fill="#8b93a1"/>' +
+    '<rect x="48" y="70" width="240" height="16" rx="8" fill="#7b8392"/>' +
+    '<rect x="48" y="140" width="150" height="16" rx="8" fill="#7b8392"/>' +
+    '<rect x="300" y="250" width="220" height="16" rx="8" fill="#7b8392"/>' +
+    '<rect x="372" y="96" width="110" height="110" rx="12" fill="#5b6472"/>' +
+    '<text x="14" y="344" font-size="18" fill="#6b7482">MOCK SORANI CAPTCHA 600x360</text>' +
+    '</svg>'
+)
+const MOCK_SORANI_TPL = svgDataURL(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="110" height="360">' +
+    '<rect x="0" y="96" width="110" height="110" rx="12" fill="#3f8cff" stroke="#2f6fd0" stroke-width="2"/>' +
+    '<text x="10" y="230" font-size="20" fill="#3f8cff">滑块</text>' +
+    '</svg>'
+)
 
 const mockApi: NativeApi = {
   ping: async () => 'pong-mock',
@@ -803,6 +834,52 @@ const mockApi: NativeApi = {
     if (typeof window !== 'undefined') window.__zgjSuggestCalls = (window.__zgjSuggestCalls ?? 0) + 1
     await delay(120 + Math.random() * 160)
     return mockSuggestions(q)
+  },
+  // ── 青空次元账号 mock：login 只校验 track 形状（首 down 尾 up、≥2 点、尺寸/时间自洽）即成功；
+  //    window.__zgj.mockLoginFail='1' 强制失败（M5 断言用）；入参快照落 __zgjSoraniLastLogin（M8 断言用）──
+  soraniStatus: async () => {
+    await delay(80)
+    return { loggedIn: soraniMock.loggedIn, name: soraniMock.name }
+  },
+  soraniCaptcha: async () => {
+    await delay(150)
+    soraniMock.seq += 1
+    return {
+      id: `mock-captcha-${soraniMock.seq}`,
+      backgroundImage: MOCK_SORANI_BG,
+      templateImage: MOCK_SORANI_TPL,
+      backgroundWidth: 600,
+      backgroundHeight: 360,
+      templateWidth: 110,
+      templateHeight: 360
+    }
+  },
+  soraniLogin: async (identifier, password, captchaId, track) => {
+    await delay(220)
+    if (typeof window !== 'undefined') window.__zgjSoraniLastLogin = { identifier, password, captchaId, track }
+    if (!identifier.trim() || !password) throw new ApiError('请输入用户名或邮箱', 'bad_input')
+    const pts = track.trackList ?? []
+    const dims = [track.bgImageWidth, track.bgImageHeight, track.templateImageWidth, track.templateImageHeight]
+    const trackOk =
+      dims.every((n) => n > 0 && n <= 4000) &&
+      pts.length >= 2 &&
+      pts.length <= 5000 &&
+      pts[0].type === 'down' &&
+      pts[pts.length - 1].type === 'up' &&
+      track.startTime > 0 &&
+      track.stopTime >= track.startTime
+    if (!trackOk) throw new ApiError('安全验证未通过，请重新拖动滑块', 'sorani_captcha_fail')
+    if (typeof window !== 'undefined' && window.__zgj?.mockLoginFail === '1')
+      throw new ApiError('安全验证未通过，请重新拖动滑块', 'sorani_captcha_fail')
+    soraniMock.loggedIn = true
+    soraniMock.name = identifier.trim()
+    return { loggedIn: true, name: identifier.trim() }
+  },
+  soraniLogout: async () => {
+    await delay(120)
+    soraniMock.loggedIn = false
+    soraniMock.name = ''
+    return { loggedIn: false, name: '' }
   }
 }
 

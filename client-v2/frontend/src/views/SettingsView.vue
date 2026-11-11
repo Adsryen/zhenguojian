@@ -7,11 +7,12 @@
    带「本地暂存，核心接线后生效」角标——不做假保存成功。 */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import SourceGrid from '@/components/settings/SourceGrid.vue'
+import SoraniLoginDialog from '@/components/SoraniLoginDialog.vue'
 import { api, MOCK_MODE } from '@/services/api'
 import { locale, setLocale, t, tf } from '@/services/i18n'
 import { applyTheme, loadTheme, type ThemeMode } from '@/styles/theme'
 import { useAppStore } from '@/stores/app'
-import type { UpdateAsset, UpdateCheckResult, UpdateDownloadState, UpdateStatus } from '@/services/types'
+import type { SoraniStatus, UpdateAsset, UpdateCheckResult, UpdateDownloadState, UpdateStatus } from '@/services/types'
 
 const store = useAppStore()
 
@@ -335,8 +336,52 @@ const sourcesHint = computed(() =>
   MOCK_MODE ? t('settings.sources.hint.mock') : t('settings.sources.hint')
 )
 
+/* ---------------- 站源账号（青空次元，v2-M2） ----------------
+   soraniStatus() 失败 → null（行内显示「未知」，不谎报未登录、不崩）；
+   未登录/未知 → 「登录」开对话框（logged-in 事件回写状态并关窗）；已登录 → 「登出」直调。 */
+const soraniStatus = ref<SoraniStatus | null>(null)
+const soraniBusy = ref(false)
+const soraniError = ref('')
+const soraniDialogOpen = ref(false)
+
+const soraniStatusText = computed(() => {
+  if (!soraniStatus.value) return t('sorani.unknown')
+  if (!soraniStatus.value.loggedIn) return t('sorani.loggedOut')
+  return soraniStatus.value.name
+    ? `${t('sorani.loggedIn')} · ${soraniStatus.value.name}`
+    : t('sorani.loggedIn')
+})
+
+async function soraniRefresh() {
+  try {
+    soraniStatus.value = await api.soraniStatus()
+    soraniError.value = ''
+  } catch (e) {
+    soraniStatus.value = null
+    soraniError.value = tf('sorani.statusFail', { msg: (e as any)?.message ?? String(e) })
+  }
+}
+
+async function soraniDoLogout() {
+  if (soraniBusy.value) return
+  soraniBusy.value = true
+  try {
+    soraniStatus.value = await api.soraniLogout()
+    soraniError.value = ''
+  } catch (e) {
+    soraniError.value = tf('sorani.logoutFail', { msg: (e as any)?.message ?? String(e) })
+  } finally {
+    soraniBusy.value = false
+  }
+}
+
+function onSoraniDialogStatus(s: SoraniStatus | null) {
+  soraniStatus.value = s
+}
+
 onMounted(async () => {
   void loadUpdate()
+  void soraniRefresh()
   await store.loadSources()
   try {
     dataDir.value = await api.dataPath()
@@ -427,6 +472,51 @@ onMounted(async () => {
         @reorder="onReorder"
       />
     </section>
+
+    <!-- ②.5 站源账号（青空次元登录） -->
+    <section class="card sec" data-testid="sorani-section">
+      <div class="sec-head">
+        <span class="sec-title">{{ t('sorani.accountSection') }}</span>
+        <span v-if="MOCK_MODE" class="badge badge-warn">{{ t('settings.mockBadge') }}</span>
+      </div>
+      <div class="sec-hint">
+        {{ t('sorani.hint') }}
+        <template v-if="MOCK_MODE"><br />{{ t('sorani.hint.mock') }}</template>
+      </div>
+      <div class="field" data-testid="sorani-row">
+        <label class="field-label">{{ t('sorani.rowName') }}</label>
+        <div class="field-control" style="display: flex; align-items: center; gap: 10px;">
+          <span class="badge" data-testid="sorani-status">{{ soraniStatusText }}</span>
+          <button
+            v-if="!soraniStatus || !soraniStatus.loggedIn"
+            class="btn primary"
+            type="button"
+            data-testid="sorani-login-btn"
+            @click="soraniDialogOpen = true"
+          >
+            {{ t('sorani.login') }}
+          </button>
+          <button
+            v-else
+            class="btn"
+            type="button"
+            data-testid="sorani-logout-btn"
+            :disabled="soraniBusy"
+            @click="soraniDoLogout"
+          >
+            {{ soraniBusy ? t('sorani.busy') : t('sorani.logout') }}
+          </button>
+        </div>
+      </div>
+      <div v-if="soraniError" class="sec-error-line" data-testid="sorani-sec-error">{{ soraniError }}</div>
+    </section>
+
+    <SoraniLoginDialog
+      v-if="soraniDialogOpen"
+      @close="soraniDialogOpen = false"
+      @status="onSoraniDialogStatus"
+      @logged-in="onSoraniDialogStatus"
+    />
 
     <!-- ③ 播放默认 -->
     <section class="card sec">
