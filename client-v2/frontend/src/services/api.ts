@@ -9,6 +9,8 @@ import type {
   CatalogParams,
   CatalogResult,
   Chapter,
+  CreatorProfileResult,
+  CreatorWorksSnapshot,
   CreatorsResult,
   DanmakuWindowResult,
   DetailResult,
@@ -26,7 +28,7 @@ import type {
   SourceListItem,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
 import { mockSuggestions } from './fixtures'
@@ -152,6 +154,10 @@ const realApi: NativeApi = {
   importSeen: (entriesJSON) => callGo<{ added: number }>('ImportSeen', entriesJSON),
   calendar: (date, offset, gender) => callGo<CalendarPayload>('Calendar', date, offset, gender),
   dramaCreators: (drama) => callGo<CreatorsResult>('DramaCreators', JSON.stringify(drama)),
+  // ── V2-L 创作者页（bindings_creator.go，discovery 双态通道）──
+  creatorProfile: (creator) => callGo<CreatorProfileResult>('CreatorProfile', JSON.stringify(creator)),
+  creatorWorks: (creator, tab, subTab, cursor, sort) =>
+    callGo<CreatorWorksSnapshot>('CreatorWorks', JSON.stringify(creator), tab, subTab, cursor, sort),
   resourceSettings: () => callGo<ResourceSettingsSnapshot>('GetResourceSettings'),
   saveResourceSettings: (patch) => callGo<unknown>('SaveResourceSettings', JSON.stringify(patch)),
   buildInfo: () => callGo<BuildInfo>('GetBuildInfo'),
@@ -477,6 +483,14 @@ const mockApi: NativeApi = {
   dramaCreators: async (drama) => {
     await delay(120)
     return mockDramaCreators(drama)
+  },
+  creatorProfile: async (creator) => {
+    await delay(80)
+    return mockCreatorProfile(creator)
+  },
+  creatorWorks: async (creator, _tab, _subTab, cursor, sort) => {
+    await delay(150)
+    return mockCreatorWorks(creator, cursor, sort)
   },
   // ── V2-3 下载与合并 mock（fixtures 有状态模拟，tick 1s；轮询消费见 stores/downloads.ts）──
   downloadList: async () => {

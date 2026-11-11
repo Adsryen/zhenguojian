@@ -302,6 +302,12 @@ export interface NativeApi {
   calendar(date: string, offset: number, gender: number): Promise<CalendarPayload>
   /** 演职员条（v2-D）：真实桥 = App.DramaCreators（bindings_cast.go）；discovery 未接入时 reject，调用方静默隐藏 */
   dramaCreators(drama: Drama): Promise<CreatorsResult>
+  /** 创作者页头部（V2-L）：真实桥 = App.CreatorProfile（bindings_creator.go）；
+      discovery 未启用/核心报错时 reject，调用方亮红条 + 重试 */
+  creatorProfile(creator: CreatorEntry): Promise<CreatorProfileResult>
+  /** 创作者作品墙：tab/subTab 传 0 = 核心自动取首个作品分类；
+      sort ∈ 'time_desc'|'hot_desc'；cursor 空串 = 首屏 */
+  creatorWorks(creator: CreatorEntry, tab: number, subTab: number, cursor: string, sort: string): Promise<CreatorWorksSnapshot>
   // ── V2-4 设置/指纹 ──
   resourceSettings(): Promise<ResourceSettingsSnapshot>
   saveResourceSettings(patch: Partial<ResourceSettingsSnapshot>): Promise<unknown>
@@ -389,6 +395,36 @@ export interface CreatorsResult {
   heat?: string
   followers?: string
   plays?: string
+}
+
+/** CreatorProfile data.profile（V2-L）：核心 = 入参 creator 平铺兜底 + 真接口覆盖
+    （sidecar/core_overlay/discovery.go discoveryProfile）；fields 可能全缺（探针实测
+    不存在 uid 只回传 {id,userId,name}），UI 必须容忍缺省 */
+export interface CreatorProfileInfo extends CreatorEntry {
+  /** formatHeat 已格式化串（如「35.2万」），非数字 */
+  fans?: string
+  following?: string
+  likes?: string
+}
+
+/** CreatorProfile data.tabs[]：discoveryCreatorTabs 形状 {id,name,total,subTabs[]} */
+export interface CreatorTabGroup {
+  id: number
+  name: string
+  total?: number
+  subTabs?: { id: number; name: string; total?: number }[]
+}
+
+export interface CreatorProfileResult {
+  profile: CreatorProfileInfo
+  tabs?: CreatorTabGroup[]
+}
+
+/** CreatorWorks data：items 为标准 nativeDrama 目录形状（封面直接走 covers.resolveCover） */
+export interface CreatorWorksSnapshot {
+  items: Drama[]
+  cursor?: string
+  hasMore?: boolean
 }
 
 /** 上新日历应答（核心 data 平铺；items 兼容 flat CalendarEntry 与 legacy 嵌套 CalendarItem） */

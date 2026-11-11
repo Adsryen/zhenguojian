@@ -23,6 +23,13 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '详情' }
   },
   {
+    // V2-L：创作者页。query.u = 演员条 creator 整对象 JSON（含 userId），query.name 仅供返回显示
+    path: '/creator',
+    name: 'creator',
+    component: () => import('@/views/CreatorView.vue'),
+    meta: { title: '创作者' }
+  },
+  {
     // V2-3b：播放页本体已接入（参数 d/ep/pos/c 沿用 dramaRef.playerRoute 约定）
     path: '/player',
     name: 'player',

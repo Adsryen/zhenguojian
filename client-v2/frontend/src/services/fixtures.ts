@@ -1,6 +1,6 @@
 /* mock fixtures —— 手抄自 v1 引擎真实 catalog 形状（hongguo nativeDrama 字段名逐一对应；
    封面为本地占位 SVG，真实 cover 是引擎返回的 CDN 直链）。仅 VITE_MOCK=1 时使用。 */
-import type { DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, CreatorsResult, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
+import type { CreatorEntry, CreatorProfileResult, CreatorWorksSnapshot, DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, CreatorsResult, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
 
 export const MOCK_SOURCES: SourceListItem[] = [
   {
@@ -212,6 +212,78 @@ export function mockDramaCreators(drama: Drama): CreatorsResult {
     heat: '1286万',
     followers: '35.2万',
     plays: '2.1亿'
+  }
+}
+
+/* ------------------------------------------------ V2-L 创作者页 mock（示例数据） */
+
+/* mockCreatorProfile/mockCreatorWorks —— 形状逐键对齐 discovery.go 实测（探针 m00190：
+   profile=入参平铺兜底、tabs 可为空数组；空 tabs 时核心 works 报「该演职员暂无公开作品」）。
+   统计串照 formatHeat 口径（「35.2万」）。u_nv 故意 tabs=[] 用来验证空分类态。 */
+const MOCK_CREATOR_STATS: Record<string, { fans: string; following: string; likes: string }> = {
+  u_dao: { fans: '35.2万', following: '86', likes: '128.6万' },
+  u_nan: { fans: '9.8万', following: '412', likes: '45.3万' },
+  u_nv: { fans: '1.2万', following: '35', likes: '6.6万' }
+}
+
+/** 钩子：headless 验证计数 works 请求次数（排序切换重拉断言）；失败开关断言红条 */
+function creatorHook(name: string): void {
+  if (typeof window === 'undefined') return
+  ;(window as any)[name] = (((window as any)[name] as number) ?? 0) + 1
+}
+
+export function mockCreatorProfile(creator: CreatorEntry): CreatorProfileResult {
+  creatorHook('__zgjCreatorProfileCalls')
+  // 失败开关用 localStorage（跨导航存活，headless 验证断言红条/重试用）
+  try {
+    if (localStorage.getItem('zgj.creatorFail') === '1') {
+      throw new Error('模拟创作者信息加载失败（示例数据）')
+    }
+  } catch (e: any) {
+    if (String(e?.message ?? '').includes('示例数据')) throw e
+  }
+  const uid = creator.userId ?? creator.id ?? ''
+  const stats = MOCK_CREATOR_STATS[uid]
+  const tabs =
+    uid === 'u_dao'
+      ? [
+          {
+            id: 8,
+            name: '作品',
+            total: 12,
+            subTabs: [
+              { id: 100, name: '连续剧', total: 9 },
+              { id: 101, name: '短片', total: 3 }
+            ]
+          }
+        ]
+      : uid === 'u_nan'
+        ? [{ id: 8, name: '作品', total: 5, subTabs: [{ id: 100, name: '连续剧', total: 5 }] }]
+        : []
+  return {
+    profile: { ...creator, ...(stats ?? {}) },
+    tabs
+  }
+}
+
+/** works 分页池：page1 = 池前 8 条（cursor 'c2'），page2 = 41-12 条（尾）。
+    sort=hot_desc 时按热度串翻转次序，模拟服务端排序。 */
+export function mockCreatorWorks(creator: CreatorEntry, cursor: string, sort: string): CreatorWorksSnapshot {
+  creatorHook('__zgjCreatorWorksCalls')
+  const uid = creator.userId ?? creator.id ?? ''
+  if (uid === 'u_nv') throw new Error('该演职员暂无公开作品（示例数据）')
+  let pool = items.filter((d) => d.id.startsWith('hongguo:'))
+  if (sort === 'hot_desc') pool = [...pool].reverse()
+  // 池仅 4 条：第二页派生副本（id 加 -p2 后缀、标题标注），保证「加载更多」
+  // 追加 + 按 id 去重两条断言都有真实可观察行为
+  const page =
+    cursor === 'mock-c2'
+      ? pool.map((d) => ({ ...d, id: d.id + '-p2', title: `${d.title}（第二页）` }))
+      : pool.slice(0, 3)
+  return {
+    items: page,
+    cursor: cursor === 'mock-c2' ? '' : 'mock-c2',
+    hasMore: cursor !== 'mock-c2'
   }
 }
 
