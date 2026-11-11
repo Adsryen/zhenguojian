@@ -73,7 +73,8 @@ jobs:
           $iso = (git log -1 --format=%cI).Trim()
           $sha = $sha.Trim()
           $iso = $iso.Trim()
-          @{ revision = $sha; commitTime = $iso; modified = $false } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 build/bin/build-info.json
+          $ver = if ("$env:GITHUB_REF" -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "v0.0.0-dev" }
+          @{ revision = $sha; commitTime = $iso; modified = $false; version = $ver } | ConvertTo-Json -Compress | Set-Content -Encoding utf8 build/bin/build-info.json
 
       - name: Download ffmpeg
         run: |
