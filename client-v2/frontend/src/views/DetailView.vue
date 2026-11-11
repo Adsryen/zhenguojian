@@ -2,17 +2,19 @@
 /* DetailView —— /detail/:id?d=<compact Drama JSON>（兜底 ?source=&title=）
    版式照 v1 detail_layout.py：模糊封面铺头区 + 150x225 封面 + 标题/简介/热度/标签；
    选集照 v1 detail_episodes.py：GROUP_SIZE=30 分组 + 44px 网格 + 当前集高亮/未播变淡/VIP 角标。
-   操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(Resolve→plan→localStorage
-    'downloads.queue'，V2-3 才接下载引擎)、追剧(stores/watch → Go watchstore)、看过(stores/watch →
-    Go seen-library.json，范围 A 迁移；localStorage 仅降级/一次性迁移源)。
- *     追剧真值、「看到第 N 集」锚点与看过标记已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。
+   操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(v2-I 双轨：真实桥走
+    App.DownloadStart 分块入队（磁盘守卫在核心侧，前端不重复），MOCK/DEGRADED 保留旧
+    Resolve→plan→localStorage 'downloads.queue' 暂存)、追剧(stores/watch → Go watchstore)、
+    看过(stores/watch → Go seen-library.json，范围 A 迁移；localStorage 仅降级/一次性迁移源)。
+ *     追剧真值、「看到第 N 集」锚点与看过标记已接 Go watchstore；下载真实队列入队已接
+    DownloadStart（v2-I），队列页轮询/控制面此前已接（V2-3）。
     v2-D（子代理 D）：页面自身作滚动容器（.shell-main 约定，见 style 注释）；更新状态 pill +
     集数/统计文案本地化（v1 main.py:229/472-485 规则，键在 i18n.ts）；简介下方「演职人员」横排条
     （App.DramaCreators → native dramaCreators，discovery 未接入/失败整条静默隐藏）。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { api, MOCK_MODE } from '@/services/api'
-import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, Drama } from '@/services/types'
+import { api, DEGRADED, MOCK_MODE } from '@/services/api'
+import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, DownloadEntry, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
 import { releaseStatusKey, t, tf } from '@/services/i18n'
 import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
@@ -30,6 +32,8 @@ const detail = ref<DetailResult | null>(null)
 const loading = ref(false)
 const error = ref('')
 const toast = ref('')
+/** toast 可选跳转链接（v2-I：真实入队成功 → /downloads；非空时 toast 内渲染按钮） */
+const toastLink = ref('')
 let toastTimer: number | undefined
 
 const selectedIdx = ref(0)
@@ -49,10 +53,21 @@ const anchorPos = ref(0)
 const downloading = ref(false)
 const descExpanded = ref(false)
 
-function showToast(msg: string) {
+function showToast(msg: string, link = '') {
   toast.value = msg
+  toastLink.value = link
   clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 3600)
+  toastTimer = window.setTimeout(() => {
+    toast.value = ''
+    toastLink.value = ''
+  }, link ? 6000 : 3600) // 带跳转按钮时给足点击时间
+}
+
+function goToastLink() {
+  const link = toastLink.value
+  toast.value = ''
+  toastLink.value = ''
+  if (link) router.push(link)
 }
 
 const chapters = computed<Chapter[]>(() => detail.value?.chapters ?? [])
@@ -109,48 +124,109 @@ function goPlay() {
   router.push(playerRoute(d, selectedEpisode.value, anchorPos.value, ch))
 }
 
+/* ---------- 下载（v2-I 双轨，照 stores/watch useLocalLayer 惯例） ----------
+   MOCK / DEGRADED：保留旧本地暂存（Resolve→plan→local.ts 'downloads.queue'，文案含「尚未开始
+   真实下载」，不假装成功）；真实桥：api.downloadStart → App.DownloadStart（bindings_download.go:42
+   DownloadStart(dramaJSON, entriesJSON「[{chapter,index}]」, quality float64) → {added}）。
+   index=真实集号 1-based（chapterEpisode 保证 ≥1）；quality=0 自动最高档（与 DownloadsView
+   同默认；v1 main.py:2711 磁盘守卫已在核心 enqueue 侧，失败透出中文错误，前端不重复实现）。
+   v1 main.py:2721-2728 分块语义保留：核心单次入队上限 500 集（downloadsvc service.go:342
+   「单次最多添加 500 集」），长季按 500 分块提交并累加 added。 */
+
+/** 真实入队文案（i18n.ts 本任务禁改，键表随返报上交，后续统一抽取） */
+const L = {
+  dlQueued: (n: number) => `已加入下载队列 ${n} 集`,
+  dlAllReady: '所选分集均已在下载队列中',
+  dlFail: (m: unknown) => `加入下载队列失败：${m}`,
+  dlToastGo: '查看下载队列'
+}
+
+/** DownloadStart quality：0=核心自动选最高档（与 resolve 阶梯的 quality=1 语义无关） */
+const DOWNLOAD_QUALITY = 0
+/** 核心单次入队上限（v1 同款分块阈值） */
+const ENQUEUE_CHUNK = 500
+
+/** 下载走本地暂存面？（api.ts 判定：VITE_MOCK=1 或启动即无桥 → 降级 local） */
+function downloadViaLocal(): boolean {
+  return MOCK_MODE || DEGRADED
+}
+
+/** 真实桥分块入队，返回核心累计 added（entries 非空，调用方保证）。
+    drama 传 meta（query 紧凑 JSON ⊕ Detail 返回合并）——核心 Enqueue 要求 id+source 非空。 */
+async function enqueueChunks(entries: DownloadEntry[]): Promise<number> {
+  let added = 0
+  for (let off = 0; off < entries.length; off += ENQUEUE_CHUNK) {
+    const res = await api.downloadStart(meta.value, entries.slice(off, off + ENQUEUE_CHUNK), DOWNLOAD_QUALITY)
+    added += res?.added ?? 0
+  }
+  return added
+}
+
+function toastQueued(added: number) {
+  showToast(added ? L.dlQueued(added) : L.dlAllReady, '/downloads')
+}
+
 async function downloadCurrent() {
   const d = drama.value
   const ch = selectedChapter.value
   if (!d || !ch || downloading.value) return
   downloading.value = true
   try {
-    // Resolve 取 plan（quality=1 高清兜底），plan 原样暂存 —— 真实下载 V2-3 接入，这里不假装成功
-    const plan = await api.resolve(d, ch, chapters.value.indexOf(ch), 1)
-    const added = enqueueDownloads([
-      { dramaId: d.id, title: d.title, chapter: ch as Record<string, any>, episode: selectedEpisode.value, plan: plan as Record<string, any>, addedAt: Date.now() }
-    ])
-    showToast(
-      added
-        ? `第${selectedEpisode.value}集已加入本地暂存队列（共 ${queueLength()} 项）。下载队列 V2-3 接入，尚未开始真实下载`
-        : `第${selectedEpisode.value}集已在队列中（共 ${queueLength()} 项）`
-    )
+    if (downloadViaLocal()) {
+      // 旧本地暂存（mock/降级）：Resolve 取 plan（quality=1 高清兜底），plan 原样暂存
+      const plan = await api.resolve(d, ch, chapters.value.indexOf(ch), 1)
+      const added = enqueueDownloads([
+        { dramaId: d.id, title: d.title, chapter: ch as Record<string, any>, episode: selectedEpisode.value, plan: plan as Record<string, any>, addedAt: Date.now() }
+      ])
+      showToast(
+        added
+          ? `第${selectedEpisode.value}集已加入本地暂存队列（共 ${queueLength()} 项）。下载队列 V2-3 接入，尚未开始真实下载`
+          : `第${selectedEpisode.value}集已在队列中（共 ${queueLength()} 项）`
+      )
+      return
+    }
+    const added = await enqueueChunks([{ chapter: ch, index: selectedEpisode.value }])
+    toastQueued(added)
   } catch (e: any) {
-    showToast(`获取播放地址失败：${e?.message ?? e}`)
+    // 核心中文错误透出（磁盘剩余不足/下载集数无效/服务未初始化等）
+    showToast(downloadViaLocal() ? `获取播放地址失败：${e?.message ?? e}` : L.dlFail(e?.message ?? e))
   } finally {
     downloading.value = false
   }
 }
 
-function downloadAll() {
+async function downloadAll() {
   const d = drama.value
   if (!d || downloading.value || !chapters.value.length) return
-  // 全部只登记占位（plan=null）：逐集 Resolve ×N 会锤引擎，地址留待 V2-3 下载器执行时统一拉取
-  const now = Date.now()
-  const items = chapters.value.map((ch, i) => ({
-    dramaId: d.id,
-    title: d.title,
-    chapter: ch as Record<string, any>,
-    episode: chapterEpisode(ch, i),
-    plan: null,
-    addedAt: now
-  }))
-  const added = enqueueDownloads(items)
-  showToast(
-    added
-      ? `已登记 ${added} 集到本地队列（共 ${queueLength()} 项）。播放地址与真实下载待 V2-3 下载队列接入，尚未开始下载`
-      : `本剧已全部在队列中（共 ${queueLength()} 项）`
-  )
+  if (downloadViaLocal()) {
+    // 全部只登记占位（plan=null）：逐集 Resolve ×N 会锤引擎，地址留待降级面恢复真桥后统一处理
+    const now = Date.now()
+    const items = chapters.value.map((ch, i) => ({
+      dramaId: d.id,
+      title: d.title,
+      chapter: ch as Record<string, any>,
+      episode: chapterEpisode(ch, i),
+      plan: null,
+      addedAt: now
+    }))
+    const added = enqueueDownloads(items)
+    showToast(
+      added
+        ? `已登记 ${added} 集到本地队列（共 ${queueLength()} 项）。播放地址与真实下载待 V2-3 下载队列接入，尚未开始下载`
+        : `本剧已全部在队列中（共 ${queueLength()} 项）`
+    )
+    return
+  }
+  downloading.value = true
+  try {
+    // 下载全部=当前季已加载全部 chapters；index 用 chapterEpisode（currentEpisode 优先，兜底位序+1）
+    const entries: DownloadEntry[] = chapters.value.map((ch, i) => ({ chapter: ch, index: chapterEpisode(ch, i) }))
+    toastQueued(await enqueueChunks(entries))
+  } catch (e: any) {
+    showToast(L.dlFail(e?.message ?? e))
+  } finally {
+    downloading.value = false
+  }
 }
 
 async function onFollow() {
@@ -434,7 +510,10 @@ watch(
       </div>
     </template>
 
-    <div v-if="toast" class="toast">{{ toast }}</div>
+    <div v-if="toast" class="toast">
+      {{ toast }}
+      <button v-if="toastLink" class="toast-action" @click="goToastLink">{{ L.dlToastGo }}</button>
+    </div>
   </div>
 </template>
 
@@ -720,5 +799,19 @@ watch(
   max-width: 78%;
   box-shadow: 0 6px 24px var(--guo-shadow);
   z-index: 60;
+}
+/* v2-I：真实入队成功 toast 内的跳转按钮（→ /downloads） */
+.toast-action {
+  margin-left: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 </style>
