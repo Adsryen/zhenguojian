@@ -62,6 +62,8 @@ type Request struct {
 	Index   int
 	Drama   map[string]any
 	Chapter map[string]any
+	// Quality 是核心 resolve 档位：0=自动，其余为 540/720/1080。
+	Quality int
 }
 
 // Resolver 把 (drama, chapter, index) 解析成播放计划。
@@ -344,7 +346,7 @@ func (s *Service) Open(ctx context.Context, req Request) error {
 		return ErrClosed // resolve 期间可能被 Close
 	}
 	s.req = &Request{DramaID: req.DramaID, Title: req.Title, Index: req.Index,
-		Drama: req.Drama, Chapter: req.Chapter}
+		Drama: req.Drama, Chapter: req.Chapter, Quality: req.Quality}
 	s.plan = &plan
 	s.durMs = int64(plan.DurationSec * 1000)
 	s.pendingResumeMs = 0

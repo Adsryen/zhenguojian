@@ -273,7 +273,7 @@ export interface NativeApi {
   resolve(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<ResolvePlan>
   // ── V2-3c 播放桥（app.go「V2-3c 播放绑定」；事件 player:tick/ended/error + danmaku:stats，见 stores/player.ts）──
   /** 起播：drama/chapter 原样对象交给 Go，Go 内部走核心 resolve；index 1 起始；返回 Snapshot */
-  playerOpen(drama: Drama, chapter: Chapter, index: number): Promise<PlayerSnapshot>
+  playerOpen(drama: Drama, chapter: Chapter, index: number, quality?: string): Promise<PlayerSnapshot>
   playerPlay(): Promise<void>
   pauseVideo(): Promise<void>
   seekVideo(positionMs: number): Promise<void>

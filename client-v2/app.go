@@ -206,7 +206,7 @@ func (a *App) DanmakuAll(session string) (string, error) {
 type nativePlayerResolver struct{}
 
 func (nativePlayerResolver) Resolve(_ context.Context, req player.Request) (player.Plan, error) {
-	data, err := native.Resolve(req.Drama, req.Chapter, req.Index, 0)
+	data, err := native.Resolve(req.Drama, req.Chapter, req.Index, req.Quality)
 	if err != nil {
 		return player.Plan{}, err
 	}
@@ -224,9 +224,25 @@ func (nativePlayerResolver) Resolve(_ context.Context, req player.Request) (play
 	return plan, nil
 }
 
+// playerQualityCode 把前端画质档位映射为核心 resolve 的整数码。
+// auto/空 → 0（自动），1080/720/540（可带 p 后缀）→ 对应档位。
+func playerQualityCode(q string) (int, error) {
+	switch strings.ToLower(strings.TrimSpace(strings.TrimSuffix(q, "p"))) {
+	case "", "auto":
+		return 0, nil
+	case "1080":
+		return 1080, nil
+	case "720":
+		return 720, nil
+	case "540":
+		return 540, nil
+	}
+	return 0, fmt.Errorf("画质档位无效：%s", q)
+}
+
 // PlayerOpen dramaJSON/chapterJSON = 详情页透传的原样对象；index 为 1 起始集号。
 // Go 内部走核心 resolve（同 v1 编排），返回 player.Snapshot 的 JSON。
-func (a *App) PlayerOpen(dramaJSON, chapterJSON string, index int) (string, error) {
+func (a *App) PlayerOpen(dramaJSON, chapterJSON string, index int, quality string) (string, error) {
 	drama, err := unmarshalObject(dramaJSON)
 	if err != nil {
 		return "", err
@@ -238,6 +254,10 @@ func (a *App) PlayerOpen(dramaJSON, chapterJSON string, index int) (string, erro
 	if index < 1 {
 		return "", errors.New("集号无效")
 	}
+	qualityCode, err := playerQualityCode(quality)
+	if err != nil {
+		return "", err
+	}
 	title, _ := drama["title"].(string)
 	dramaID, _ := drama["id"].(string)
 	err = a.playerSvc.Open(a.ctx, player.Request{
@@ -246,6 +266,7 @@ func (a *App) PlayerOpen(dramaJSON, chapterJSON string, index int) (string, erro
 		Index:   index,
 		Drama:   drama,
 		Chapter: chapter,
+		Quality: qualityCode,
 	})
 	if err != nil {
 		return "", err

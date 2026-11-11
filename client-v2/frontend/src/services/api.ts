@@ -125,8 +125,8 @@ const realApi: NativeApi = {
   browseFilters: (source: string) => callGo<BrowseFiltersResult>('BrowseFilters', source, ''),
   // ── V2-3c 播放绑定：App.{PlayerOpen,PlayerPlay,PlayerPause,PlayerSeek,PlayerSpeed,PlayerVolume,PlayerDanmaku,PlayerClosePlayer,PlayerState,DanmakuAll} ──
   // PlayerOpen 吃 drama/chapter 原样对象 JSON + 1 起始集号，Go 内部走核心 resolve，返回 Snapshot。
-  playerOpen: (drama: Drama, chapter: Chapter, index: number) =>
-    callGo<PlayerSnapshot>('PlayerOpen', JSON.stringify(drama), JSON.stringify(chapter), index),
+  playerOpen: (drama: Drama, chapter: Chapter, index: number, quality?: string) =>
+    callGo<PlayerSnapshot>('PlayerOpen', JSON.stringify(drama), JSON.stringify(chapter), index, quality ?? 'auto'),
   playerPlay: async () => { await callGo('PlayerPlay') },
   pauseVideo: async () => { await callGo('PlayerPause') },
   seekVideo: async (positionMs: number) => { await callGo('PlayerSeek', positionMs) },
@@ -306,7 +306,8 @@ const mockApi: NativeApi = {
     // 与默认构建（无 overlay）一致：模拟 discovery_unavailable，触发前端兜底 chips
     throw new ApiError('筛选墙通道未启用（mock 与默认构建一致）', 'discovery_unavailable')
   },
-  playerOpen: async (drama: Drama, chapter: Chapter, index: number) => {
+  playerOpen: async (drama: Drama, chapter: Chapter, index: number, quality?: string) => {
+    void quality // mock 面画质无真实语义
     await delay(150)
     if (index < 1) throw new ApiError('集号无效', 'bad_video')
     if (!drama || !drama.id) throw new ApiError('播放参数解析失败', 'bad_video')

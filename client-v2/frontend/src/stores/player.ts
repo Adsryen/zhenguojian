@@ -37,6 +37,7 @@ export const DM_DEMO_KEY = 'zgj.danmaku.demo'
 export const AUTOPLAY_KEY = 'zgj.player.autoplay'
 export const QUALITY_KEY = 'zgj.player.quality'
 export const QUALITY_CHOICES = ['auto', '1080', '720', '540'] as const
+const QUALITY_LABELS: Record<string, string> = { auto: '自动', '1080': '1080P', '720': '720P', '540': '540P' }
 /** v1 main.py:2495 节流参数：5s 时间窗 / 5s 位移阈值 */
 export const WATCH_SAVE_INTERVAL_MS = 5000
 export const WATCH_SAVE_POS_DELTA = 5
@@ -107,8 +108,10 @@ export interface PlayerStoreState {
   eventsBus?: EventsBus
   /** V2-F：播完自动连播开关（zgj.player.autoplay，默认开） */
   autoplay: boolean
-  /** V2-F：画质档位 'auto'|'1080'|'720'|'540'（zgj.player.quality；PlayerOpen 未接线，见 hint） */
+  /** V2-F：画质档位 'auto'|'1080'|'720'|'540'（zgj.player.quality） */
   quality: string
+  /** 当前集 chapter 原样对象（画质切换重 resolve 用，免再拉详情） */
+  currentChapter: Chapter | null
   /** V2-F：临时提示（画质待接线/全屏不可用等），8s 自动消失 */
   hint: string
   /** V2-F：静音前音量（M 键恢复用；无桥 mpv mute 属性，音量 0 近似） */
@@ -143,6 +146,7 @@ export const usePlayerStore = defineStore('player', {
     episodeIndex: 0,
     autoplay: localStorage.getItem(AUTOPLAY_KEY) !== '0', // 默认开（仅显式 '0' 关）
     quality: readQuality(),
+    currentChapter: null as Chapter | null,
     hint: '',
     preMuteVolume: 0,
     lastWatchAt: 0,
@@ -222,13 +226,14 @@ export const usePlayerStore = defineStore('player', {
       }
       this.drama = drama
       this.episodeIndex = ep
+      this.currentChapter = chapter
       this.title = `${drama.title || '影片'} · 第${ep}集`
       this.eof = false
       this.eofHandledAt = 0 // 集级播完幂等随会话重置（同集重开——如画质占位——也能再触发）
       if (this.status) this.status = '' // 清掉上一集「已播完」类提示，连播后不留残影
       this.lastWatchAt = Date.now() // 节流基线随会话重置（v1 换集重计）
       this.lastWatchPos = startPosSec
-      const snap = await api.playerOpen(drama, chapter, ep)
+      const snap = await api.playerOpen(drama, chapter, ep, this.quality)
       this.opened = true
       this.running = true
       this.paused = false
@@ -512,8 +517,8 @@ export const usePlayerStore = defineStore('player', {
       }
     },
 
-    /** V2-F：画质档位切换。PlayerOpen 绑定暂无 quality 形参（禁改 app.go）：
-     *  先记住选择（zgj.player.quality）+ 重开当前集续播作占位，hint 明示「待核心接线」，不假成功。 */
+    /** 画质档位切换：记住偏好（zgj.player.quality）后带新档位重 resolve
+     *  当前集并原位续播（对齐 v1 _switch_route 的换档即重开）。 */
     async setQuality(q: string) {
       if (!(QUALITY_CHOICES as readonly string[]).includes(q) || q === this.quality) return
       this.quality = q
@@ -523,15 +528,16 @@ export const usePlayerStore = defineStore('player', {
         return
       }
       const pos = this.position
+      const chapter = this.currentChapter
       this.loading = true
       try {
-        await this.openEpisode(this.drama, this.episodeIndex, pos, null) // 占位：同集原位重开
+        await this.openEpisode(this.drama, this.episodeIndex, pos, chapter)
+        this.setHint(`已切换到${QUALITY_LABELS[q] ?? q}，从原位置继续播放`)
       } catch {
         /* 重开失败不叠加提示，错误位已有 */
       } finally {
         this.loading = false
       }
-      this.setHint('画质切换待核心接线：偏好已记住，本次为重开当前集，清晰度未变')
     },
 
     /** V2-F：临时提示位（8s 自动消失，v1 帮助浮层同款节拍） */
