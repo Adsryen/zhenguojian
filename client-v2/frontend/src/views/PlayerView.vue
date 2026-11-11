@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/* PlayerView（V2-3c）：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定，兼容 ?drama=<id>）→ store.bootFromQuery。
+/* PlayerView（V2-3c + V2-F 播放器体验包）：路由 query（d/ep/pos/c，dramaRef.playerRoute 约定，兼容 ?drama=<id>）→ store.bootFromQuery。
    控制条 = 播放/暂停、进度条（拖拽 Seek）、倍速 0.5–3（v1 SPEED_CHOICES，player.py:61）、
    音量（0-100，持久化 zgj.player.volume，v1 player.py:1899-1905 语义）、弹幕开关（PlayerDanmaku）、
    播完「下一集」（player:ended → playNext，v1 player.py:1185 语义）、关闭=PlayerClosePlayer+返回。
@@ -10,12 +10,67 @@
    加载/出错/播完/未开播上报零尺寸让位 DOM 覆盖层；离开 detach 隐藏。
    V2-4b 点击穿透带：随几何上报 PlayerHitBands(top,bottom)——覆盖层与视频
    矩形的实际重叠高度（物理像素），Go 侧 WM_NCHITTEST 命中带内让给 WebView2。
-   mock/无桥/回退开关下 attach 返回 embedded:false，本组件零特殊分支（reportBounds 直通短路）。 */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+   mock/无桥/回退开关下 attach 返回 embedded:false，本组件零特殊分支（reportBounds 直通短路）。
+   ── V2-F 追加（体验包）──
+   ① 全屏：按钮 + F 键 → window.runtime.WindowFullscreen/WindowUnfullscreen
+      （可选调用：本仓库未生成 wailsjs/runtime 垫片文件，frontend/wailsjs 不存在，
+       直接走注入的全局 runtime；不可用时 hint 明示，不假成功）。
+   ② 快捷键全集：Space 播/暂、←→ ±5s、↑↓ 音量±5、F 全屏、M 静音、D 弹幕、? 帮助浮层
+      （8s 自动关 / Esc 关，v1 player.py:1326-1329 + 861 HotkeyHelpOverlay 语义；
+       输入控件聚焦时忽略，对照 v1 main.py:1765-1769）。Esc 无浮层时退出全屏（v1 同款次序）。
+   ③ 常驻 ⏮/⏭（首/末集禁用）+ 播完自动连播（store.markEnded，zgj.player.autoplay 默认开）。
+   ④ 右侧可折叠选集面板（300px/折叠 36px）：只读复用 EpisodeGrid（未改该组件；其
+      current watch 自动切分组，DOM 落位由本层 scrollIntoView '.ep-btn.current' 补齐），
+      点击切集走 store.openEpisode(drama, ep, 0, chapter)。
+   ⑤ 画质下拉（自动/1080/720/540）：PlayerOpen 无 quality 形参（禁改 app.go）→
+      偏好持久化 + 「重开当前集」占位 + hint「画质切换待核心接线」（stores/player.ts setQuality）。
+   ⑥ 进度 5s 节流保存：见 store.applySnapshot → maybePersistWatch（v1 main.py:2495 同款）。
+   布局契约不变：.pl-top/.pl-stage/.pl-bar 仍为垂直兄弟链（pl-mid 内 stage 在 bar 之上），
+   hitbands 断言（top.bottom<=stage.top、bar.top>=stage.bottom）继续成立。 */
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { usePlayerStore, SPEED_CHOICES } from '@/stores/player'
+import { usePlayerStore, SPEED_CHOICES, QUALITY_CHOICES } from '@/stores/player'
 import { dramaFromQuery } from '@/services/dramaRef'
-import { embedApi } from '@/services/api'
+import { api, embedApi } from '@/services/api'
+import type { Chapter } from '@/services/types'
+import EpisodeGrid from '@/components/EpisodeGrid.vue'
+import HotkeyHelp from '@/components/HotkeyHelp.vue'
+
+/* ── V2-F 文案常量表（i18n 前的临时集中位；键名按未来 player.* 规划命名，返报全文） ── */
+const L = {
+  fullscreen: '全屏',
+  exitFullscreen: '退出全屏',
+  fullscreenUnavailable: '全屏不可用：本环境无 Wails runtime 垫片（WindowFullscreen）',
+  prevEpisode: '上一集',
+  nextEpisode: '下一集',
+  autoplayOn: '连播开',
+  autoplayOff: '连播关',
+  autoplayHint: '播完自动连播下一集（zgj.player.autoplay）',
+  quality: '画质',
+  qualityAuto: '自动',
+  episodes: '选集',
+  episodesCollapse: '收起选集',
+  episodesExpand: '展开选集',
+  episodesEmpty: '暂无选集列表',
+  episodesEmptyDemo: '演示模式：暂无选集列表（示例数据）',
+  episodesLoading: '选集加载中…',
+  help: '快捷键帮助',
+  helpTitle: '键盘快捷键',
+  hotkeys: [
+    { keys: '空格', desc: '播放 / 暂停' },
+    { keys: '← / →', desc: '快退 / 快进 5 秒' },
+    { keys: '↑ / ↓', desc: '音量 +5 / −5' },
+    { keys: 'F', desc: '全屏 / 退出全屏' },
+    { keys: 'M', desc: '静音 / 恢复' },
+    { keys: 'D', desc: '弹幕开关' },
+    { keys: '? / Esc', desc: '打开 / 关闭本帮助' }
+  ]
+} as const
+
+const QUALITY_OPTIONS = QUALITY_CHOICES.map((q) => ({
+  value: q,
+  label: q === 'auto' ? L.qualityAuto : `${q}p`
+}))
 
 const route = useRoute()
 const router = useRouter()
@@ -24,9 +79,17 @@ const store = usePlayerStore()
 const dragging = ref(false)
 const dragPos = ref(0)
 
+/* V2-F：全屏态 / 帮助浮层 / 选集面板 */
+const isFullscreen = ref(false)
+const helpOpen = ref(false)
+const panelOpen = ref(true)
+const chapters = ref<Chapter[]>([])
+const chaptersLoading = ref(false)
+const panelBodyEl = ref<HTMLElement | null>(null)
+
 /* ── V2-4 内嵌几何上报 ── */
 const stageEl = ref<HTMLElement | null>(null)
-/* 覆盖层穿透带（V2-4b）：标题条/控制条与 stage 的实际重叠才需要让出命中；
+/* 覆盖层穿透带（V2-4b）：标题条/控制条与 .pl-stage 的实际重叠才需要让出命中；
    现行 flex 兄弟布局重叠恒 0（这些像素本就在 host 窗之外），布局若改为
    叠在画面上（absolute 浮层）自动生效，WndProc 按带返回 HTTRANSPARENT。 */
 const topEl = ref<HTMLElement | null>(null)
@@ -91,6 +154,125 @@ async function onDragEnd() {
   await store.seek(dragPos.value)
 }
 
+/* ── V2-F：全屏 ── */
+type WailsWindowRuntime = {
+  WindowFullscreen?: () => void
+  WindowUnfullscreen?: () => void
+}
+
+function toggleFullscreen() {
+  const rt = (window as unknown as { runtime?: WailsWindowRuntime }).runtime
+  const name = isFullscreen.value ? 'WindowUnfullscreen' : 'WindowFullscreen'
+  const fn = rt?.[name]
+  if (typeof fn !== 'function') {
+    // 垫片文件（wailsjs/runtime）本仓库未生成且真实浏览器无 window.runtime → 明示不可用
+    store.setHint(L.fullscreenUnavailable)
+    return
+  }
+  fn.call(rt)
+  isFullscreen.value = !isFullscreen.value
+}
+
+/* ── V2-F：快捷键分发（输入控件聚焦时忽略；对照 v1 main.py:1765-1769 / player.py:1326-1329） ── */
+function isTypingTarget(t: EventTarget | null): boolean {
+  const el = t as HTMLElement | null
+  if (!el || !el.tagName) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable === true
+}
+
+function onHotkey(e: KeyboardEvent) {
+  if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return
+  const k = e.key
+  if (k === 'Escape') {
+    // v1 次序：帮助浮层在最上 → Esc 先关浮层；无浮层时全屏态 Esc 退出全屏（main.py _on_playback_esc）
+    if (helpOpen.value) helpOpen.value = false
+    else if (isFullscreen.value) toggleFullscreen()
+    return
+  }
+  if (isTypingTarget(e.target)) return
+  switch (k) {
+    case ' ':
+      e.preventDefault() // 防聚焦按钮被原生 Space 再触发一次
+      void store.togglePlay()
+      break
+    case 'ArrowLeft':
+      e.preventDefault()
+      void store.seek(store.position - 5)
+      break
+    case 'ArrowRight':
+      e.preventDefault()
+      void store.seek(store.position + 5)
+      break
+    case 'ArrowUp':
+      e.preventDefault()
+      void store.applyVolume(store.volume + 5)
+      break
+    case 'ArrowDown':
+      e.preventDefault()
+      void store.applyVolume(store.volume - 5)
+      break
+    case 'f':
+    case 'F':
+      toggleFullscreen()
+      break
+    case 'm':
+    case 'M':
+      void store.toggleMute()
+      break
+    case 'd':
+    case 'D':
+      void store.toggleDanmaku()
+      break
+    case '?':
+      helpOpen.value = !helpOpen.value
+      break
+  }
+}
+
+/* ── V2-F：选集面板数据（只读复用 EpisodeGrid；其接口满足需求，未自写列表） ── */
+async function loadChapters() {
+  const drama = store.drama
+  if (!drama || store.demoMode) {
+    chapters.value = []
+    return
+  }
+  chaptersLoading.value = true
+  try {
+    const d = await api.detail(drama)
+    chapters.value = d.chapters ?? []
+  } catch {
+    chapters.value = []
+  } finally {
+    chaptersLoading.value = false
+    void nextTick(scrollToCurrent)
+  }
+}
+
+function scrollToCurrent() {
+  const el = panelBodyEl.value?.querySelector('.ep-btn.current')
+  if (el) el.scrollIntoView({ block: 'nearest' })
+}
+
+watch(
+  () => store.drama?.id,
+  () => void loadChapters(),
+  { immediate: true }
+)
+watch(
+  () => store.episodeIndex,
+  () => void nextTick(scrollToCurrent)
+)
+
+function onEpisodeSelect(chapter: Chapter, _index: number, episode: number) {
+  if (!store.drama || episode === store.episodeIndex) return
+  void store.openEpisode(store.drama, episode, 0, chapter)
+}
+
+function onQualityChange(ev: Event) {
+  void store.setQuality((ev.target as HTMLSelectElement).value)
+}
+
 function dramaTitleFromQuery(): string {
   try {
     return dramaFromQuery(String(route.query.drama ?? ''), route.query as Record<string | number | symbol, unknown>).title || ''
@@ -127,6 +309,7 @@ onMounted(async () => {
     window.addEventListener('resize', onStageResize)
   }
   void reportBounds() // 隐藏态起手（running 尚未翻转，防陈旧矩形残留）
+  window.addEventListener('keydown', onHotkey)
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
   void reportBounds()
 })
@@ -137,6 +320,7 @@ onBeforeUnmount(() => {
   barsRO?.disconnect()
   barsRO = undefined
   window.removeEventListener('resize', onStageResize)
+  window.removeEventListener('keydown', onHotkey)
   if (embedActive) void embedApi.detach()
   void store.shutdown()
 })
@@ -155,71 +339,142 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
-      <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
-      <div v-else-if="store.error" class="pl-hint err">{{ store.error }}</div>
-      <div v-else class="pl-stage-inner">
-        <div class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
-          <span class="pl-disc-core" />
+    <div class="pl-mid">
+      <div class="pl-col">
+        <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
+          <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
+          <div v-else-if="store.error" class="pl-hint err">{{ store.error }}</div>
+          <div v-else class="pl-stage-inner">
+            <div class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
+              <span class="pl-disc-core" />
+            </div>
+            <div v-if="store.eof" class="pl-ended">
+              <span class="pl-ended-txt">本集已播完</span>
+              <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
+                {{ L.nextEpisode }}
+              </button>
+              <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
+            </div>
+            <div v-else-if="store.paused && !store.loading" class="pl-bigplay">▶</div>
+          </div>
         </div>
-        <div v-if="store.eof" class="pl-ended">
-          <span class="pl-ended-txt">本集已播完</span>
-          <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
-            下一集
+
+        <footer class="pl-bar" ref="barEl">
+          <button
+            class="pl-btn nav prev"
+            type="button"
+            :disabled="!store.hasPrevEpisode"
+            :title="L.prevEpisode"
+            @click="store.playPrev()"
+          >⏮</button>
+          <button
+            class="pl-btn nav next-ep"
+            type="button"
+            :disabled="!store.hasNextEpisode"
+            :title="L.nextEpisode"
+            @click="store.playNext()"
+          >⏭</button>
+          <button class="pl-btn" type="button" :title="store.paused ? '播放' : '暂停'" @click="store.togglePlay()">
+            {{ store.paused ? '▶' : '⏸' }}
           </button>
-          <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
-        </div>
-        <div v-else-if="store.paused && !store.loading" class="pl-bigplay">▶</div>
+          <span class="pl-time">{{ store.posLabel }} / {{ store.durLabel }}</span>
+          <input
+            v-model.number="sliderValue"
+            class="pl-slider grow"
+            type="range"
+            min="0"
+            :max="Math.max(store.duration, 1)"
+            step="0.5"
+            @pointerdown="onDragStart"
+            @change="onDragEnd"
+          />
+          <label class="pl-group">
+            <span class="pl-label">倍速</span>
+            <select class="pl-select" :value="store.speed" @change="store.setSpeed(Number(($event.target as HTMLSelectElement).value))">
+              <option v-for="sp in SPEED_CHOICES" :key="sp" :value="sp">{{ sp }}×</option>
+            </select>
+          </label>
+          <label class="pl-group">
+            <span class="pl-label">音量</span>
+            <input
+              class="pl-slider vol"
+              type="range"
+              min="0"
+              max="100"
+              step="1"
+              :value="store.volume"
+              @input="store.applyVolume(Number(($event.target as HTMLInputElement).value))"
+            />
+            <span class="pl-time">{{ store.volume }}</span>
+          </label>
+          <label class="pl-group">
+            <span class="pl-label">{{ L.quality }}</span>
+            <select class="pl-select quality" :value="store.quality" @change="onQualityChange">
+              <option v-for="q in QUALITY_OPTIONS" :key="q.value" :value="q.value">{{ q.label }}</option>
+            </select>
+          </label>
+          <button
+            class="pl-btn ghost ap"
+            :class="{ off: !store.autoplay }"
+            type="button"
+            :title="L.autoplayHint"
+            @click="store.setAutoplay(!store.autoplay)"
+          >{{ store.autoplay ? L.autoplayOn : L.autoplayOff }}</button>
+          <button
+            class="pl-btn ghost dm"
+            :class="{ off: !store.danmakuOn }"
+            type="button"
+            title="弹幕开关"
+            @click="store.toggleDanmaku()"
+          >
+            弹幕{{ store.danmakuOn ? '开' : '关' }}
+          </button>
+          <button
+            class="pl-btn ghost fs"
+            type="button"
+            :title="isFullscreen ? L.exitFullscreen : L.fullscreen"
+            @click="toggleFullscreen"
+          >{{ isFullscreen ? L.exitFullscreen : L.fullscreen }}</button>
+          <button class="pl-btn ghost hk" type="button" :title="L.help" @click="helpOpen = !helpOpen">⌨</button>
+          <button class="pl-btn ghost close" type="button" @click="closePlayer">关闭</button>
+        </footer>
+
+        <div v-if="store.status" class="pl-status" :class="{ warn: store.demoMode }">{{ store.status }}</div>
       </div>
+
+      <aside class="pl-panel" :class="{ collapsed: !panelOpen }">
+        <template v-if="panelOpen">
+          <div class="pl-panel-head">
+            <span class="pl-panel-title">{{ L.episodes }}<span v-if="store.episodeIndex" class="pl-panel-cur">· 第{{ store.episodeIndex }}集</span></span>
+            <button class="pl-btn ghost sm" type="button" :title="L.episodesCollapse" @click="panelOpen = false">▸</button>
+          </div>
+          <div ref="panelBodyEl" class="pl-panel-body">
+            <div v-if="chaptersLoading" class="pl-panel-note">{{ L.episodesLoading }}</div>
+            <div v-else-if="!chapters.length" class="pl-panel-note">{{ store.demoMode ? L.episodesEmptyDemo : L.episodesEmpty }}</div>
+            <EpisodeGrid
+              v-else
+              :chapters="chapters"
+              :current="store.episodeIndex"
+              :drama-vip="store.drama?.vip"
+              @select="onEpisodeSelect"
+            />
+          </div>
+        </template>
+        <button v-else class="pl-panel-tab" type="button" :title="L.episodesExpand" @click="panelOpen = true">
+          {{ L.episodes }}
+        </button>
+      </aside>
     </div>
 
-    <footer class="pl-bar" ref="barEl">
-      <button class="pl-btn" type="button" :title="store.paused ? '播放' : '暂停'" @click="store.togglePlay()">
-        {{ store.paused ? '▶' : '⏸' }}
-      </button>
-      <span class="pl-time">{{ store.posLabel }} / {{ store.durLabel }}</span>
-      <input
-        v-model.number="sliderValue"
-        class="pl-slider grow"
-        type="range"
-        min="0"
-        :max="Math.max(store.duration, 1)"
-        step="0.5"
-        @pointerdown="onDragStart"
-        @change="onDragEnd"
-      />
-      <label class="pl-group">
-        <span class="pl-label">倍速</span>
-        <select class="pl-select" :value="store.speed" @change="store.setSpeed(Number(($event.target as HTMLSelectElement).value))">
-          <option v-for="sp in SPEED_CHOICES" :key="sp" :value="sp">{{ sp }}×</option>
-        </select>
-      </label>
-      <label class="pl-group">
-        <span class="pl-label">音量</span>
-        <input
-          class="pl-slider vol"
-          type="range"
-          min="0"
-          max="100"
-          step="1"
-          :value="store.volume"
-          @input="store.applyVolume(Number(($event.target as HTMLInputElement).value))"
-        />
-        <span class="pl-time">{{ store.volume }}</span>
-      </label>
-      <button
-        class="pl-btn ghost dm"
-        :class="{ off: !store.danmakuOn }"
-        type="button"
-        title="弹幕开关"
-        @click="store.toggleDanmaku()"
-      >
-        弹幕{{ store.danmakuOn ? '开' : '关' }}
-      </button>
-      <button class="pl-btn ghost close" type="button" @click="closePlayer">关闭</button>
-    </footer>
+    <HotkeyHelp
+      v-if="helpOpen"
+      :title="L.helpTitle"
+      :rows="L.hotkeys"
+      :auto-close-ms="8000"
+      @close="helpOpen = false"
+    />
 
-    <div v-if="store.status" class="pl-status" :class="{ warn: store.demoMode }">{{ store.status }}</div>
+    <div v-if="store.hint" class="pl-toast" role="status">{{ store.hint }}</div>
   </div>
 </template>
 
@@ -266,6 +521,18 @@ onBeforeUnmount(() => {
 }
 .pl-badge.warn {
   color: var(--warning, #e6a23c);
+}
+/* V2-F：stage/bar 与选集面板并排的中间行（stage/bar 仍是 pl-col 内垂直兄弟，穿透带契约不变） */
+.pl-mid {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.pl-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 .pl-stage {
   flex: 1;
@@ -343,6 +610,7 @@ onBeforeUnmount(() => {
 .pl-bar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 10px 16px;
   border-top: 1px solid var(--border);
@@ -360,7 +628,16 @@ onBeforeUnmount(() => {
 .pl-btn.ghost {
   background: transparent;
 }
-.pl-btn.dm.off {
+.pl-btn.sm {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.pl-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pl-btn.dm.off,
+.pl-btn.ap.off {
   opacity: 0.55;
 }
 .pl-btn.close {
@@ -412,5 +689,80 @@ onBeforeUnmount(() => {
 }
 .pl-status.warn {
   color: var(--accent);
+}
+/* V2-F：右侧选集面板（展开 300 / 折叠 36） */
+.pl-panel {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.pl-panel.collapsed {
+  width: 36px;
+}
+.pl-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.pl-panel-title {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pl-panel-cur {
+  margin-left: 6px;
+  font-weight: 400;
+  color: var(--muted, #9aa3b2);
+  font-size: 12px;
+}
+.pl-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+.pl-panel-note {
+  font-size: 12px;
+  color: var(--muted, #9aa3b2);
+  padding: 6px 0;
+}
+.pl-panel-tab {
+  writing-mode: vertical-rl;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--muted, #9aa3b2);
+  font-size: 12px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  padding: 10px 0;
+}
+.pl-panel-tab:hover {
+  color: var(--accent);
+}
+/* V2-F：临时提示 toast（画质待接线/全屏不可用等，8s 自动消失） */
+.pl-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  transform: translateX(-50%);
+  z-index: 70;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--guo-radius-lg);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 </style>
