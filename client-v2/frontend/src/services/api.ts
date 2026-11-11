@@ -29,6 +29,7 @@ import type {
 import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
+import { mockSuggestions } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
   deleteHistoryEntry,
@@ -178,7 +179,25 @@ const realApi: NativeApi = {
       JSON.stringify(jobIds)
     ),
   mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id),
-  downloadDirectory: () => callGo<DownloadDirectoryInfo>('DownloadDirectory')
+  downloadDirectory: () => callGo<DownloadDirectoryInfo>('DownloadDirectory'),
+  // ── 搜索联想：App.Suggest(query)→data JSON {items:[]}（bindings_suggest.go；
+  //    Linux 探针 2026-11-11：真实核心 items 为 string[]，如「妈」→10 条剧名）。
+  //    兼容对象数组：name/text/title 任一字段取标签（v1 main.py done() 同款防御）。──
+  suggestions: async (q: string) => {
+    const raw = await callGo<{ items?: unknown } | unknown[]>('Suggest', q)
+    const list = Array.isArray(raw) ? raw : (raw as { items?: unknown })?.items
+    if (!Array.isArray(list)) return []
+    const out: string[] = []
+    for (const it of list) {
+      if (typeof it === 'string') { if (it.trim()) out.push(it.trim()) }
+      else if (it && typeof it === 'object') {
+        const o = it as Record<string, unknown>
+        const label = String(o.name ?? o.text ?? o.title ?? '').trim()
+        if (label) out.push(label)
+      }
+    }
+    return out.slice(0, 10)
+  }
 }
 
 /* mock 播放内核（V2-3c 契约）：500ms 模拟 tick（与真实事件源同频），
@@ -477,7 +496,14 @@ const mockApi: NativeApi = {
     mockSaveDownloadSettings(concurrency, bySource, mergeVerify),
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
   mergeCancel: async (id) => mockMergeCancel(id),
-  downloadDirectory: async () => mockDownloadDirectory()
+  downloadDirectory: async () => mockDownloadDirectory(),
+  // ── 搜索联想 mock（fixtures.mockSuggestions，示例数据）；调用计数落
+  //    window.__zgjSuggestCalls 供 headless 防抖/门控断言（同 __zgjHitBands 先例）──
+  suggestions: async (q: string) => {
+    if (typeof window !== 'undefined') window.__zgjSuggestCalls = (window.__zgjSuggestCalls ?? 0) + 1
+    await delay(120 + Math.random() * 160)
+    return mockSuggestions(q)
+  }
 }
 
 /* 降级策略：真实 exe 里桥必在；若 WebView2 初始化竞态导致 window.go 短暂缺失，

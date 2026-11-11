@@ -4,7 +4,7 @@
    全部来源：orderedSources 里 enabled && implemented 的源并行扇出（worker 池并发≤4，
    各源 page1，lane=search:<slug> 分源互不取消），结果按源分组流式渲染；
    单源失败只落该组失败行，全组皆败才出整体 error 条。勾选态持久化 zgj.search.all。 */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api } from '@/services/api'
@@ -65,6 +65,135 @@ function clearRecents() {
   localStorage.removeItem(recentKey.value)
 }
 
+/* ── 搜索联想词（子代理 G；v1 main.py:1361 _on_search_typed 语义照搬）──
+   门控：query 非空 &&（当前源=红果 || 「全部来源」扇出勾选——扇出含红果，联想同源可用）。
+   其它源/空输入：收起面板，「最近搜索」接管（v1 退化路径同款，互斥显示联想优先）。
+   300ms 防抖 + token 丢过期应答（v1 _suggest_token）；↑↓EnterEsc + 鼠标点击；
+   选中回填输入框后走 doSearch → 最近搜索由既有逻辑记录一次，不双记。 ── */
+const suggestWrap = ref<HTMLElement | null>(null)
+const suggestWords = ref<string[]>([])
+const suggestOpen = ref(false)
+const suggestIndex = ref(-1)
+const suggestLoading = ref(false)
+let suggestTimer: ReturnType<typeof setTimeout> | undefined
+let suggestToken = 0
+let suppressQueryWatch = false // doSearch/选中回填的输入框赋值不重复拉联想（防搜后面板复闪）
+let suggestEnterPicked = false // keydown 已消费 Enter（选中联想词）：keyup.enter 不再触发起常规搜索
+
+const suggestable = computed(() => store.currentSlug === 'hongguo' || searchAll.value)
+
+function closeSuggest() {
+  // 收起 = 作废：清在途防抖 + 递增 token 丢弃已发出的过期应答（否则 Enter 搜索/Esc 后旧请求会复闪面板）
+  clearTimeout(suggestTimer)
+  suggestToken++
+  suggestOpen.value = false
+  suggestIndex.value = -1
+  suggestWords.value = []
+  suggestLoading.value = false
+}
+
+function scheduleSuggest(term: string) {
+  clearTimeout(suggestTimer)
+  const token = ++suggestToken
+  if (!term || !suggestable.value) {
+    closeSuggest()
+    return
+  }
+  suggestTimer = setTimeout(() => {
+    suggestLoading.value = true
+    api
+      .suggestions(term)
+      .then((words) => {
+        if (token !== suggestToken) return // v1：上一次输入的联想词，丢掉
+        suggestWords.value = words
+        suggestOpen.value = words.length > 0 // 空结果/核心异常收起面板回落最近搜索
+        suggestIndex.value = -1
+      })
+      .catch(() => {
+        if (token === suggestToken) closeSuggest()
+      })
+      .finally(() => {
+        if (token === suggestToken) suggestLoading.value = false
+      })
+  }, 300)
+}
+
+watch(query, (v) => {
+  if (suppressQueryWatch) {
+    suppressQueryWatch = false
+    return
+  }
+  scheduleSuggest(v.trim().slice(0, 64))
+})
+
+watch(suggestable, (ok) => {
+  // 切源/勾「全部来源」：门控变化即重估（关联想→收起；开联想且有词→补拉）
+  clearTimeout(suggestTimer)
+  if (!ok) closeSuggest()
+  else if (query.value.trim()) scheduleSuggest(query.value.trim().slice(0, 64))
+})
+
+function onSuggestFocus() {
+  const term = query.value.trim().slice(0, 64)
+  if (!term || !suggestable.value) return
+  if (suggestWords.value.length) suggestOpen.value = true
+  else scheduleSuggest(term)
+}
+
+function pickSuggest(word: string) {
+  if (!word) return
+  clearTimeout(suggestTimer)
+  suggestToken++
+  if (query.value !== word) {
+    suppressQueryWatch = true // 同词赋值不会触发 watcher，避免标志位残留吞掉下一次真实输入
+    query.value = word // v1 _on_suggestion：回填输入再搜索，recents 走 doSearch 既有记录一次
+  }
+  closeSuggest()
+  void doSearch(word)
+}
+
+function onSuggestKeydown(e: KeyboardEvent) {
+  if (e.isComposing || e.keyCode === 229) return // IME 候选中不劫持按键
+  if (!suggestOpen.value || !suggestWords.value.length) return
+  const n = suggestWords.value.length
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    suggestIndex.value = suggestIndex.value < 0 ? 0 : (suggestIndex.value + 1) % n
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    suggestIndex.value = suggestIndex.value < 0 ? n - 1 : (suggestIndex.value - 1 + n) % n
+  } else if (e.key === 'Enter') {
+    if (suggestIndex.value >= 0) {
+      e.preventDefault()
+      suggestEnterPicked = true
+      pickSuggest(suggestWords.value[suggestIndex.value])
+    }
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    closeSuggest()
+  }
+}
+
+function onSearchEnter() {
+  if (suggestEnterPicked) {
+    suggestEnterPicked = false
+    return
+  }
+  closeSuggest()
+  void doSearch()
+}
+
+function onDocClick(e: MouseEvent) {
+  if (!suggestOpen.value) return
+  if (suggestWrap.value && !suggestWrap.value.contains(e.target as Node)) closeSuggest()
+}
+onMounted(() => document.addEventListener('click', onDocClick, true))
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onDocClick, true)
+  clearTimeout(suggestTimer)
+  suggestToken++
+})
+
 async function doSearchAll(term: string, seq: number) {
   // 刷新后立即点搜索：站源表可能还没回来，先等 loadSources（loadSources 自带并发去重/缓存）
   if (!store.sources.length) await store.loadSources()
@@ -82,7 +211,11 @@ async function doSearchAll(term: string, seq: number) {
 async function doSearch(q?: string) {
   const term = (q ?? query.value).trim().slice(0, 64)
   if (!term) return
-  query.value = term
+  if (query.value !== term) {
+    // 程序化回填（联想选中/最近搜索/切源重搜）不重复触发联想拉取
+    suppressQueryWatch = true
+    query.value = term
+  }
   active.value = term
   pushRecent(term)
   const seq = ++requestSeq
@@ -173,7 +306,7 @@ onMounted(async () => {
   </div>
 
   <div class="search-bar">
-    <div class="input-wrap">
+    <div ref="suggestWrap" class="input-wrap suggest-wrap">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
       </svg>
@@ -181,8 +314,33 @@ onMounted(async () => {
         v-model="query"
         placeholder="搜索剧名 / 标签，回车开始"
         maxlength="64"
-        @keyup.enter="doSearch()"
+        data-testid="search-input"
+        autocomplete="off"
+        @focus="onSuggestFocus"
+        @keydown="onSuggestKeydown"
+        @keyup.enter="onSearchEnter"
       />
+      <!-- 联想下拉（v1 hongguo suggestions 对齐）：与「最近搜索」互斥，联想优先 -->
+      <div
+        v-if="suggestOpen"
+        class="sg-panel card"
+        role="listbox"
+        :aria-label="t('search.suggest.aria')"
+        data-testid="suggest-panel"
+      >
+        <button
+          v-for="(w, i) in suggestWords"
+          :key="w"
+          class="sg-item"
+          :class="{ active: i === suggestIndex }"
+          role="option"
+          :aria-selected="i === suggestIndex"
+          data-testid="suggest-item"
+          @mouseenter="suggestIndex = i"
+          @mousedown.prevent="pickSuggest(w)"
+        >{{ w }}</button>
+        <div class="sg-foot" data-testid="suggest-hint">{{ t('search.suggest.hint') }}</div>
+      </div>
     </div>
     <button class="btn primary" :disabled="loading || !query.trim()" @click="doSearch()">
       {{ loading ? '搜索中…' : '搜索' }}
@@ -194,12 +352,12 @@ onMounted(async () => {
     </label>
   </div>
 
-  <div v-if="!searched && recents.length" class="recents">
+  <div v-if="!searched && recents.length && !suggestOpen" class="recents" data-testid="recents">
     <span class="rec-label">最近搜索</span>
     <button v-for="r in recents" :key="r" class="chip" @click="doSearch(r)">{{ r }}</button>
     <button class="link-btn" @click="clearRecents">清空</button>
   </div>
-  <div v-else-if="!searched" class="state-block hint">
+  <div v-else-if="!searched && !suggestOpen" class="state-block hint">
     <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
       <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
     </svg>
@@ -284,6 +442,52 @@ onMounted(async () => {
   gap: 8px;
   flex-wrap: wrap;
   padding: 4px 24px 8px;
+}
+/* 联想面板：观感对齐 SourceSwitch .ss-panel（card + 6px 内衬 + 同款 hover/active） */
+.suggest-wrap {
+  position: relative;
+}
+.sg-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 100%;
+  max-height: 306px;
+  overflow-y: auto;
+  z-index: 30;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 8px 24px var(--guo-shadow);
+}
+.sg-item {
+  display: block;
+  padding: 7px 10px;
+  border: none;
+  border-radius: var(--guo-radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sg-item:hover {
+  background: var(--guo-chip-hover);
+}
+.sg-item.active {
+  background: var(--accent-soft);
+}
+.sg-foot {
+  margin-top: 2px;
+  padding: 5px 10px 2px;
+  font-size: 11px;
+  color: var(--muted-2);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
 }
 .rec-label {
   font-size: 12px;

@@ -139,6 +139,9 @@ const zh: Record<string, string> = {
   'search.groupEmpty': '该源无匹配结果',
   'search.groupFailed': '该源搜索失败：',
   'search.groupRetry': '重试该源',
+  // ---- 搜索页联想词下拉（子代理 G；v1 main.py suggest_box 对齐，仅红果/全部源门控） ----
+  'search.suggest.aria': '搜索联想词',
+  'search.suggest.hint': '↑↓ 选择 · Enter 搜索 · Esc 关闭',
 
   // ---- 跨页横幅兜底（MOCK/DEGRADED；Library 先收敛，Discover 同款文案待并行代理接入） ----
   'banner.mock': 'VITE_MOCK 示例数据，非真实引擎结果',
@@ -371,6 +374,9 @@ const en: Record<string, string> = {
   'search.groupEmpty': 'No matches from this source',
   'search.groupFailed': 'This source failed: ',
   'search.groupRetry': 'Retry this source',
+  // ---- Search page suggestions dropdown (agent G; v1 main.py suggest_box parity, hongguo/all gated) ----
+  'search.suggest.aria': 'Search suggestions',
+  'search.suggest.hint': '↑↓ select · Enter search · Esc close',
 
   'banner.mock': 'VITE_MOCK sample data — not real engine results',
   'banner.degraded': 'Native bridge unavailable; showing locally cached data',

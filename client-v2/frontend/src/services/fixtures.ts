@@ -907,3 +907,40 @@ export function mockRankings(boardId: string, page: number, _force: boolean): {
 export function mockRankingsReset(): void {
   rankStates = {}
 }
+
+/* ---------------------------------------------------------------- 搜索联想（子代理 G）
+   mockSuggestions：红果联想词 mock 池，形状对齐真实探针（items=纯字符串，
+   前缀命中在前、包含命中补位；cap=10 同 hongguoSuggestionLimit，
+   provider_hongguo_suggestions.go:16）。命中不足时以「输入+常见后缀」模板
+   补到 ≥8 条，保证 mock 演示下拉始终有内容。示例数据，仅 VITE_MOCK 使用。 */
+const MOCK_SUGGEST_POOL = [
+  '十八岁太奶奶驾到重整家族荣耀',
+  '十八岁太奶奶驾到2',
+  '太奶奶重生当团宠',
+  '奶奶的传家秘方',
+  '妈咪受辱大小姐回国掀翻全场',
+  '妈来',
+  '闪婚老公是大佬',
+  '闪婚老公竟是隐藏首富',
+  '重生之我在短剧当编剧',
+  '逆流人生之她逆袭了',
+  '医妃倾城之嫡女归来',
+  '无双战神在都市'
+]
+const MOCK_SUGGEST_SUFFIXES = ['第二季', '大结局', '全集', '免费观看', '续集', '番外', '真人版', '小说版']
+
+export function mockSuggestions(query: string): string[] {
+  const q = (query || '').trim()
+  if (!q) return []
+  const prefix = MOCK_SUGGEST_POOL.filter((w) => w.startsWith(q))
+  const contains = MOCK_SUGGEST_POOL.filter((w) => !w.startsWith(q) && w.includes(q))
+  const out: string[] = [...prefix, ...contains]
+  if (out.length < 8) {
+    for (const s of MOCK_SUGGEST_SUFFIXES) {
+      const w = `${q}${s}`
+      if (!out.includes(w)) out.push(w)
+      if (out.length >= 10) break
+    }
+  }
+  return out.slice(0, 10)
+}

@@ -220,6 +220,8 @@ declare global {
     /** mock 验证钩子：置 true 让 embedApi.attach 谎报 embedded:true，
         以驱动 PlayerView 的 setBounds/hitBands 上报链路（纯浏览器无副作用） */
     __zgjMockEmbed?: boolean
+    /** mock 验证钩子：mockApi.suggestions 调用计数（联想防抖/门控断言用；真实桥不写） */
+    __zgjSuggestCalls?: number
   }
 }
 
@@ -318,6 +320,8 @@ export interface NativeApi {
   mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
   mergeCancel(id: string): Promise<{ ok: boolean }>
   downloadDirectory(): Promise<DownloadDirectoryInfo>
+  // ── 搜索联想（bindings_suggest.go App.Suggest；核心应答 items=string[]，红果专属 ≤10 条，app_suggestions.go:10-21）──
+  suggestions(query: string): Promise<string[]>
 }
 
 /** 核心下载根目录（bindings_download.go DownloadDirectory：core action downloadDirectory + os.Stat） */
