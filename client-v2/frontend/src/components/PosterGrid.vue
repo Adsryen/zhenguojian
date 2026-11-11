@@ -21,6 +21,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { t, tf } from '@/services/i18n'
 import SkeletonCard from './SkeletonCard.vue'
 
 const props = withDefaults(
@@ -45,16 +46,7 @@ const emit = defineEmits<{
   (e: 'refresh'): void
 }>()
 
-/* 组件内中文文案常量表（i18n.ts 不归本任务；键表见返报） */
-const L = {
-  epiTotal: (n: number) => `共${n}集`,
-  epiUpdate: (n: number) => `更新至${n}集`,
-  statusOngoing: '更新中',
-  statusFinished: '已完结',
-  pull: '下拉刷新',
-  release: '松开刷新',
-  refreshing: '正在刷新…'
-}
+/* 组件内中文文案已收敛至 i18n.ts grid.*（原 L 表）；t/tf 随 locale 响应 */
 
 /* 集数徽标（右下）：照 v1 poster_wall._badge_text:52-69「集数优先，其次更新状态」，
    并针对 v2 真实数据形状（releaseStatus 混着枚举 ongoing/finished 与中文串）做本地化：
@@ -68,9 +60,11 @@ function badgeText(d: Drama): string {
   const status = String(d.releaseStatus ?? '').trim()
   const eps = Number(d.episodes ?? 0)
   if (/\d+\s*集/.test(status)) return status
-  if (eps > 0) return ONGOING_RE.test(status) || status === 'ongoing' ? L.epiUpdate(eps) : L.epiTotal(eps)
-  if (status === 'ongoing') return L.statusOngoing
-  if (status === 'finished') return L.statusFinished
+  if (eps > 0) return ONGOING_RE.test(status) || status === 'ongoing'
+    ? tf('grid.epiUpdate', { n: eps })
+    : tf('grid.epiTotal', { n: eps })
+  if (status === 'ongoing') return t('grid.statusOngoing')
+  if (status === 'finished') return t('grid.statusFinished')
   return status
 }
 
@@ -239,7 +233,7 @@ const pullState = computed(() =>
   refreshing.value ? 'refreshing' : pullDist.value >= PTR_THRESHOLD ? 'ready' : 'pull'
 )
 const pullText = computed(() =>
-  refreshing.value ? L.refreshing : pullDist.value >= PTR_THRESHOLD ? L.release : L.pull
+  refreshing.value ? t('grid.refreshing') : pullDist.value >= PTR_THRESHOLD ? t('grid.release') : t('grid.pull')
 )
 const contentStyle = computed(() => ({
   transform: pullDist.value ? `translateY(${pullDist.value}px)` : '',
@@ -418,7 +412,7 @@ function onContentClickCapture(e: MouseEvent) {
       </div>
 
       <!-- 翻页加载条 -->
-      <div v-if="loadingMore" class="pg-more">加载中…</div>
+      <div v-if="loadingMore" class="pg-more">{{ t('grid.loadingMore') }}</div>
     </div>
   </div>
 </template>

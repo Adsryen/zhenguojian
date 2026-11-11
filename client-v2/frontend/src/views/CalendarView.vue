@@ -13,22 +13,17 @@ import { MOCK_MODE } from '@/services/api'
 import { resolveCover } from '@/services/covers'
 import { detailRoute, playerRoute } from '@/services/dramaRef'
 import { useCalendarStore, calDateLabel, todayYmd, type CalendarRow } from '@/stores/calendar'
+import { t, tf } from '@/services/i18n'
 
 const router = useRouter()
 const store = useCalendarStore()
 
-/* 新增文案常量表（组件内维护，返报附键表） */
-const L = {
-  genderAll: '全部',
-  genderMale: '男频',
-  genderFemale: '女频'
-}
-/** v1 calendar_panel.py CHIP_GENDERS：("2",全部) ("1",男频) ("0",女频) */
-const GENDER_CHIPS = [
-  { v: 2, label: L.genderAll },
-  { v: 1, label: L.genderMale },
-  { v: 0, label: L.genderFemale }
-]
+/** v1 calendar_panel.py CHIP_GENDERS：("2",全部) ("1",男频) ("0",女频)；文案走 i18n calendar.* */
+const GENDER_CHIPS = computed(() => [
+  { v: 2, label: t('calendar.genderAll') },
+  { v: 1, label: t('calendar.genderMale') },
+  { v: 0, label: t('calendar.genderFemale') }
+])
 function pickGender(v: number) {
   void store.setGender(v)
 }
@@ -103,32 +98,32 @@ onMounted(() => {
 <template>
   <div class="cal-page">
   <div class="page-head">
-    <h1 class="page-title">追剧日历</h1>
+    <h1 class="page-title">{{ t('calendar.title') }}</h1>
     <div class="spacer" />
     <div class="date-nav">
-      <button class="btn icon" :disabled="store.loading" title="前一天" @click="store.prevDay()">
+      <button class="btn icon" :disabled="store.loading" :title="t('calendar.prevDay')" @click="store.prevDay()">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M15 5l-7 7 7 7" /></svg>
       </button>
       <strong class="date-cur">{{ calDateLabel(store.date) }} {{ store.date.slice(4, 6) }}-{{ store.date.slice(6, 8) }}</strong>
-      <button class="btn icon" :disabled="store.loading" title="后一天" @click="store.nextDay()">
+      <button class="btn icon" :disabled="store.loading" :title="t('calendar.nextDay')" @click="store.nextDay()">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5l7 7-7 7" /></svg>
       </button>
-      <button class="btn sm" :disabled="store.loading" @click="store.goToday()">今天</button>
+      <button class="btn sm" :disabled="store.loading" @click="store.goToday()">{{ t('calendar.today') }}</button>
     </div>
-    <button class="btn" :disabled="store.loading" @click="store.load(store.date)">刷新</button>
+    <button class="btn" :disabled="store.loading" @click="store.load(store.date)">{{ t('calendar.refresh') }}</button>
   </div>
 
   <div class="cal-scroll" @scroll.passive="onScroll">
-  <div v-if="MOCK_MODE" class="banner">VITE_MOCK 示例数据，非真实引擎结果</div>
+  <div v-if="MOCK_MODE" class="banner">{{ t('banner.mock') }}</div>
 
   <div v-if="actionErrorText" class="banner warn">{{ actionErrorText }}</div>
 
   <div v-if="store.loading && !store.rows.length" class="state-block">
-    <div class="dots">加载上新日历…</div>
+    <div class="dots">{{ t('calendar.loading') }}</div>
   </div>
   <div v-else-if="store.error && !store.rows.length" class="state-block clickable" @click="store.load(store.date)">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>
-    <div>加载失败：{{ store.error }}（点此重试）</div>
+    <div>{{ tf('calendar.loadFailed', { e: store.error }) }}</div>
   </div>
 
   <template v-else>
@@ -170,7 +165,7 @@ onMounted(() => {
         <div class="cal-body">
           <div class="cal-title-line">
             <button class="cal-title" @click="goDetail(row)">{{ row.drama.title }}</button>
-            <span class="status online">已上线</span>
+            <span class="status online">{{ t('calendar.online') }}</span>
           </div>
           <p class="cal-desc text-muted">{{ row.drama.description }}</p>
           <div class="cal-foot">
@@ -179,17 +174,17 @@ onMounted(() => {
             <span v-if="row.note" class="chip static heat">{{ row.note }}</span>
             <div class="spacer" />
             <button class="btn sm" :class="{ toggled: store.isFollowed(row) }" @click="store.toggleFollow(row)">
-              {{ store.isFollowed(row) ? '已追 ✓' : '追剧' }}
+              {{ store.isFollowed(row) ? t('calendar.followed') : t('calendar.follow') }}
             </button>
             <button class="btn primary sm" @click="goPlay(row)">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
-              播放
+              {{ t('calendar.play') }}
             </button>
           </div>
         </div>
       </div>
 
-      <div v-if="pendingRows.length" class="section-title text-muted">待上线</div>
+      <div v-if="pendingRows.length" class="section-title text-muted">{{ t('calendar.pending') }}</div>
       <div v-for="row in pendingRows" :key="row.id" class="cal-row card">
         <div class="cal-cover" @click="goDetail(row)">
           <img v-if="resolvedCover(row)" :src="coverUrl(resolvedCover(row))" :alt="row.drama.title" />
@@ -199,7 +194,7 @@ onMounted(() => {
         <div class="cal-body">
           <div class="cal-title-line">
             <button class="cal-title" @click="goDetail(row)">{{ row.drama.title }}</button>
-            <span class="status pending">{{ row.hint || '即将上线' }}</span>
+            <span class="status pending">{{ row.hint || t('calendar.soon') }}</span>
           </div>
           <p class="cal-desc text-muted">{{ row.drama.description }}</p>
           <div class="cal-foot">
@@ -207,14 +202,14 @@ onMounted(() => {
             <span v-if="row.note" class="chip static">{{ row.note }}</span>
             <div class="spacer" />
             <button class="btn sm" :class="{ toggled: store.isReserved(row) }" @click="store.toggleReserve(row)">
-              {{ store.isReserved(row) ? '已预约 ✓' : '预约' }}
+              {{ store.isReserved(row) ? t('calendar.reserved') : t('calendar.reserve') }}
             </button>
           </div>
         </div>
       </div>
 
       <div v-if="!store.rows.length" class="state-block inline">
-        <div>这一天暂时没有上新。</div>
+        <div>{{ t('calendar.emptyDay') }}</div>
       </div>
       <div v-else-if="store.statusText" class="list-status text-muted">{{ store.statusText }}</div>
     </div>

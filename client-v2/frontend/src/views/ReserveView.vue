@@ -18,7 +18,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import { resolveCover } from '@/services/covers'
-import { releaseStatusText } from '@/services/i18n'
+import { releaseStatusText, t, tf } from '@/services/i18n'
 import { detailRoute, playerRoute } from '@/services/dramaRef'
 import { formatTime } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -29,20 +29,7 @@ const router = useRouter()
 const watchStore = useWatchStore()
 const appStore = useAppStore()
 
-/* 新增文案常量表（返报附键表；沿用文案不动） */
-const L = {
-  pageTitle: '追更预约',
-  loading: '读取追更列表…',
-  resume: '继续播放',
-  markSeen: '标记已看',
-  seenOn: '已看 ✓',
-  markSeenFail: '看过标记失败',
-  filterAll: '全部',
-  watchedEpPrefix: '看到第 ',
-  emptyFiltered: '这个站源下暂时没有追更的剧。',
-  refresh: '刷新'
-}
-
+/* 文案已收敛至 i18n.ts reserve.*（原组件内 L 表 + 模板内联中文）；t/tf 随 locale 响应 */
 const toast = ref('')
 let toastTimer: number | undefined
 
@@ -125,7 +112,7 @@ const hasProgress = (row: WatchRow) => !!historyById.value[row.id]
 
 function watchedEpText(row: WatchRow): string {
   const h = historyById.value[row.id]
-  return h ? `${L.watchedEpPrefix}${h.episode}集` : ''
+  return h ? tf('reserve.watchedEp', { n: h.episode }) : ''
 }
 
 function goResume(row: WatchRow) {
@@ -139,7 +126,7 @@ async function onMarkSeen(row: WatchRow) {
   try {
     await watchStore.toggleSeen(row.id)
   } catch (e: any) {
-    showToast(e?.message ?? L.markSeenFail)
+    showToast(e?.message ?? t('reserve.markSeenFail'))
   }
 }
 
@@ -147,7 +134,7 @@ async function unfollow(row: WatchRow) {
   try {
     await watchStore.toggleFollow(row.drama)
   } catch (e: any) {
-    showToast(e?.message ?? '取消追剧失败')
+    showToast(e?.message ?? t('reserve.unfollowFail'))
   }
 }
 
@@ -189,24 +176,24 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">{{ L.pageTitle }}</h1>
+    <h1 class="page-title">{{ t('reserve.pageTitle') }}</h1>
     <div class="spacer" />
-    <button class="btn" :disabled="watchStore.loading" @click="void watchStore.load(true)">{{ L.refresh }}</button>
+    <button class="btn" :disabled="watchStore.loading" @click="void watchStore.load(true)">{{ t('reserve.refresh') }}</button>
   </div>
 
   <div v-if="watchStore.loading && !follows.length" class="state-block">
-    <div class="dots">{{ L.loading }}</div>
+    <div class="dots">{{ t('reserve.loading') }}</div>
   </div>
   <div v-else-if="!follows.length" class="state-block">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 21s-7.5-4.9-9.6-9A5.6 5.6 0 0 1 12 6.7 5.6 5.6 0 0 1 21.6 12c-2.1 4.1-9.6 9-9.6 9z" /></svg>
-    <div>还没有追更的剧。</div>
-    <div class="text-muted hint">在详情页点「追剧」，这里就会替你盯着更新（真值存 Go watchstore，无桥时降级本地记录）。</div>
-    <button class="btn primary" @click="router.push('/discover')">去找剧</button>
+    <div>{{ t('reserve.emptyAll') }}</div>
+    <div class="text-muted hint">{{ t('reserve.emptyHint') }}</div>
+    <button class="btn primary" @click="router.push('/discover')">{{ t('reserve.findDrama') }}</button>
   </div>
   <template v-else>
     <!-- ③ 站源筛选 chips（v1 _refresh_chips：>1 源才显示） -->
     <div v-if="showChips" class="chips source-chips" data-testid="source-chips">
-      <button class="chip" :class="{ active: !sourceFilter }" @click="sourceFilter = null">{{ L.filterAll }}</button>
+      <button class="chip" :class="{ active: !sourceFilter }" @click="sourceFilter = null">{{ t('reserve.filterAll') }}</button>
       <button
         v-for="s in sourceChips"
         :key="s"
@@ -227,7 +214,7 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
         <div class="cal-body">
           <div class="cal-title-line">
             <button class="cal-title" @click="router.push(detailRoute(f.drama))">{{ f.drama.title }}</button>
-            <span class="status">{{ followDate(f) }} 加入</span>
+            <span class="status">{{ tf('reserve.added', { d: followDate(f) }) }}</span>
             <span v-if="watchedEpText(f)" class="status online">{{ watchedEpText(f) }}</span>
           </div>
           <p class="cal-desc text-muted">{{ releaseStatusText(f.drama.releaseStatus) || f.drama.description }}</p>
@@ -235,18 +222,18 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
             <div class="spacer" />
             <button v-if="hasProgress(f)" class="btn primary sm" :title="watchedEpText(f)" @click="goResume(f)">
               <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
-              {{ L.resume }}
+              {{ t('reserve.resume') }}
             </button>
             <button class="btn sm" :class="{ toggled: watchStore.isSeen(f.id) }" @click="onMarkSeen(f)">
-              {{ watchStore.isSeen(f.id) ? L.seenOn : L.markSeen }}
+              {{ watchStore.isSeen(f.id) ? t('reserve.seenOn') : t('reserve.markSeen') }}
             </button>
-            <button class="btn sm" @click="router.push(detailRoute(f.drama))">去详情页</button>
-            <button class="btn sm danger" @click="unfollow(f)">取消追剧</button>
+            <button class="btn sm" @click="router.push(detailRoute(f.drama))">{{ t('reserve.detail') }}</button>
+            <button class="btn sm danger" @click="unfollow(f)">{{ t('reserve.unfollow') }}</button>
           </div>
         </div>
       </div>
       <div v-if="!visibleFollows.length" class="state-block inline">
-        <div>{{ L.emptyFiltered }}</div>
+        <div>{{ t('reserve.emptyFiltered') }}</div>
       </div>
     </div>
   </template>

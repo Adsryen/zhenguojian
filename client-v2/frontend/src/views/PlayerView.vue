@@ -35,42 +35,25 @@ import { api, embedApi } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
+import { t } from '@/services/i18n'
 
-/* ── V2-F 文案常量表（i18n 前的临时集中位；键名按未来 player.* 规划命名，返报全文） ── */
-const L = {
-  fullscreen: '全屏',
-  exitFullscreen: '退出全屏',
-  fullscreenUnavailable: '全屏不可用：本环境无 Wails runtime 垫片（WindowFullscreen）',
-  prevEpisode: '上一集',
-  nextEpisode: '下一集',
-  autoplayOn: '连播开',
-  autoplayOff: '连播关',
-  autoplayHint: '播完自动连播下一集（zgj.player.autoplay）',
-  quality: '画质',
-  qualityAuto: '自动',
-  episodes: '选集',
-  episodesCollapse: '收起选集',
-  episodesExpand: '展开选集',
-  episodesEmpty: '暂无选集列表',
-  episodesEmptyDemo: '演示模式：暂无选集列表（示例数据）',
-  episodesLoading: '选集加载中…',
-  help: '快捷键帮助',
-  helpTitle: '键盘快捷键',
-  hotkeys: [
-    { keys: '空格', desc: '播放 / 暂停' },
-    { keys: '← / →', desc: '快退 / 快进 5 秒' },
-    { keys: '↑ / ↓', desc: '音量 +5 / −5' },
-    { keys: 'F', desc: '全屏 / 退出全屏' },
-    { keys: 'M', desc: '静音 / 恢复' },
-    { keys: 'D', desc: '弹幕开关' },
-    { keys: '? / Esc', desc: '打开 / 关闭本帮助' }
-  ]
-} as const
+/* ── V2-F 文案已收敛至 i18n.ts player.*（原组件内 L 表）；t() 随 locale 响应 ── */
+const hotkeys = computed(() => [
+  { keys: t('player.hotkey.space.keys'), desc: t('player.hotkey.space.desc') },
+  { keys: t('player.hotkey.arrows.keys'), desc: t('player.hotkey.arrows.desc') },
+  { keys: t('player.hotkey.volume.keys'), desc: t('player.hotkey.volume.desc') },
+  { keys: t('player.hotkey.fullscreen.keys'), desc: t('player.hotkey.fullscreen.desc') },
+  { keys: t('player.hotkey.mute.keys'), desc: t('player.hotkey.mute.desc') },
+  { keys: t('player.hotkey.danmaku.keys'), desc: t('player.hotkey.danmaku.desc') },
+  { keys: t('player.hotkey.help.keys'), desc: t('player.hotkey.help.desc') }
+])
 
-const QUALITY_OPTIONS = QUALITY_CHOICES.map((q) => ({
-  value: q,
-  label: q === 'auto' ? L.qualityAuto : `${q}p`
-}))
+const QUALITY_OPTIONS = computed(() =>
+  QUALITY_CHOICES.map((q) => ({
+    value: q,
+    label: q === 'auto' ? t('player.qualityAuto') : `${q}p`
+  }))
+)
 
 const route = useRoute()
 const router = useRouter()
@@ -166,7 +149,7 @@ function toggleFullscreen() {
   const fn = rt?.[name]
   if (typeof fn !== 'function') {
     // 垫片文件（wailsjs/runtime）本仓库未生成且真实浏览器无 window.runtime → 明示不可用
-    store.setHint(L.fullscreenUnavailable)
+    store.setHint(t('player.fullscreenUnavailable'))
     return
   }
   fn.call(rt)
@@ -351,7 +334,7 @@ onBeforeUnmount(() => {
             <div v-if="store.eof" class="pl-ended">
               <span class="pl-ended-txt">本集已播完</span>
               <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
-                {{ L.nextEpisode }}
+                {{ t('player.nextEpisode') }}
               </button>
               <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
             </div>
@@ -364,14 +347,14 @@ onBeforeUnmount(() => {
             class="pl-btn nav prev"
             type="button"
             :disabled="!store.hasPrevEpisode"
-            :title="L.prevEpisode"
+            :title="t('player.prevEpisode')"
             @click="store.playPrev()"
           >⏮</button>
           <button
             class="pl-btn nav next-ep"
             type="button"
             :disabled="!store.hasNextEpisode"
-            :title="L.nextEpisode"
+            :title="t('player.nextEpisode')"
             @click="store.playNext()"
           >⏭</button>
           <button class="pl-btn" type="button" :title="store.paused ? '播放' : '暂停'" @click="store.togglePlay()">
@@ -408,7 +391,7 @@ onBeforeUnmount(() => {
             <span class="pl-time">{{ store.volume }}</span>
           </label>
           <label class="pl-group">
-            <span class="pl-label">{{ L.quality }}</span>
+            <span class="pl-label">{{ t('player.quality') }}</span>
             <select class="pl-select quality" :value="store.quality" @change="onQualityChange">
               <option v-for="q in QUALITY_OPTIONS" :key="q.value" :value="q.value">{{ q.label }}</option>
             </select>
@@ -417,9 +400,9 @@ onBeforeUnmount(() => {
             class="pl-btn ghost ap"
             :class="{ off: !store.autoplay }"
             type="button"
-            :title="L.autoplayHint"
+            :title="t('player.autoplayHint')"
             @click="store.setAutoplay(!store.autoplay)"
-          >{{ store.autoplay ? L.autoplayOn : L.autoplayOff }}</button>
+          >{{ store.autoplay ? t('player.autoplayOn') : t('player.autoplayOff') }}</button>
           <button
             class="pl-btn ghost dm"
             :class="{ off: !store.danmakuOn }"
@@ -432,10 +415,10 @@ onBeforeUnmount(() => {
           <button
             class="pl-btn ghost fs"
             type="button"
-            :title="isFullscreen ? L.exitFullscreen : L.fullscreen"
+            :title="isFullscreen ? t('player.exitFullscreen') : t('player.fullscreen')"
             @click="toggleFullscreen"
-          >{{ isFullscreen ? L.exitFullscreen : L.fullscreen }}</button>
-          <button class="pl-btn ghost hk" type="button" :title="L.help" @click="helpOpen = !helpOpen">⌨</button>
+          >{{ isFullscreen ? t('player.exitFullscreen') : t('player.fullscreen') }}</button>
+          <button class="pl-btn ghost hk" type="button" :title="t('player.help')" @click="helpOpen = !helpOpen">⌨</button>
           <button class="pl-btn ghost close" type="button" @click="closePlayer">关闭</button>
         </footer>
 
@@ -445,12 +428,12 @@ onBeforeUnmount(() => {
       <aside class="pl-panel" :class="{ collapsed: !panelOpen }">
         <template v-if="panelOpen">
           <div class="pl-panel-head">
-            <span class="pl-panel-title">{{ L.episodes }}<span v-if="store.episodeIndex" class="pl-panel-cur">· 第{{ store.episodeIndex }}集</span></span>
-            <button class="pl-btn ghost sm" type="button" :title="L.episodesCollapse" @click="panelOpen = false">▸</button>
+            <span class="pl-panel-title">{{ t('player.episodes') }}<span v-if="store.episodeIndex" class="pl-panel-cur">· 第{{ store.episodeIndex }}集</span></span>
+            <button class="pl-btn ghost sm" type="button" :title="t('player.episodesCollapse')" @click="panelOpen = false">▸</button>
           </div>
           <div ref="panelBodyEl" class="pl-panel-body">
-            <div v-if="chaptersLoading" class="pl-panel-note">{{ L.episodesLoading }}</div>
-            <div v-else-if="!chapters.length" class="pl-panel-note">{{ store.demoMode ? L.episodesEmptyDemo : L.episodesEmpty }}</div>
+            <div v-if="chaptersLoading" class="pl-panel-note">{{ t('player.episodesLoading') }}</div>
+            <div v-else-if="!chapters.length" class="pl-panel-note">{{ store.demoMode ? t('player.episodesEmptyDemo') : t('player.episodesEmpty') }}</div>
             <EpisodeGrid
               v-else
               :chapters="chapters"
@@ -460,16 +443,16 @@ onBeforeUnmount(() => {
             />
           </div>
         </template>
-        <button v-else class="pl-panel-tab" type="button" :title="L.episodesExpand" @click="panelOpen = true">
-          {{ L.episodes }}
+        <button v-else class="pl-panel-tab" type="button" :title="t('player.episodesExpand')" @click="panelOpen = true">
+          {{ t('player.episodes') }}
         </button>
       </aside>
     </div>
 
     <HotkeyHelp
       v-if="helpOpen"
-      :title="L.helpTitle"
-      :rows="L.hotkeys"
+      :title="t('player.helpTitle')"
+      :rows="hotkeys"
       :auto-close-ms="8000"
       @close="helpOpen = false"
     />

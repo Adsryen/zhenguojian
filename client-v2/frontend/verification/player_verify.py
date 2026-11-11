@@ -10,7 +10,7 @@
   ④ 选集面板：展开宽 300 / 折叠宽 36 / 点第3集切集（标题+当前高亮）/ 当前集在面板内可见（落位）。
   ⑤ 上/下一集常驻禁用逻辑：ep1 时 ⏮ 禁用；ep35（mock 末集）时 ⏭ 禁用、⏮ 可用。
   ⑥ 连播：ep3 seek 至片尾 → 自动播第4集；关开关 → LS zgj.player.autoplay='0' 且重载后仍「连播关」。
-  ⑦ 画质下拉存在，选 720 → toast 含「画质切换待核心接线」、LS zgj.player.quality='720'（未假成功，
+  ⑦ 画质下拉存在，选 720 → toast 含「已切换到720P」（mock 实链）或占位提示、LS zgj.player.quality='720'（未假成功，
      真实清晰度未变由占位重开当前集承接）。
 截图：本目录 player-pack.png（面板展开 + toast 可见态）。
 
@@ -289,7 +289,8 @@ def main():
             ls_q = page.evaluate("() => localStorage.getItem('zgj.player.quality')")
             q_val = page.locator(".pl-select.quality").input_value()
             check("⑦ 画质选择写 LS 且下拉值跟手", ls_q == "720" and q_val == "720", f"ls={ls_q} value={q_val}")
-            check("⑦ 未接线提示文案出现", ok7 and "画质切换待核心接线" in toast, f"toast={toast}")
+            # 画质已接核心 resolve：dev:mock 走「已切换到720P」实链分支；无桥/演示态出占位提示
+            check("⑦ 画质切换提示文案出现", ok7 and ("画质切换待核心接线" in toast or "已切换到720P" in toast), f"toast={toast}")
 
             # ── 截图：面板展开 + toast 可见 ──
             page.wait_for_timeout(400)

@@ -4,6 +4,7 @@
    点遮罩关闭；?/Esc 再按关闭（父层按键分发处理）；8s 无操作自动收起（本组件定时器）。
    纯展示组件：文案由父层（PlayerView 的 L 常量表）传入，样式走深色 token。 */
 import { onBeforeUnmount, onMounted } from 'vue'
+import { t } from '@/services/i18n'
 
 interface HotkeyRow {
   keys: string
@@ -36,7 +37,7 @@ onBeforeUnmount(() => {
     <div class="hk-card" @click.stop>
       <div class="hk-head">
         <span class="hk-title">{{ title }}</span>
-        <button class="hk-x" type="button" title="关闭" @click="emit('close')">✕</button>
+        <button class="hk-x" type="button" :title="t('player.helpClose')" @click="emit('close')">✕</button>
       </div>
       <ul class="hk-rows">
         <li v-for="r in rows" :key="r.keys">
@@ -44,7 +45,7 @@ onBeforeUnmount(() => {
           <span class="hk-desc">{{ r.desc }}</span>
         </li>
       </ul>
-      <div class="hk-foot">8 秒后自动关闭 · 点遮罩或按 Esc 立即关闭</div>
+      <div class="hk-foot">{{ t('player.helpFooter') }}</div>
     </div>
   </div>
 </template>

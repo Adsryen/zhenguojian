@@ -211,34 +211,20 @@ async function onRemoveBatch() {
 
 /* ---------------------------------------------------------------- 统计条筛选（v1 _StatBar 对齐，D1 目标3） */
 
-// 新增文案：i18n.ts 不在本任务所有权内，先用组件内中文常量表（待收敛 downloads.statbar.*，届时切 t()）
-const L = {
-  statAll: '全部',
-  statActive: '进行中',
-  statPaused: '已暂停',
-  statCompleted: '已完成',
-  statFailed: '失败',
-  source: '站源',
-  allSources: '全部站源',
-  emptyFiltered: '没有符合筛选条件的任务',
-  emptyFilteredHint: '换个状态或站源，或点「全部」清除筛选',
-  openFolder: '打开所在目录',
-  openTodo: '待后端绑定 OpenDownloadPath 后启用'
-} as const
-
-const STAT_LABELS: Record<Exclude<StatKey, ''>, string> = {
-  active: L.statActive,
-  paused: L.statPaused,
-  completed: L.statCompleted,
-  failed: L.statFailed
-}
+// 统计条文案已收敛至 i18n.ts downloads.statbar.*（原组件内 L 表）；t() 随 locale 响应
+const statLabels = computed<Record<Exclude<StatKey, ''>, string>>(() => ({
+  active: t('downloads.statbar.active'),
+  paused: t('downloads.statbar.paused'),
+  completed: t('downloads.statbar.completed'),
+  failed: t('downloads.statbar.failed')
+}))
 
 const statKey = ref<StatKey>('')
 const sourceFilter = ref('')
 
 const statChips = computed(() => [
-  { key: '' as StatKey, label: L.statAll, count: store.statCounts[''] },
-  ...STAT_GROUPS.map((g) => ({ key: g.key as StatKey, label: STAT_LABELS[g.key], count: store.statCounts[g.key] }))
+  { key: '' as StatKey, label: t('downloads.statbar.all'), count: store.statCounts[''] },
+  ...STAT_GROUPS.map((g) => ({ key: g.key as StatKey, label: statLabels.value[g.key], count: store.statCounts[g.key] }))
 ])
 
 /** slug → 展示名（displayName → name → slug 兜底，同 ReserveView:102 口径） */
@@ -273,7 +259,7 @@ function chooseStat(key: StatKey) {
    （Windows explorer /select 分文件定位，Linux xdg-open，macOS open；
    前端传参 = downloadDir.directory + job.folder 拼出的绝对目录）。 */
 function openPathTitle(job: DownloadJobRow): string {
-  return job.folder ? `${L.openTodo}：${job.folder}` : L.openTodo
+  return job.folder ? `${t('downloads.statbar.openTodo')}：${job.folder}` : t('downloads.statbar.openTodo')
 }
 
 /* ---------------------------------------------------------------- 设置面板 */
@@ -516,9 +502,9 @@ async function onEnqueue() {
         {{ c.label }}<em data-testid="stat-count">{{ c.count }}</em>
       </button>
       <div class="spacer" />
-      <span class="sb-label text-muted">{{ L.source }}</span>
+      <span class="sb-label text-muted">{{ t('downloads.statbar.source') }}</span>
       <select v-model="sourceFilter" class="sel" data-testid="source-select">
-        <option value="">{{ L.allSources }}</option>
+        <option value="">{{ t('downloads.statbar.allSources') }}</option>
         <option v-for="o in sourceOptions" :key="o.slug" :value="o.slug">{{ o.label }}</option>
       </select>
     </div>
@@ -559,8 +545,8 @@ async function onEnqueue() {
 
     <div v-else-if="filteredEmpty" class="state-block" data-testid="filtered-empty">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.35-4.35M8 11h6" /></svg>
-      <div>{{ L.emptyFiltered }}</div>
-      <div class="text-muted hint">{{ L.emptyFilteredHint }}</div>
+      <div>{{ t('downloads.statbar.emptyFiltered') }}</div>
+      <div class="text-muted hint">{{ t('downloads.statbar.emptyFilteredHint') }}</div>
     </div>
 
     <div v-else class="card list">
@@ -601,7 +587,7 @@ async function onEnqueue() {
             disabled
             :title="openPathTitle(job)"
           >
-            {{ L.openFolder }}
+            {{ t('downloads.statbar.openFolder') }}
           </button>
           <button
             v-if="job.state === 'downloading' || job.state === 'queued'"
@@ -715,7 +701,7 @@ async function onEnqueue() {
           </div>
         </div>
         <div class="r-ops">
-          <button class="btn small" data-testid="row-open" disabled :title="openPathTitle(job)">{{ L.openFolder }}</button>
+          <button class="btn small" data-testid="row-open" disabled :title="openPathTitle(job)">{{ t('downloads.statbar.openFolder') }}</button>
           <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
           <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
         </div>

@@ -10,22 +10,17 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { t } from '@/services/i18n'
 
 const props = defineProps<{ drama: Drama }>()
 const emit = defineEmits<{ (e: 'select', drama: Drama): void }>()
 
-/* 组件内中文文案常量表（i18n.ts 不归本任务，新文案一律走 L；键表见返报） */
-const L = {
-  fallbackTitle: '短剧',
-  fallbackChar: '剧',
-  heat: '热度',
-  views: '播放'
-}
+/* 组件内中文文案已收敛至 i18n.ts hero.*（原 L 表）；t 随 locale 响应 */
 
 const COVER_W = 160
 const COVER_H = 224
 
-const title = computed(() => (props.drama.title ?? '').trim() || L.fallbackTitle)
+const title = computed(() => (props.drama.title ?? '').trim() || t('hero.fallbackTitle'))
 const desc = computed(() =>
   String(props.drama.description ?? '')
     .replace(/\s*\n\s*/g, ' ')
@@ -47,11 +42,11 @@ const statText = computed(() => {
   const parts: string[] = []
   const heat = String(props.drama.heat ?? '').trim()
   const views = String(props.drama.views ?? '').trim()
-  if (heat) parts.push(`${L.heat} ${heat}`)
-  if (views) parts.push(`${L.views} ${views}`)
+  if (heat) parts.push(`${t('hero.heat')} ${heat}`)
+  if (views) parts.push(`${t('hero.views')} ${views}`)
   return parts.join(' · ')
 })
-const fallbackChar = computed(() => title.value[0] || L.fallbackChar)
+const fallbackChar = computed(() => title.value[0] || t('hero.fallbackChar'))
 
 /* 封面：与 PosterGrid 同一套 resolveCover（LRU + in-flight 去重，重复 id 安全） */
 const coverSrc = ref('')
