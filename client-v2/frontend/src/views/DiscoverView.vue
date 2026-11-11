@@ -1,8 +1,10 @@
 <script setup lang="ts">
-/* Discover —— 找剧：SourceSwitch + 分类 chips + 虚拟滚动海报墙（catalog 分页，lane=discover）
+/* Discover —— 找剧：SourceSwitch + 分类 chips + 首屏 hero 大卡 + 虚拟滚动海报墙（catalog 分页，lane=discover）
    分类来源：browseFilters(groups[key=category])；默认构建无 overlay → 兜底 hongguo 三分类
-   （值取自 guoapp-src core/provider_hongguo_catalog.go hongguoAppGenres）。 */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+   （值取自 guoapp-src core/provider_hongguo_catalog.go hongguoAppGenres）。
+   v1 质感对齐：hero 大卡（browse_panel.py:388-394 + poster_wall._WallHero）、下拉刷新手势
+   （browse_panel.py:151 set_refresh_enabled/refreshRequested 的手势版，复用既有 loadFirst(force)）。 */
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
@@ -12,6 +14,7 @@ import { t, tf } from '@/services/i18n'
 import { coverDiagnosticText, coverDiagnostics, onCoverDiagnostics, type CoverDiagnostics } from '@/services/covers'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
+import HeroCard from '@/components/HeroCard.vue'
 
 interface Chip {
   id: string
@@ -87,6 +90,80 @@ const FALLBACK_CHIPS: Chip[] = [
   { id: 'ai_series', name: 'AI剧' }
 ]
 
+/* ---- hero 大卡（v1 browse_panel.py:388-394：首个分类且 items 非空 → items[0] 上墙剔除、其余进网格） ----
+   - 仅首个分类（chips[0]，兜底即「全部」）出 hero，与 v1 _is_first_tab 同口径；
+     分类页签切走后 v1 也不出 hero
+   - 条数 <2 不出：只有 1 条时 v1 的墙是空的（items[1:]），这里把这一条留作普通卡片，
+     避免「一张大卡压一片空墙」
+   - 去重：网格剔掉 hero 本体——按 id 且按标题剔（翻页同推荐位会重复同标题，
+     v1 真机反馈过「同一部剧出现两次」正是没剔的后果）
+   - 矮窗隐藏：v1 HERO_MIN_H=140 以下让位给墙；这里等价口径 = 网格可视高 < hero 260 + 一行 200 */
+const HERO_H = 260
+const HERO_MIN_ROW = 200
+const gridWrap = ref<HTMLElement | null>(null)
+const heroFits = ref(true)
+
+const isFirstChip = computed(() => activeChip.value === (chips.value[0]?.id ?? ''))
+const heroDrama = computed<Drama | null>(() => {
+  if (!heroFits.value || !isFirstChip.value) return null
+  if (items.value.length < 2) return null
+  return items.value[0]
+})
+const gridItems = computed<Drama[]>(() => {
+  const hero = heroDrama.value
+  if (!hero) return items.value
+  return items.value.filter((d) => d.id !== hero.id && d.title !== hero.title)
+})
+
+function measureHeroFits() {
+  const el = gridWrap.value
+  if (!el) return
+  const h = el.clientHeight
+  if (h > 0) heroFits.value = h >= HERO_H + HERO_MIN_ROW
+}
+// gridWrap 在 v-else 分支里，出现/重建时重新挂观察（RO 首次 observe 即回调，初值不用另测）
+let gridRo: ResizeObserver | null = null
+watch(gridWrap, (el) => {
+  gridRo?.disconnect()
+  gridRo = el ? new ResizeObserver(() => measureHeroFits()) : null
+  if (el && gridRo) gridRo.observe(el)
+  measureHeroFits()
+})
+
+/* ---- mock 验证钩子（沿用 covers.ts:131-136 __zgjCoverFault 的 window 惯例，仅 MOCK_MODE 挂载） ----
+   - __zgjDiscover.refreshes：force 刷新次数（下拉手势断言）
+   - __zgjDiscoverInjectCatalog='empty'|'single'：注入式改写 catalog 结果，测空/单条不崩。
+     注入态下 page>1 一律返空并停翻页——否则「墙没填满 → 自动补下一页」会把单条边界刷成
+     多页稳态，验证脚本读到的就不是它要断言的那个状态了。 */
+interface DiscoverHook {
+  refreshes: number
+  lastForce: number
+}
+function discoverHook(): DiscoverHook {
+  const w = window as unknown as { __zgjDiscover?: DiscoverHook }
+  if (!w.__zgjDiscover) w.__zgjDiscover = { refreshes: 0, lastForce: 0 }
+  return w.__zgjDiscover
+}
+function injectCatalog(list: Drama[], page: number): Drama[] {
+  if (!MOCK_MODE) return list
+  const mode = (window as unknown as { __zgjDiscoverInjectCatalog?: string }).__zgjDiscoverInjectCatalog
+  if (!mode) return list
+  if (page > 1) return []
+  if (mode === 'empty') return []
+  if (mode === 'single') return list.slice(0, 1)
+  return list
+}
+
+/* 下拉刷新（v1 browse_panel.py:151 set_refresh_enabled + refreshRequested → _refresh 的手势版）：
+   手势在 PosterGrid 内判定，这里只接事件复用既有强刷新入口 loadFirst(true) */
+function onPullRefresh() {
+  loadFirst(true)
+}
+
+function selectDrama(d: Drama) {
+  router.push(detailRoute(d))
+}
+
 async function loadChips(source: string) {
   try {
     const res = await api.browseFilters(source)
@@ -105,6 +182,11 @@ async function loadChips(source: string) {
 async function loadFirst(force = false) {
   const source = store.currentSlug
   if (!source) return
+  if (force && MOCK_MODE) {
+    const hook = discoverHook()
+    hook.refreshes += 1
+    hook.lastForce = Date.now()
+  }
   const seq = ++requestSeq
   loading.value = true
   error.value = ''
@@ -119,7 +201,7 @@ async function loadFirst(force = false) {
       force
     })
     if (seq !== requestSeq) return
-    items.value = res.items ?? []
+    items.value = injectCatalog(res.items ?? [], 1)
     page.value = 1
     hasMore.value = !!res.hasMore
     warning.value = res.warning || (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : DEGRADED ? '原生桥不可用，当前显示本机缓存数据' : '')
@@ -147,9 +229,10 @@ async function loadMore() {
     })
     if (seq !== requestSeq) return
     // 真实引擎 id 在翻页会重复（同推荐位），页内按 id#page 去重即可
-    items.value = items.value.concat(res.items ?? [])
+    const more = injectCatalog(res.items ?? [], page.value + 1)
+    items.value = items.value.concat(more)
     page.value += 1
-    hasMore.value = !!res.hasMore
+    hasMore.value = !!res.hasMore && !!more.length
   } catch (e: any) {
     if (seq !== requestSeq) return
     // 翻页失败：停 auto-load，保留已加载内容 + toast
@@ -195,6 +278,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   unsubCoverDiag?.()
   unsubCoverDiag = undefined
+  gridRo?.disconnect()
+  gridRo = null
 })
 </script>
 
@@ -258,14 +343,22 @@ onBeforeUnmount(() => {
     <div>{{ error }}</div>
     <button class="btn" @click="loadFirst(true)">重试</button>
   </div>
-  <PosterGrid
-    v-else
-    :items="items"
-    :loading="loading"
-    :loading-more="loadingMore"
-    @load-more="loadMore"
-    @select="(d) => router.push(detailRoute(d))"
-  />
+  <div v-else ref="gridWrap" class="grid-wrap">
+    <PosterGrid
+      :items="gridItems"
+      :loading="loading"
+      :loading-more="loadingMore"
+      refreshable
+      :show-hero="!!heroDrama"
+      @load-more="loadMore"
+      @refresh="onPullRefresh"
+      @select="selectDrama"
+    >
+      <template v-if="heroDrama" #hero>
+        <HeroCard :drama="heroDrama" @select="selectDrama" />
+      </template>
+    </PosterGrid>
+  </div>
 
   <div v-if="toast" class="toast">{{ toast }}</div>
 </template>
@@ -299,6 +392,13 @@ onBeforeUnmount(() => {
 }
 .state-block {
   flex: 1;
+}
+/* 网格包装：给 .pg-scroller 一个确定高度的父级，同时是 hero「矮窗隐藏」的测量对象 */
+.grid-wrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .toast {
   position: fixed;
