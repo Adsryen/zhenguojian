@@ -30,7 +30,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, SPEED_CHOICES, QUALITY_CHOICES } from '@/stores/player'
-import { dramaFromQuery } from '@/services/dramaRef'
+import { dramaFromQuery, detailRoute } from '@/services/dramaRef'
 import { api, embedApi } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
@@ -232,6 +232,19 @@ async function loadChapters() {
   }
 }
 
+
+/* 下一季入口（store.checkNextSeason 查到才出现） */
+const nextSeasonLabel = computed(() => {
+  const n = store.nextSeason
+  if (!n) return ''
+  return `去看 ${n.title || `第 ${n.season} ${n.unit}`} ▸`
+})
+function goNextSeason() {
+  const n = store.nextSeason
+  if (!n) return
+  void router.push(detailRoute(n.drama))
+}
+
 function scrollToCurrent() {
   const el = panelBodyEl.value?.querySelector('.ep-btn.current')
   if (el) el.scrollIntoView({ block: 'nearest' })
@@ -357,6 +370,17 @@ onBeforeUnmount(() => {
               <span class="pl-ended-txt">本集已播完</span>
               <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
                 {{ t('player.nextEpisode') }}
+              </button>
+              <!-- 本季真结局：查到下一季给入口（v1 _apply_next_season 语义——不自动跨季播放，
+                   点「去看下一季」进那部剧详情，由用户决定从哪集看起）；查无 v1 状态栏 6s 提示。 -->
+              <button
+                v-else-if="store.nextSeason"
+                class="pl-btn next"
+                type="button"
+                data-testid="pl-next-season"
+                @click.stop="goNextSeason"
+              >
+                {{ nextSeasonLabel }}
               </button>
               <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
             </div>

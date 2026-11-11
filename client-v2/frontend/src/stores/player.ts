@@ -28,6 +28,7 @@ import {
   type PlayerSnapshot
 } from '@/services/types'
 import { dramaFromQuery } from '@/services/dramaRef'
+import { lookupNextSeason, type NextSeasonHit } from '@/services/nextSeason'
 import { mockDanmakuAll } from '@/services/fixtures'
 
 export const VOLUME_KEY = 'zgj.player.volume'
@@ -121,6 +122,8 @@ export interface PlayerStoreState {
   lastWatchPos: number
   /** V2-F：markEnded 幂等记号（已处理播完的集号；换集/seek 回片内重置） */
   eofHandledAt: number
+  /** 本季真结局查到的下一季（v1 _check_next_season_after_end；查无=null） */
+  nextSeason: NextSeasonHit | null
   hintTimer?: number
 }
 
@@ -140,6 +143,7 @@ export const usePlayerStore = defineStore('player', {
     danmakuCount: null,
     danmakuNote: '',
     status: '',
+    nextSeason: null,
     error: '',
     loading: false,
     drama: null,
@@ -230,6 +234,7 @@ export const usePlayerStore = defineStore('player', {
       this.title = `${drama.title || '影片'} · 第${ep}集`
       this.eof = false
       this.eofHandledAt = 0 // 集级播完幂等随会话重置（同集重开——如画质占位——也能再触发）
+      this.nextSeason = null
       if (this.status) this.status = '' // 清掉上一集「已播完」类提示，连播后不留残影
       this.lastWatchAt = Date.now() // 节流基线随会话重置（v1 换集重计）
       this.lastWatchPos = startPosSec
@@ -411,6 +416,20 @@ export const usePlayerStore = defineStore('player', {
         return
       }
       this.status = '本集已播完，可播放下一集'
+      // v1 _check_next_season_after_end：只有「本季真结局」（无下一集）才查下一季，
+      // 不跨季自动播放——查到由 UI 给「去看下一季」入口；查无静默（v1 状态栏 6s 语义并入 hint）。
+      if (!this.hasNextEpisode && this.drama && !this.demoMode) {
+        void this.checkNextSeason()
+      }
+    },
+
+    /** 查下一季（series:next lane；prompted/busy 幂等在 nextSeason.ts 模块内） */
+    async checkNextSeason() {
+      const drama = this.drama
+      if (!drama) return
+      const hit = await lookupNextSeason(drama)
+      this.nextSeason = hit
+      if (!hit) this.status = '本剧已播放完毕（没查到下一季，可在详情页预约）'
     },
 
     /** V2-F：节流落盘——播放中位移≥5s 或距上次≥5s 即写 saveWatch（未完成态） */
