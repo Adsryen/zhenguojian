@@ -3,6 +3,17 @@ import { api } from '@/services/api'
 import type { SourceListItem } from '@/services/types'
 
 /** 全局源状态：所有页面共享当前源与源清单；选择持久化 localStorage。 */
+/* 站源备注表：核心 listSources 不带 note，v1 口径来自
+   zhenguojian/app/zhenguojian/settings_panel.py FALLBACK_SOURCES
+   （连通性观察/使用提示，展示于设置页站源卡片）。 */
+const SOURCE_NOTES: Record<string, string> = {
+  hongguo: '主源，恒可用。',
+  sorani: '播放需登录：设置 > 站源 > 站源账号。',
+  dsd: '上游连通性不稳定，失败时稍后重试。',
+  'huangguo-video': '上游连通性不稳定，失败时稍后重试。',
+  youzi: '18+ 内容，出厂默认停用，需手动打开。',
+}
+
 const STORE_KEY = 'zhenguojian.source'
 /** 站源手动排序（设置页拖拽卡片产生），存完整可见 slug 序列 */
 const ORDER_KEY = 'zgj.source-order'
@@ -66,7 +77,11 @@ export const useAppStore = defineStore('app', {
       this.sourcesLoading = true
       this.sourcesError = ''
       try {
-        this.sources = await api.listSources()
+        this.sources = (await api.listSources()).map((row) =>
+          row.note || !SOURCE_NOTES[row.slug]
+            ? row
+            : { ...row, note: SOURCE_NOTES[row.slug] }
+        )
         const valid = this.sources.find(
           (s) => s.slug === this.currentSlug && s.implemented
         )

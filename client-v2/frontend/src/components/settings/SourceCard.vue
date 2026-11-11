@@ -18,12 +18,17 @@ const emit = defineEmits<{
 
 const label = computed(() => props.source.displayName || props.source.name)
 const on = computed(() => props.source.enabled && props.source.implemented)
+/* 备注口径对齐 v1 settings_widgets.SourceCard：registry note 优先
+   （省略号展示、全文进 title 悬停），未接入次之，成人源再次，
+   全都没有才落 slug 自证。 */
 const note = computed(() =>
-  !props.source.implemented
-    ? t('settings.sources.notImplemented')
-    : props.source.adult
-      ? t('settings.sources.adultNote')
-      : props.source.slug
+  props.source.note
+    ? props.source.note
+    : !props.source.implemented
+      ? t('settings.sources.notImplemented')
+      : props.source.adult
+        ? t('settings.sources.adultNote')
+        : props.source.slug
 )
 
 function onClick() {
@@ -40,7 +45,7 @@ function onClick() {
           {{ label }}
           <span v-if="source.adult" class="sc-adult">18+</span>
         </div>
-        <div class="sc-note">{{ note }}</div>
+        <div class="sc-note" :title="note">{{ note }}</div>
       </div>
       <button
         class="sc-switch"
