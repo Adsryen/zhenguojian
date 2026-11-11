@@ -474,6 +474,8 @@ function seedJob(
 ): DownloadJobRow {
   const job: DownloadJobRow = {
     id: `mock${String(++state.seq).padStart(4, '0')}`,
+    // 对齐核心 app_downloads.go:367：folder = source/jobId（打开所在目录用）
+    folder: `${drama.source || 'hongguo'}/mock${String(state.seq).padStart(4, '0')}`,
     drama,
     chapter: { title: `第${index}集`, currentEpisode: index, duration: 132 + (index % 7) * 9 },
     index,
@@ -748,7 +750,9 @@ export function mockMergeCancel(id: string): { ok: boolean } {
 
 /** 下载根目录 mock（真实面：DownloadDirectory 绑定 = core downloadDirectory + os.Stat） */
 export function mockDownloadDirectory(): { directory: string; exists: boolean } {
-  return { directory: 'D:\\ZhenguoJian\\downloads（示例数据）', exists: true }
+  // 纯 Windows 路径形状：openDownloadPath 等消费端不做 CJK 假设，
+  // 演示横幅文案由消费端 MOCK_MODE 自行标注
+  return { directory: 'D:\\ZhenguoJian\\downloads', exists: true }
 }
 
 /* ---------------------------------------------------------------- V2-2 剧库推荐（有状态 mock）

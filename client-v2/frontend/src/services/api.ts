@@ -180,6 +180,9 @@ const realApi: NativeApi = {
     ),
   mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id),
   downloadDirectory: () => callGo<DownloadDirectoryInfo>('DownloadDirectory'),
+  preloadEpisode: (drama, chapter, index, quality) =>
+    callGo<string>('PreloadEpisode', JSON.stringify(drama), JSON.stringify(chapter), index, quality),
+  openDownloadPath: (path) => callGo<void>('OpenDownloadPath', path),
   // ── 搜索联想：App.Suggest(query)→data JSON {items:[]}（bindings_suggest.go；
   //    Linux 探针 2026-11-11：真实核心 items 为 string[]，如「妈」→10 条剧名）。
   //    兼容对象数组：name/text/title 任一字段取标签（v1 main.py done() 同款防御）。──
@@ -498,6 +501,10 @@ const mockApi: NativeApi = {
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
   mergeCancel: async (id) => mockMergeCancel(id),
   downloadDirectory: async () => mockDownloadDirectory(),
+  preloadEpisode: async () => '',
+  openDownloadPath: async (path: string) => {
+    if (typeof window !== 'undefined') window.__zgjOpenPath = path
+  },
   // ── 搜索联想 mock（fixtures.mockSuggestions，示例数据）；调用计数落
   //    window.__zgjSuggestCalls 供 headless 防抖/门控断言（同 __zgjHitBands 先例）──
   suggestions: async (q: string) => {

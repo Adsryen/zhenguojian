@@ -254,12 +254,24 @@ function chooseStat(key: StatKey) {
   statKey.value = key === '' || key === statKey.value ? '' : key
 }
 
-/* 打开所在目录：api.ts 无对应方法（无桥可用）→ 按钮 disabled + title 说明。
-   依赖请求：Go 壳层新增 App.OpenDownloadPath(path string) error
-   （Windows explorer /select 分文件定位，Linux xdg-open，macOS open；
-   前端传参 = downloadDir.directory + job.folder 拼出的绝对目录）。 */
+/* 打开所在目录（v1 downloads.py _open_path 对齐：目录不存在则先建再开）。
+   Go 壳 App.OpenDownloadPath：Windows explorer，文件路径带 /select 定位。
+   传参 = downloadDir.directory + job.folder 拼绝对目录（job.folder=source/id）。 */
+async function openJobFolder(job: DownloadJobRow) {
+  const dir = store.downloadDir?.directory
+  if (!job.folder || !dir) {
+    showToast(t('downloads.statbar.openTodo'))
+    return
+  }
+  try {
+    // 演示环境（MOCK_MODE）：真实 exe 才开 explorer；mock 落 __zgjOpenPath 钩子可断言
+    await api.openDownloadPath(`${dir}/${job.folder}`)
+  } catch (e) {
+    showToast(tf('downloads.toastOpenFail', { e: (e as Error)?.message ?? String(e) }))
+  }
+}
 function openPathTitle(job: DownloadJobRow): string {
-  return job.folder ? `${t('downloads.statbar.openTodo')}：${job.folder}` : t('downloads.statbar.openTodo')
+  return job.folder ? `${t('downloads.statbar.openFolder')}：${job.folder}` : t('downloads.statbar.openTodo')
 }
 
 /* ---------------------------------------------------------------- 设置面板 */
@@ -584,8 +596,8 @@ async function onEnqueue() {
             v-if="job.state === 'completed'"
             class="btn small"
             data-testid="row-open"
-            disabled
             :title="openPathTitle(job)"
+            @click="openJobFolder(job)"
           >
             {{ t('downloads.statbar.openFolder') }}
           </button>
@@ -701,7 +713,7 @@ async function onEnqueue() {
           </div>
         </div>
         <div class="r-ops">
-          <button class="btn small" data-testid="row-open" disabled :title="openPathTitle(job)">{{ t('downloads.statbar.openFolder') }}</button>
+          <button class="btn small" data-testid="row-open" :title="openPathTitle(job)" @click="openJobFolder(job)">{{ t('downloads.statbar.openFolder') }}</button>
           <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
           <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
         </div>

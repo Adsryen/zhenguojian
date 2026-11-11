@@ -222,6 +222,8 @@ declare global {
     __zgjMockEmbed?: boolean
     /** mock 验证钩子：mockApi.suggestions 调用计数（联想防抖/门控断言用；真实桥不写） */
     __zgjSuggestCalls?: number
+    /** mock 验证钩子：mockApi.openDownloadPath 最近一次路径 */
+    __zgjOpenPath?: string
   }
 }
 
@@ -321,6 +323,10 @@ export interface NativeApi {
   mergeCancel(id: string): Promise<{ ok: boolean }>
   downloadDirectory(): Promise<DownloadDirectoryInfo>
   // ── 搜索联想（bindings_suggest.go App.Suggest；核心应答 items=string[]，红果专属 ≤10 条，app_suggestions.go:10-21）──
+  /** 切集预缓冲（bindings_suggest.go App.PreloadEpisode；失败静默） */
+  preloadEpisode(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<string>
+  /** 资源管理器打开下载目录/文件（bindings_download_windows.go App.OpenDownloadPath） */
+  openDownloadPath(path: string): Promise<void>
   suggestions(query: string): Promise<string[]>
 }
 

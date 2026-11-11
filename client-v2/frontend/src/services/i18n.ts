@@ -371,6 +371,7 @@ const zh: Record<string, string> = {
   'downloads.statbar.emptyFiltered': '没有符合筛选条件的任务',
   'downloads.statbar.emptyFilteredHint': '换个状态或站源，或点「全部」清除筛选',
   'downloads.statbar.openFolder': '打开所在目录',
+  'downloads.toastOpenFail': '打开目录失败：{e}',
   'downloads.statbar.openTodo': '待后端绑定 OpenDownloadPath 后启用'
 }
 
@@ -703,6 +704,7 @@ const en: Record<string, string> = {
   'downloads.statbar.emptyFiltered': 'No tasks match the filters',
   'downloads.statbar.emptyFilteredHint': 'Change status or source, or tap All to clear filters',
   'downloads.statbar.openFolder': 'Open folder',
+  'downloads.toastOpenFail': 'Failed to open folder: {e}',
   'downloads.statbar.openTodo': 'Pending backend OpenDownloadPath binding'
 }
 

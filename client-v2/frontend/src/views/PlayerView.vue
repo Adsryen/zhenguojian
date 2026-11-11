@@ -242,6 +242,28 @@ watch(
   () => void loadChapters(),
   { immediate: true }
 )
+/* ── 预缓冲下一集（v1 main.py set_preload_hook/_on_player_preload_next 对齐：
+   当前集会话建立后预热下一集片头，切集秒开；失败静默不打扰播放） ── */
+const preloadedEp = ref(0)
+async function preloadNext() {
+  if (preloadedEp.value === store.episodeIndex) return
+  preloadedEp.value = store.episodeIndex
+  const drama = store.drama
+  const next = chapters.value[store.episodeIndex] // episodeIndex 1 起 → [ep]=下一集
+  if (!drama || !next || store.demoMode) return
+  try {
+    await api.preloadEpisode(drama, next, store.episodeIndex + 1, store.quality === 'auto' ? 0 : Number(store.quality))
+  } catch {
+    /* v1 同款：预缓冲失败不影响播放 */
+  }
+}
+watch(
+  () => [store.opened, store.episodeIndex] as const,
+  ([opened]) => {
+    if (opened && chapters.value.length) void preloadNext()
+  }
+)
+
 watch(
   () => store.episodeIndex,
   () => void nextTick(scrollToCurrent)
