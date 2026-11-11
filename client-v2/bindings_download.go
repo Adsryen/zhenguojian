@@ -220,6 +220,21 @@ func (a *App) MergeList() (string, error) {
 	return marshalJSON(svc.MergeList())
 }
 
+// ArchiveScan → JSON {directory, exists, groups[]}：下载目录归档产物扫描
+// （交付 B，downloadsvc.ScanArchiveRoot）。文件系统为准 + 索引记录富化；
+// 目录不存在回 {exists:false, groups:[]} 非 error，供归档页签空态展示。
+func (a *App) ArchiveScan() (string, error) {
+	svc, err := a.getDownloadSvc()
+	if err != nil {
+		return "", err
+	}
+	out, err := svc.ScanArchiveRoot()
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(out)
+}
+
 // DownloadDirectory → JSON {directory, exists}：核心下载根目录（分集成品在
 // <root>/<jobId>/media.mp4，合并成品在 <root>/合并/），供归档页签自证扫描位置，
 // 并区分「目录不存在」与「目录存在但暂无归档」。

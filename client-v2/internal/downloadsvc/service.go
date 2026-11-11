@@ -91,6 +91,9 @@ type Service struct {
 	lastSig       string
 	mergeVerify   bool
 	verifyLoaded  bool
+	// 交付 A：merges 表快照持久化（merge_state.go）
+	mergesLoaded     bool
+	mergesFlushTimer *time.Timer
 }
 
 // New 构造服务；Call 缺失时各方法返回错误（不 panic，便于壳降级）。
@@ -131,6 +134,10 @@ func (s *Service) OnStartup(ctx context.Context) {
 		return
 	}
 	s.started = true
+	// 交付 A：恢复 merges 快照；重启前排队中的条目直接唤醒 worker 续跑
+	// （runMergeEntry 执行时重挂 jobs，见 merge_state.go）。
+	s.loadMergesLocked()
+	resumeQueued := s.hasQueuedMergesLocked()
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.wg.Add(2)
@@ -143,6 +150,9 @@ func (s *Service) OnStartup(ctx context.Context) {
 		defer s.wg.Done()
 		s.workerLoop(runCtx)
 	}()
+	if resumeQueued {
+		s.wakeWorker()
+	}
 }
 
 // OnShutdown 停轮询、取消进行中的合并并等 worker 退出。
@@ -167,6 +177,9 @@ func (s *Service) OnShutdown(_ context.Context) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 	}
+	// 交付 A：退出前立即落盘（worker 超时未退时快照仍含 running，
+	// 下次启动按「重启中断」落定，语义自洽）。
+	s.flushMergesNow()
 }
 
 // ---------- 轮询与事件 ----------
@@ -304,6 +317,7 @@ func (s *Service) Snapshot() (map[string]any, error) {
 }
 
 func (s *Service) payloadLocked() map[string]any {
+	s.loadMergesLocked() // 交付 A：未跑 OnStartup 的调用方（绑定直连）也可见恢复表
 	jobs := s.jobs
 	if jobs == nil {
 		jobs = []map[string]any{}
@@ -500,12 +514,21 @@ func (s *Service) mergeVerifyLocked() bool {
 	return s.mergeVerify
 }
 
-func (s *Service) verifyStatePath() string {
+// stateDir DataDir 解析（nil/失败 → 空串 = 内存降级模式）。
+func (s *Service) stateDir() string {
 	if s.dataDir == nil {
 		return ""
 	}
 	dir, err := s.dataDir()
 	if err != nil || dir == "" {
+		return ""
+	}
+	return dir
+}
+
+func (s *Service) verifyStatePath() string {
+	dir := s.stateDir()
+	if dir == "" {
 		return ""
 	}
 	return filepath.Join(dir, "downloads.state.json")
@@ -520,10 +543,8 @@ func (s *Service) saveVerifyState(verify bool) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(path, body, 0o644)
+	// 原 os.WriteFile 直写升级为 tmp+rename 原子写（模式保持 0644）。
+	return writeFileAtomic(path, body, 0o644)
 }
 
 // ---------- 合并队列（v1 _merge_queue FIFO 语义） ----------
@@ -545,6 +566,8 @@ type MergeEntry struct {
 	jobs      []map[string]any
 	cancel    context.CancelFunc
 	createdAt time.Time
+	// restored 交付 A：本条目来自启动快照恢复，jobs 需执行时重挂。
+	restored bool
 }
 
 // 合并状态常量。
@@ -559,6 +582,7 @@ const (
 // MergeList 当前合并条目（绑定 MergeList）。
 func (s *Service) MergeList() []map[string]any {
 	s.mu.Lock()
+	s.loadMergesLocked()
 	defer s.mu.Unlock()
 	body, err := json.Marshal(s.merges)
 	if err != nil {
@@ -584,6 +608,7 @@ func (s *Service) MergeStart(mode string, drama map[string]any, jobIDs []string)
 		return nil, err
 	}
 	s.mu.Lock()
+	s.loadMergesLocked()
 	candidates := make([]map[string]any, 0, len(s.jobs))
 	for _, job := range s.jobs {
 		state, _ := job["state"].(string)
@@ -688,6 +713,7 @@ func (s *Service) MergeStart(mode string, drama map[string]any, jobIDs []string)
 	}
 	s.mu.Unlock()
 	s.wakeWorker()
+	s.markMergesDirty() // 交付 A：入队/替换即变更表
 	s.notify()
 	return map[string]any{"queued": 1, "replaced": replaced, "episodes": episodes}, nil
 }
@@ -695,6 +721,7 @@ func (s *Service) MergeStart(mode string, drama map[string]any, jobIDs []string)
 // MergeCancel id="" 取消全部（运行中 + 队列）；否则单条。
 func (s *Service) MergeCancel(id string) (map[string]any, error) {
 	s.mu.Lock()
+	s.loadMergesLocked()
 	var cancels []context.CancelFunc
 	for _, m := range s.merges {
 		if id != "" && m.ID != id {
@@ -718,6 +745,7 @@ func (s *Service) MergeCancel(id string) (map[string]any, error) {
 			c()
 		}
 	}
+	s.markMergesDirty() // 交付 A：取消即终态变更
 	s.notify()
 	return map[string]any{"ok": true}, nil
 }
@@ -750,12 +778,14 @@ func (s *Service) workerLoop(ctx context.Context) {
 func (s *Service) nextQueued() *MergeEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.loadMergesLocked()
 	for _, m := range s.merges {
 		if m.State == MergeQueued {
 			m.State = MergeRunning
 			m.Stage = "准备中"
 			m.Progress = 0
 			m.Detail = ""
+			s.markMergesDirtyLocked() // 交付 A：queued→running 跃迁落盘
 			return m
 		}
 	}
@@ -775,6 +805,37 @@ func (s *Service) runMergeEntry(ctx context.Context, entry *MergeEntry) {
 		entry.cancel = nil
 		s.mu.Unlock()
 	}()
+
+	// 交付 A：快照恢复的 queued 条目没有 jobs（不可导出字段无法持久化），
+	// 执行时按 DramaID+Episodes 从核心 completed 记录重挂；重挂失败如实
+	// 标 failed，不静默降级（父代理修正第 3 条，方案 a）。
+	s.mu.Lock()
+	needReattach := entry.restored
+	s.mu.Unlock()
+	if needReattach {
+		if _, err := s.refresh(false); err != nil {
+			s.finishMerge(entry, MergeFailed, err.Error())
+			return
+		}
+		s.mu.Lock()
+		entry.jobs = reattachMergeJobs(s.jobs, entry)
+		entry.restored = false
+		n := len(entry.jobs)
+		if n >= 2 {
+			// 集号以实际重建为准（产物名/完成文案随之，防部分命中错标）。
+			episodes := make([]int, 0, n)
+			for _, job := range entry.jobs {
+				episodes = append(episodes, episodeOfJob(job))
+			}
+			entry.Episodes = episodes
+			entry.Count = n
+		}
+		s.mu.Unlock()
+		if n < 2 {
+			s.finishMerge(entry, MergeFailed, reattachFailMsg)
+			return
+		}
+	}
 
 	leased := false
 	if s.call != nil {
@@ -807,6 +868,7 @@ func (s *Service) runMergeEntry(ctx context.Context, entry *MergeEntry) {
 		}
 		s.status = fmt.Sprintf("《%s》合并完成：全%03d-%03d集", entry.Title, entry.Episodes[0], entry.Episodes[len(entry.Episodes)-1])
 		s.mu.Unlock()
+		s.markMergesDirty() // 交付 A：done 终态落盘
 	case errors.Is(err, context.Canceled):
 		s.finishMerge(entry, MergeCanceled, "合并已取消")
 	default:
@@ -823,6 +885,7 @@ func (s *Service) finishMerge(entry *MergeEntry, state, detail string) {
 		s.status = fmt.Sprintf("《%s》合并失败：%s", entry.Title, detail)
 	}
 	s.mu.Unlock()
+	s.markMergesDirty() // 交付 A：failed/canceled 终态落盘
 }
 
 // ---------- helpers ----------
