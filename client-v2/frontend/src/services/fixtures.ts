@@ -815,3 +815,95 @@ export function mockLibraryRecommendations(category: string, force: boolean, mor
 export function mockLibraryPageReset(): void {
   libStates = {}
 }
+
+/* ---------------------------------------------------------------- 榜单侧栏（V2-E rankings，有状态 mock）
+   形状对齐真实核心（guoapp-src/native/core/app_rankings.go:60-94）：
+   rankings 应答平铺 {boardId,page,items:[{rank,drama,metric}],hasMore,
+   totalPages,updatedText,fetchedAt,stale}，**无 boards 键**——候选列表来自
+   独立 action rankingBoards（app_runtime.go:457-462 {items:[…]}），mock 面
+   用 mockRankingBoards 提供同形状。剧本设计：
+   - 2 个榜（hongguo-hot 总热播榜 / huangdou-all 总榜，id/名照真实常量表
+     provider_rankings.go:23-37），每榜 20 条 × 每页 10 条 × 2 页：
+     首屏恰好 10 行名次 1..10（断言①），加载更多追加 11..20 不重复（断言④），
+     两榜标题错位取池（hongguo 起 0 / huangdou 起 10）→ 切榜首屏逐行不同（断言②）。
+    - 榜内去重仍由前端 append（v1 rank_list.py:283-311 seen 集同款）承担；
+      mock 榜内 id 天然唯一，重复页重发时前端 seen 集拦截。
+   仅 VITE_MOCK=1 使用；封面复用本地占位 SVG 池。 */
+
+export interface MockRankingBoard {
+  id: string
+  source: string
+  name: string
+  description: string
+}
+
+const RANK_BOARD_SPECS: MockRankingBoard[] = [
+  { id: 'hongguo-hot', source: 'hongguo', name: '总热播榜', description: '红果站内观看、互动等综合热度，每日更新（示例数据）' },
+  { id: 'huangdou-all', source: 'huangdou', name: '总榜', description: '黄豆短剧全库综合榜，含跨站重合条目（示例数据）' }
+]
+
+const RANK_POOL_TITLES = [
+  '一世之尊', '夜阑直播', '南柯入梦', '山河故人', '逆光情深', '长安小厨娘', '都市医尊', '重生九零',
+  '双面甜妻', '战神归来', '青梅有点甜', '凤还朝', '迷雾追凶', '晚风入怀', '武林外史传', '总裁的替嫁新娘',
+  '星城故事', '归路有灯', '暗河烽火', '爱在烟火处'
+]
+
+let rankStates: Record<string, number> = {} // boardId → 已交付页数（仅用于回显 page）
+
+/** 榜单候选 mock（对应 App.RankingBoards → {items:[…]}，v1 board_box 数据源） */
+export function mockRankingBoards(): { items: MockRankingBoard[] } {
+  return { items: RANK_BOARD_SPECS.map((b) => ({ ...b })) }
+}
+
+/**
+ * 榜单一页 mock（对应 App.Rankings）。page 越界（<1 或 >totalPages）回空增量，
+ * 模拟核心「榜单页码无效」之外的正常耗尽路径；force 在 mock 面无副作用
+ * （真实面跳核心 5min 缓存，缓存语义不在 mock 职责内）。
+ */
+export function mockRankings(boardId: string, page: number, _force: boolean): {
+  boardId: string
+  page: number
+  items: Array<{ rank: number; drama: Drama; metric: string }>
+  hasMore: boolean
+  totalPages: number
+  updatedText: string
+  fetchedAt: string
+  stale: boolean
+} {
+  const totalPages = 2
+  const valid = page >= 1 && page <= totalPages
+  const rows: Array<{ rank: number; drama: Drama; metric: string }> = []
+  if (valid) {
+    const boardOffset = boardId === 'hongguo-hot' ? 0 : 10 // 两榜错位取标题池，切榜首屏逐行不同
+    for (let r = (page - 1) * 10 + 1; r <= page * 10; r++) {
+      const idx = r - 1
+      const base = items[idx % items.length]
+      const drama: Drama = {
+        ...base,
+        id: `${boardId === 'hongguo-hot' ? 'hongguo' : 'huangdou'}:mock-rank-${idx + 1}`,
+        sourceId: `mock-rank-${boardId}-${idx + 1}`,
+        source: boardId === 'hongguo-hot' ? 'hongguo' : 'huangdou',
+        title: RANK_POOL_TITLES[(boardOffset + idx) % RANK_POOL_TITLES.length],
+        // 主池个别条目无 cover（如 午夜档案），行行显式给 p1..p4 循环封面
+        cover: `/posters/p${(idx % 4) + 1}.svg`
+      }
+      rows.push({ rank: r, drama, metric: `${9800 - idx * 137}万热度（示例数据）` })
+    }
+    rankStates[boardId] = Math.max(rankStates[boardId] || 0, page)
+  }
+  return {
+    boardId,
+    page: valid ? page : (rankStates[boardId] || 1),
+    items: rows,
+    hasMore: valid && page < totalPages,
+    totalPages,
+    updatedText: '11月10日已更新（示例数据）',
+    fetchedAt: '2026-11-10T19:00:00Z',
+    stale: false
+  }
+}
+
+/** mock 面清空榜单游标（测试辅助；真实面无壳层状态，无需 reset） */
+export function mockRankingsReset(): void {
+  rankStates = {}
+}

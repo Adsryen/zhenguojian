@@ -19,6 +19,8 @@ import type {
   HistoryRow,
   NativeApi,
   PlayerSnapshot,
+  RankingBoard,
+  RankingsResult,
   ResolvePlan,
   ResourceSettingsSnapshot,
   SourceListItem,
@@ -26,6 +28,7 @@ import type {
 } from './types'
 import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
+import { mockRankingBoards, mockRankings } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
   deleteHistoryEntry,
@@ -107,6 +110,10 @@ const realApi: NativeApi = {
   // ── V2-2 剧库推荐：App.{Recommendations,RecommendationPageReset}（bindings_library.go，位置参数）──
   recommendations: (category, force, more) => callGo<CatalogResult>('Recommendations', category, force, more),
   recommendationPageReset: () => callGo<{ ok: boolean }>('RecommendationPageReset'),
+  // ── V2-E 榜单侧栏：App.{RankingBoards,Rankings}（bindings_rankings.go，应答原样透传；
+  //    rankingBoards 的 {items} 包裹在本层拆掉，v1 boards() 同款）──
+  rankingBoards: () => callGo<{ items?: RankingBoard[] }>('RankingBoards').then((r) => r?.items ?? []),
+  rankings: (board, page, force) => callGo<RankingsResult>('Rankings', board, page, force),
   // Detail 绑定是 dramaJSON 位置参数
   detail: (drama: Drama) => callGo<DetailResult>('Detail', JSON.stringify(drama)),
   // Cover 绑定是 (dramaJSON, force)；返回 data URL 裸字符串非 JSON → callGoRaw
@@ -249,6 +256,15 @@ const mockApi: NativeApi = {
   recommendationPageReset: async () => {
     mockLibraryPageReset()
     return { ok: true }
+  },
+  // V2-E 榜单 mock：应答形状照 app_rankings.go:60-94（无 boards 键，候选列表独立方法）
+  rankingBoards: async () => {
+    await delay(100)
+    return mockRankingBoards().items
+  },
+  rankings: async (board, page, force) => {
+    await delay(180 + Math.random() * 200)
+    return mockRankings(board, page, force)
   },
   detail: async (drama: Drama) => {
     await delay(250 + Math.random() * 300)

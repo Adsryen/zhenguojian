@@ -63,6 +63,8 @@ export interface SourceListItem {
   enabledByDefault?: boolean
   implemented: boolean
   enabled: boolean
+  /** 上游连通性/使用备注（v1 settings_panel.FALLBACK_SOURCES 同表）。 */
+  note?: string
 }
 
 export interface FilterOption {
@@ -221,6 +223,34 @@ declare global {
   }
 }
 
+/** 榜单候选（rankingBoards action；核心按站源可用性过滤，app_runtime.go:457-462。V2-E 侧栏） */
+export interface RankingBoard {
+  id: string
+  source: string
+  name: string
+  description?: string
+}
+
+/** 榜单单行（rankings 应答 items 元素；drama 为 nativeDrama 平铺） */
+export interface RankingItem {
+  rank: number
+  drama: Drama
+  metric?: string
+}
+
+/** rankings 应答平铺形状（键以 guoapp-src/native/core/app_rankings.go:60-94 为准，无 boards 键） */
+export interface RankingsResult {
+  boardId?: string
+  page?: number
+  items: RankingItem[]
+  hasMore?: boolean
+  totalPages?: number
+  updatedText?: string
+  fetchedAt?: string
+  stale?: boolean
+  warning?: string
+}
+
 /** 适配层统一接口：wails 实现与 mock 实现同签名 */
 export interface NativeApi {
   ping(): Promise<string> | Promise<unknown>
@@ -231,6 +261,9 @@ export interface NativeApi {
   // ── V2-2 剧库推荐（bindings_library.go）：题材个性化推荐一页 + 「全部」tab 壳层页码游标重置 ──
   recommendations(category: string, force: boolean, more: boolean): Promise<CatalogResult>
   recommendationPageReset(): Promise<{ ok: boolean }>
+  // ── V2-E 榜单侧栏（bindings_rankings.go）：候选列表 + 单页榜单，应答原样透传 ──
+  rankingBoards(): Promise<RankingBoard[]>
+  rankings(board: string, page: number, force: boolean): Promise<RankingsResult>
   detail(drama: Drama): Promise<DetailResult>
   /** 封面管线（Go bindings_cover.go）：核心下载 + HEIC→JPEG 转码，resolve 为 data URL 字符串 */
   cover(dramaJSON: string, force: boolean): Promise<string>

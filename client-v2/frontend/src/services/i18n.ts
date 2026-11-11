@@ -160,6 +160,15 @@ const zh: Record<string, string> = {
   'library.allLoaded': '已全部加载',
   'library.loadMore': '加载更多',
   'library.allRecommendLoaded': '已加载全部推荐',
+  // ---- V2-E 榜单侧栏（LibraryView 右侧，v1 main.py board_box/RankList 区） ----
+  'library.rank.title': '榜单',
+  'library.rank.loading': '正在加载榜单…',
+  'library.rank.loadingMore': '正在加载更多…',
+  'library.rank.empty': '榜单为空',
+  'library.rank.loadFailed': '加载失败，点击重试',
+  'library.rank.updated': '更新：{t}',
+  'library.rank.show': '查看榜单',
+  'library.rank.hide': '收起榜单',
 
   // ---- 下载与合并页（DownloadsView） ----
   'downloads.title': '下载与合并',
@@ -381,6 +390,15 @@ const en: Record<string, string> = {
   'library.allLoaded': 'all loaded',
   'library.loadMore': 'Load more',
   'library.allRecommendLoaded': 'All recommendations loaded',
+  // ---- V2-E rankings sidebar (LibraryView right rail, v1 main.py board_box/RankList) ----
+  'library.rank.title': 'Rankings',
+  'library.rank.loading': 'Loading rankings…',
+  'library.rank.loadingMore': 'Loading more…',
+  'library.rank.empty': 'Ranking is empty',
+  'library.rank.loadFailed': 'Load failed, click to retry',
+  'library.rank.updated': 'Updated: {t}',
+  'library.rank.show': 'Show rankings',
+  'library.rank.hide': 'Hide rankings',
 
   'downloads.title': 'Downloads',
   'downloads.mockChip': 'VITE_MOCK sample data',
