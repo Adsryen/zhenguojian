@@ -17,10 +17,11 @@ import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, DownloadEntry, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
 import { releaseStatusKey, t, tf } from '@/services/i18n'
-import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
+import { chapterEpisode, detailRoute, dramaFromQuery, playerRoute } from '@/services/dramaRef'
 import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
+import SeasonMenu from '@/components/SeasonMenu.vue'
 
 const watchStore = useWatchStore()
 
@@ -61,6 +62,9 @@ function showToast(msg: string, link = '') {
     toast.value = ''
     toastLink.value = ''
   }, link ? 6000 : 3600) // 带跳转按钮时给足点击时间
+}
+function goSeason(d: Drama) {
+  router.push(detailRoute(d))
 }
 
 function goToastLink() {
@@ -423,6 +427,10 @@ watch(
             <span v-if="statusKey" class="status-pill" :class="statusKey === 'status.ongoing' ? 'ongoing' : 'finished'">{{ t(statusKey) }}</span>
             <span v-if="meta.vip" class="vip-chip">VIP</span>
           </h1>
+          <!-- 多季切换（v1 season_button）：同系列 ≥2 季时出现在热度行上方 -->
+          <div class="season-row">
+            <SeasonMenu :drama="meta" @choose="goSeason" />
+          </div>
           <div v-if="heatText.length" class="heat-row">
             <span v-for="h in heatText" :key="h" class="heat-item">{{ h }}</span>
           </div>
@@ -466,6 +474,7 @@ watch(
             :key="castKey(c)"
             class="cast-item"
             :title="[c.role, c.description].filter(Boolean).join(' · ') || c.name"
+            @click="router.push({ path: '/creator', query: { u: JSON.stringify(c), name: c.name } })"
           >
             <div class="cast-avatar">
               <img v-if="castCovers[castKey(c)]" :src="coverUrl(castCovers[castKey(c)])" :alt="c.name" />
@@ -608,6 +617,7 @@ watch(
   align-items: center;
   gap: 8px;
 }
+.season-row { display: flex; align-items: center; gap: 8px; min-height: 26px; }
 .vip-chip {
   font-size: 11px;
   font-weight: 600;
@@ -706,7 +716,7 @@ watch(
 .section-head .text-muted {
   font-size: 12px;
 }
-/* 演职员条（v2-D，v1 creators.py CastStrip 横排版式；点击暂不跳转，仅 title 提示） */
+/* 演职员条（v2-D，v1 creators.py CastStrip 横排版式；点击进创作者页 /creator） */
 .cast-section {
   margin: 0 24px 10px;
   padding: 14px 18px;
@@ -719,6 +729,7 @@ watch(
 }
 .cast-item {
   display: flex;
+  cursor: pointer;
   flex-direction: column;
   align-items: center;
   gap: 6px;
