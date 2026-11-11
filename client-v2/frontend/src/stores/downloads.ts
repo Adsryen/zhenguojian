@@ -22,6 +22,24 @@ interface Bus {
   EventsOff?: (n: string) => void
 }
 
+/* 统计条分组（对齐 v1 downloads.py _StatBar.GROUPS:849-855）：
+   "" = 全部（不筛选，含 removing 等瞬时态，恒等于队列全集）；
+   active = queued+downloading；paused/completed/failed 各自单态。 */
+export type StatKey = '' | 'active' | 'paused' | 'completed' | 'failed'
+
+export const STAT_GROUPS: Array<{ key: Exclude<StatKey, ''>; states: DownloadJobRow['state'][] }> = [
+  { key: 'active', states: ['queued', 'downloading'] },
+  { key: 'paused', states: ['paused'] },
+  { key: 'completed', states: ['completed'] },
+  { key: 'failed', states: ['failed'] }
+]
+
+/** 判断任务状态是否命中分组（纯派生，与 statCounts 同一张表） */
+export function statMatch(key: StatKey, state: DownloadJobRow['state']): boolean {
+  if (!key) return true
+  return STAT_GROUPS.some((g) => g.key === key && (g.states as string[]).includes(state))
+}
+
 function eventBus(): Bus | null {
   const w = window as unknown as { wails?: Bus; runtime?: Bus }
   if (w.wails?.EventsOn) return w.wails
@@ -81,7 +99,31 @@ export const useDownloadsStore = defineStore('downloads', {
           (b.jobs[b.jobs.length - 1].created ?? 0) - (a.jobs[a.jobs.length - 1].created ?? 0)
       )
     },
-    runningMerge: (s): MergeEntryRow | undefined => s.merges.find((m) => m.state === 'running')
+    runningMerge: (s): MergeEntryRow | undefined => s.merges.find((m) => m.state === 'running'),
+
+    /** 统计条计数（下载队列 = 未归档 jobs 快照聚合，点击不发请求）：
+        '' 全部恒等于队列行数（含 removing 瞬时态），其余按 STAT_GROUPS 归组。 */
+    statCounts(): Record<StatKey, number> {
+      const out: Record<StatKey, number> = { '': 0, active: 0, paused: 0, completed: 0, failed: 0 }
+      for (const j of this.activeJobs) {
+        out[''] += 1
+        for (const g of STAT_GROUPS) {
+          if ((g.states as string[]).includes(j.state)) out[g.key] += 1
+        }
+      }
+      return out
+    },
+
+    /** 队列任务出现过的站源 slug 去重（首次出现序），供统计条右侧站源下拉；
+        displayName 由视图从 app store sources 解析（v1 _source_label 等价物）。 */
+    queueSources(): string[] {
+      const seen: string[] = []
+      for (const j of this.activeJobs) {
+        const src = j.drama?.source
+        if (src && !seen.includes(src)) seen.push(src)
+      }
+      return seen
+    }
   },
 
   actions: {

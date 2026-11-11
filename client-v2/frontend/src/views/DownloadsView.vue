@@ -13,12 +13,14 @@ import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, Drama, DownloadEntry, DownloadJobRow } from '@/services/types'
 import { chapterEpisode, playerRoute } from '@/services/dramaRef'
 import { t, tf } from '@/services/i18n'
-import { useDownloadsStore } from '@/stores/downloads'
+import { STAT_GROUPS, statMatch, useDownloadsStore, type StatKey } from '@/stores/downloads'
+import { useAppStore } from '@/stores/app'
 
 type Tab = 'queue' | 'merges' | 'archive'
 
 const router = useRouter()
 const store = useDownloadsStore()
+const appStore = useAppStore()
 
 const tab = ref<Tab>('queue')
 const toast = ref('')
@@ -40,6 +42,8 @@ watch(
 onMounted(() => {
   store.attach()
   void store.loadSettings()
+  // 统计条站源下拉的 displayName 映射依赖源注册表（v1 SOURCE_LABELS 的 v2 等价物）
+  if (!appStore.sources.length) void appStore.loadSources()
 })
 onUnmounted(() => {
   clearTimeout(toastTimer)
@@ -203,6 +207,73 @@ async function onRemoveBatch() {
       : tf('downloads.toastRemoved', { n: res.completed.length })
   )
   selected.value = new Set()
+}
+
+/* ---------------------------------------------------------------- 统计条筛选（v1 _StatBar 对齐，D1 目标3） */
+
+// 新增文案：i18n.ts 不在本任务所有权内，先用组件内中文常量表（待收敛 downloads.statbar.*，届时切 t()）
+const L = {
+  statAll: '全部',
+  statActive: '进行中',
+  statPaused: '已暂停',
+  statCompleted: '已完成',
+  statFailed: '失败',
+  source: '站源',
+  allSources: '全部站源',
+  emptyFiltered: '没有符合筛选条件的任务',
+  emptyFilteredHint: '换个状态或站源，或点「全部」清除筛选',
+  openFolder: '打开所在目录',
+  openTodo: '待后端绑定 OpenDownloadPath 后启用'
+} as const
+
+const STAT_LABELS: Record<Exclude<StatKey, ''>, string> = {
+  active: L.statActive,
+  paused: L.statPaused,
+  completed: L.statCompleted,
+  failed: L.statFailed
+}
+
+const statKey = ref<StatKey>('')
+const sourceFilter = ref('')
+
+const statChips = computed(() => [
+  { key: '' as StatKey, label: L.statAll, count: store.statCounts[''] },
+  ...STAT_GROUPS.map((g) => ({ key: g.key as StatKey, label: STAT_LABELS[g.key], count: store.statCounts[g.key] }))
+])
+
+/** slug → 展示名（displayName → name → slug 兜底，同 ReserveView:102 口径） */
+function sourceLabel(slug: string): string {
+  const s = appStore.sources.find((x) => x.slug === slug)
+  return s?.displayName || s?.name || slug
+}
+
+const sourceOptions = computed(() => store.queueSources.map((slug) => ({ slug, label: sourceLabel(slug) })))
+
+// 快照推进后所选源可能消失：选择保留但不再生效（v1 set_sources「仍存在才保留」语义）
+const effSource = computed(() =>
+  sourceOptions.value.some((o) => o.slug === sourceFilter.value) ? sourceFilter.value : ''
+)
+
+const visibleJobs = computed(() =>
+  store.activeJobs.filter(
+    (j) => statMatch(statKey.value, j.state) && (!effSource.value || (j.drama?.source ?? '') === effSource.value)
+  )
+)
+
+/** 队列非空但筛完为空 → 空结果态（区别于队列本身为空） */
+const filteredEmpty = computed(() => store.activeJobs.length > 0 && visibleJobs.value.length === 0)
+
+// v1 _choose 同款：点「全部」清除；再点当前选中项 = 取消筛选
+function chooseStat(key: StatKey) {
+  statKey.value = key === '' || key === statKey.value ? '' : key
+}
+
+/* 打开所在目录：api.ts 无对应方法（无桥可用）→ 按钮 disabled + title 说明。
+   依赖请求：Go 壳层新增 App.OpenDownloadPath(path string) error
+   （Windows explorer /select 分文件定位，Linux xdg-open，macOS open；
+   前端传参 = downloadDir.directory + job.folder 拼出的绝对目录）。 */
+function openPathTitle(job: DownloadJobRow): string {
+  return job.folder ? `${L.openTodo}：${job.folder}` : L.openTodo
 }
 
 /* ---------------------------------------------------------------- 设置面板 */
@@ -431,6 +502,27 @@ async function onEnqueue() {
 
   <!-- 下载队列 -->
   <template v-if="tab === 'queue'">
+    <!-- 统计条：状态计数 chip（点击即筛选，再点取消）+ 右侧站源下拉（与状态叠加），纯前端派生 -->
+    <div class="stat-bar card" data-testid="stat-bar">
+      <button
+        v-for="c in statChips"
+        :key="c.key || 'all'"
+        class="chip"
+        :class="{ active: statKey === c.key }"
+        data-testid="stat-chip"
+        :data-stat="c.key"
+        @click="chooseStat(c.key)"
+      >
+        {{ c.label }}<em data-testid="stat-count">{{ c.count }}</em>
+      </button>
+      <div class="spacer" />
+      <span class="sb-label text-muted">{{ L.source }}</span>
+      <select v-model="sourceFilter" class="sel" data-testid="source-select">
+        <option value="">{{ L.allSources }}</option>
+        <option v-for="o in sourceOptions" :key="o.slug" :value="o.slug">{{ o.label }}</option>
+      </select>
+    </div>
+
     <div v-if="store.mergeGroups.length || selectedJobs.length" class="merge-bar card">
       <span class="mb-label">{{ t('downloads.mergeEntry') }}</span>
       <button
@@ -465,9 +557,15 @@ async function onEnqueue() {
       <div class="text-muted hint">{{ t('downloads.queueEmptyHint') }}</div>
     </div>
 
+    <div v-else-if="filteredEmpty" class="state-block" data-testid="filtered-empty">
+      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7" /><path d="M21 21l-4.35-4.35M8 11h6" /></svg>
+      <div>{{ L.emptyFiltered }}</div>
+      <div class="text-muted hint">{{ L.emptyFilteredHint }}</div>
+    </div>
+
     <div v-else class="card list">
       <div
-        v-for="(job, i) in store.activeJobs"
+        v-for="(job, i) in visibleJobs"
         :key="job.id"
         class="row"
         :class="{ divided: i > 0, busy: store.busyId === job.id }"
@@ -496,6 +594,15 @@ async function onEnqueue() {
         </div>
         <div class="r-ops">
           <button v-if="job.state === 'completed'" class="btn small" @click="goPlay(job)">{{ t('downloads.play') }}</button>
+          <button
+            v-if="job.state === 'completed'"
+            class="btn small"
+            data-testid="row-open"
+            disabled
+            :title="openPathTitle(job)"
+          >
+            {{ L.openFolder }}
+          </button>
           <button
             v-if="job.state === 'downloading' || job.state === 'queued'"
             class="btn small"
@@ -608,6 +715,7 @@ async function onEnqueue() {
           </div>
         </div>
         <div class="r-ops">
+          <button class="btn small" data-testid="row-open" disabled :title="openPathTitle(job)">{{ L.openFolder }}</button>
           <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
           <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
         </div>
@@ -792,6 +900,26 @@ async function onEnqueue() {
   background: var(--accent-soft, var(--surface));
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* 统计条（对齐 merge-bar 版式 + base.css chip 体系） */
+.stat-bar {
+  margin: 0 24px 10px;
+  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.stat-bar .chip em {
+  font-style: normal;
+  margin-left: 6px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.sb-label {
+  font-size: 12px;
+  margin-left: 4px;
 }
 
 /* 合并入口条 */
