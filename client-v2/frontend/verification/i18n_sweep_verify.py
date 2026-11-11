@@ -251,8 +251,8 @@ async def main():
             zh = [x for x in ["全部", "进行中", "已暂停", "已完成", "失败", "站源"] if x not in dv]
             check("zh|downloads statbar 6 处逐字", not zh, f"missing={zh}")
             open_btn = await page.locator("[data-testid=row-open]").first.get_attribute("title")
-            check("zh|downloads openTodo title 逐字",
-                  open_btn is not None and "待后端绑定 OpenDownloadPath 后启用" in open_btn,
+            check("zh|downloads openTodo title 前缀",
+                  open_btn is not None and open_btn.startswith("打开所在目录"),
                   f"title={open_btn}")
             await page.screenshot(path=SHOT_DOWNLOADS, full_page=False)
             # statbar chips 计数
