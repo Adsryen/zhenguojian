@@ -1,27 +1,48 @@
 <script setup lang="ts">
-/* ReserveView —— /reserve?tab=calendar|follow
-   Tab1 上新日历：v1 calendar_panel.py 结构（日期 chips + 当日行：封面+标题+已上线/「hint」即将上线+简介+播放/预约）。
-     日历列表数据源：Go 端暂无日历条目绑定 —— 保留 // TODO binding: native.Reservations（V2-4 接线）。
-       mock 模式走 fixtures.mockCalendarDays()（页面标注示例数据）；真实模式明示待接线，不假装有数据。
-     预约开关：真值走 stores/watch（Go watchstore Reserve/CancelReservation；降级读 localStorage）。
-   Tab2 追更预约：stores/watch.watchlist 的 followed 行（取消追剧 = ToggleFollow 互斥语义）。
-   —— watchstore 绑定已接线；日历条目绑定仍为依赖请求（见终报）。 */
+/* ReserveView —— /reserve?tab=follow：追更列表（v1 watch.py follow 页对齐，J 轮）
+   ① 旧日历 tab 已合并至 /calendar 实页（CalendarView）：本页检测 route.query.tab，
+      非 follow（含 /reserve 裸路径与深链接 ?tab=calendar）一律 router.replace('/calendar')。
+   ② 行内按钮（v1 watch.py:266-290 底栏动作逐行化）：
+      「继续播放」仅对有历史进度（watch store history 行，episode>0）的行显示，
+        点击 → playerRoute(drama, episode, position)，与 HistoryView.goResume 同路径同参数语义；
+      「标记已看」→ watch store toggleSeen（v1 _mark_watched；已看态可再点撤销，
+        按钮翻「已看 ✓」，真值 Go seen-library / mock 落 localStorage）；
+      去详情页 / 取消追剧（原有，保留）。
+   ③ 站源筛选 chips（v1 watch.py:387-421 _refresh_chips）：按 rows 里出现的源去重
+      （drama.source，缺失回落 id 前缀，排除 local —— v1 _source_group），排序对齐
+      设置页 orderedSources；「全部」+ 各源 displayName（app store，拿不到显 name/slug）；
+      仅 >1 源时显示（v1 chip_bar.setVisible）；纯前端派生过滤，不发请求。
+   —— 日历条目绑定（// TODO binding: native.Reservations）随日历 tab 一并移交
+      CalendarView/stores/calendar（Go Calendar 绑定已接线），本页不再有日历数据面。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { MOCK_MODE } from '@/services/api'
-import type { CalendarItem, Drama } from '@/services/types'
+import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import { resolveCover } from '@/services/covers'
-import { releaseStatusText } from '@/services/i18n' // v2-D：ongoing/finished 枚举不再裸显（其余中文串透传）
-import { detailRoute } from '@/services/dramaRef'
-import { formatTime, readReservations } from '@/services/local'
+import { releaseStatusText } from '@/services/i18n'
+import { detailRoute, playerRoute } from '@/services/dramaRef'
+import { formatTime } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
-import { mockCalendarDays } from '@/services/fixtures'
+import { useAppStore } from '@/stores/app'
 
 const route = useRoute()
 const router = useRouter()
 const watchStore = useWatchStore()
+const appStore = useAppStore()
 
-const tab = ref<'calendar' | 'follow'>('calendar')
+/* 新增文案常量表（返报附键表；沿用文案不动） */
+const L = {
+  pageTitle: '追更预约',
+  loading: '读取追更列表…',
+  resume: '继续播放',
+  markSeen: '标记已看',
+  seenOn: '已看 ✓',
+  markSeenFail: '看过标记失败',
+  filterAll: '全部',
+  watchedEpPrefix: '看到第 ',
+  emptyFiltered: '这个站源下暂时没有追更的剧。',
+  refresh: '刷新'
+}
+
 const toast = ref('')
 let toastTimer: number | undefined
 
@@ -31,76 +52,98 @@ function showToast(msg: string) {
   toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
 }
 
-/* ---------------- 日历 tab ---------------- */
-// TODO binding: native.Reservations(date, offset) —— 日历条目接线前真实模式无数据源
-const items = ref<CalendarItem[]>([])
-const loading = ref(false)
-const calError = ref('')
-const selectedDate = ref('')
+/* ---------------- ① 日历旧路径 redirect ---------------- */
+function enforceRoute() {
+  if (String(route.query.tab ?? '') === 'follow') return
+  void router.replace('/calendar')
+}
+watch(() => route.query.tab, enforceRoute)
 
-/** 预约状态：watchstore 行标志为准；无行 id 回落本地 zgj.reservations（mock 纯预约项） */
-const reservedIds = computed<Record<string, boolean>>(() => {
-  const m: Record<string, boolean> = { ...readReservations() }
-  for (const r of watchStore.follows) m[r.id] = r.reserved
+/* ---------------- 列表与站源 chips ---------------- */
+const follows = computed(() => watchStore.followedRows)
+
+/** v1 _source_group：drama.source → id 前缀兜底（'local' 不算源） */
+function sourceGroupOf(d: Drama): string {
+  const s = String(d.source || '').trim().toLowerCase()
+  if (s) return s
+  const i = String(d.id || '').indexOf(':')
+  if (i > 0) {
+    const p = d.id.slice(0, i).toLowerCase()
+    if (p !== 'local') return p
+  }
+  return ''
+}
+
+/** rows 里出现过的源（去重 + 设置页源序，未知源按 slug 排尾） */
+const sourceChips = computed<string[]>(() => {
+  const present: string[] = []
+  for (const r of follows.value) {
+    const g = sourceGroupOf(r.drama)
+    if (g && !present.includes(g)) present.push(g)
+  }
+  const order = appStore.orderedSources.map((s) => String(s.slug).toLowerCase())
+  return [...present].sort((a, b) => {
+    const ia = order.includes(a) ? order.indexOf(a) : order.length
+    const ib = order.includes(b) ? order.indexOf(b) : order.length
+    return ia - ib || a.localeCompare(b)
+  })
+})
+
+const sourceFilter = ref<string | null>(null)
+/** v1：只剩一个源时筛选无意义，chips 隐藏且过滤复位 */
+const showChips = computed(() => sourceChips.value.length > 1)
+
+watch(sourceChips, (list) => {
+  if (sourceFilter.value && !list.includes(sourceFilter.value)) sourceFilter.value = null
+})
+
+function chipLabel(slug: string): string {
+  const s = appStore.sources.find((x) => String(x.slug).toLowerCase() === slug)
+  return s?.displayName || s?.name || slug
+}
+
+const visibleFollows = computed(() =>
+  showChips.value && sourceFilter.value
+    ? follows.value.filter((r) => sourceGroupOf(r.drama) === sourceFilter.value)
+    : follows.value
+)
+
+/* ---------------- ② 行内按钮 ---------------- */
+/** 每部剧最新一条历史（watchstore 每剧一行，防御性取 max(updated)；episode≤0 不算进度） */
+const historyById = computed<Record<string, HistoryRow>>(() => {
+  const m: Record<string, HistoryRow> = {}
+  for (const r of watchStore.history) {
+    const id = r?.drama?.id
+    if (!id || !(Number(r.episode) > 0)) continue
+    if (!m[id] || Number(r.updated) > Number(m[id].updated)) m[id] = r
+  }
   return m
 })
 
-function ymd(d: Date): string {
-  return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
-}
-function parseYmd(s: string): Date {
-  return new Date(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8)))
-}
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
-function dateLabel(s: string): string {
-  const today = ymd(new Date())
-  if (s === today) return '今天'
-  return WEEKDAYS[parseYmd(s).getDay()]
+/** 「继续播放」可见性 = 有历史进度行（v1 双击行→_open_current 的按钮化） */
+const hasProgress = (row: WatchRow) => !!historyById.value[row.id]
+
+function watchedEpText(row: WatchRow): string {
+  const h = historyById.value[row.id]
+  return h ? `${L.watchedEpPrefix}${h.episode}集` : ''
 }
 
-const dates = computed(() => {
-  const set = new Set(items.value.map((it) => it.date || '').filter(Boolean))
-  return [...set].sort()
-})
-const dayItems = computed(() => items.value.filter((it) => (it.date || '') === selectedDate.value))
+function goResume(row: WatchRow) {
+  const h = historyById.value[row.id]
+  if (!h) return
+  // 与 HistoryView.goResume 同路径：/player?d=&ep=&pos=（drama 用追更行的完整对象）
+  router.push(playerRoute(row.drama, h.episode, h.position))
+}
 
-async function loadCalendar() {
-  loading.value = true
-  calError.value = ''
+async function onMarkSeen(row: WatchRow) {
   try {
-    if (MOCK_MODE) {
-      await new Promise((r) => setTimeout(r, 250))
-      items.value = mockCalendarDays()
-    } else {
-      items.value = []
-      calError.value = '上新日历待 Go 端绑定（// TODO binding: native.Reservations，V2-4 接线）。mock 模式（VITE_MOCK=1）可看示例版式。'
-    }
-    const today = ymd(new Date())
-    selectedDate.value = dates.value.includes(today) ? today : dates.value[0] || today
-  } finally {
-    loading.value = false
-  }
-}
-
-async function onReserveClick(it: CalendarItem) {
-  const drama = it.drama
-  if (!drama?.id) return
-  try {
-    await watchStore.reserve(drama)
+    await watchStore.toggleSeen(row.id)
   } catch (e: any) {
-    showToast(e?.message ?? '预约操作失败')
+    showToast(e?.message ?? L.markSeenFail)
   }
 }
 
-function goDetail(id: string) {
-  const it = items.value.find((x) => x.drama?.id === id)
-  if (it?.drama) router.push(detailRoute(it.drama))
-}
-
-/* ---------------- 追更 tab ---------------- */
-const follows = computed(() => watchStore.followedRows)
-
-async function unfollow(row: (typeof follows.value)[number]) {
+async function unfollow(row: WatchRow) {
   try {
     await watchStore.toggleFollow(row.drama)
   } catch (e: any) {
@@ -108,20 +151,15 @@ async function unfollow(row: (typeof follows.value)[number]) {
   }
 }
 
-const followDate = (row: (typeof follows.value)[number]) => formatTime(row.added)
+const followDate = (row: WatchRow) => formatTime(row.added)
 
-function syncTab() {
-  const t = String(route.query.tab ?? '')
-  tab.value = t === 'follow' ? 'follow' : 'calendar'
-}
-
-watch(() => route.query.tab, syncTab)
 onMounted(() => {
-  syncTab()
-  loadCalendar()
+  enforceRoute()
   void watchStore.ensureLoaded().then(() => {
     if (watchStore.error) showToast(watchStore.error)
   })
+  void watchStore.loadSeen()
+  void appStore.loadSources()
 })
 
 function coverUrl(c?: string): string {
@@ -129,9 +167,9 @@ function coverUrl(c?: string): string {
   return /^(https?:|data:|blob:)/i.test(c) ? c : c.startsWith('/') ? c : `/${c}`
 }
 
-/* 封面解析（海报管线）：日历行 + 追更行的 drama 都走 resolveCover —— 真实桥下
+/* 封面解析（海报管线）：追更行的 drama 走 resolveCover —— 真实桥下
    raw cover 可能是签名 HEIC（<img> 直绑必挂），Go 端转码后回 data URL；
-   mock/降级返回 fixture 本地 svg 原路径。解析出前显 cover-ph 占位（与现状一致）。 */
+   mock/降级返回 fixture 本地 svg 原路径。解析出前显 cover-ph 占位。 */
 const coverMap = ref(new Map<string, string>())
 function ensureCovers(list: (Drama | undefined | null)[]) {
   for (const d of list) {
@@ -146,92 +184,42 @@ function ensureCovers(list: (Drama | undefined | null)[]) {
 function resolvedCover(d?: Drama | null): string {
   return (d && coverMap.value.get(d.id)) || ''
 }
-watch(dayItems, (list) => ensureCovers(list.map((it) => it.drama)), { immediate: true })
 watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: true })
 </script>
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">预约</h1>
-    <div class="tabs">
-      <button class="tab" :class="{ active: tab === 'calendar' }" @click="tab = 'calendar'">新剧日历</button>
-      <button class="tab" :class="{ active: tab === 'follow' }" @click="tab = 'follow'">追更预约</button>
-    </div>
+    <h1 class="page-title">{{ L.pageTitle }}</h1>
     <div class="spacer" />
-    <button v-if="tab === 'calendar'" class="btn" :disabled="loading" @click="loadCalendar">刷新</button>
+    <button class="btn" :disabled="watchStore.loading" @click="void watchStore.load(true)">{{ L.refresh }}</button>
   </div>
 
-  <!-- 日历 tab -->
-  <template v-if="tab === 'calendar'">
-    <div v-if="loading" class="state-block">
-      <div class="dots">日历加载中…</div>
-    </div>
-    <div v-else-if="calError" class="state-block">
-      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M8 3v4M16 3v4M3 11h18" /></svg>
-      <div>{{ calError }}</div>
-      <button class="btn" @click="loadCalendar">重试</button>
-    </div>
-    <template v-else>
-      <div class="banner">VITE_MOCK 示例数据，非真实引擎结果</div>
-      <div class="chips date-chips">
-        <button
-          v-for="d in dates"
-          :key="d"
-          class="chip"
-          :class="{ active: selectedDate === d }"
-          @click="selectedDate = d"
-        >
-          {{ dateLabel(d) }}
-          <small>{{ d.slice(4, 6) }}-{{ d.slice(6, 8) }}</small>
-        </button>
-      </div>
-
-      <div class="cal-list">
-        <div v-for="it in dayItems" :key="it.drama?.id" class="cal-row card">
-          <div class="cal-cover" @click="goDetail(it.drama!.id)">
-            <img v-if="resolvedCover(it.drama)" :src="coverUrl(resolvedCover(it.drama))" :alt="it.drama?.title" />
-            <div v-else class="cover-ph" />
-          </div>
-          <div class="cal-body">
-            <div class="cal-title-line">
-              <button class="cal-title" @click="goDetail(it.drama!.id)">{{ it.drama?.title }}</button>
-              <span v-if="it.online" class="status online">已上线</span>
-              <span v-else class="status">{{ it.hint || '待定' }} 即将上线</span>
-            </div>
-            <p class="cal-desc text-muted">{{ it.drama?.description }}</p>
-            <div class="cal-foot">
-              <span v-if="it.drama?.category" class="chip static">{{ it.drama.category }}</span>
-              <div class="spacer" />
-              <button v-if="it.online" class="btn primary sm" @click="goDetail(it.drama!.id)">
-                <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
-                播放
-              </button>
-              <button v-else class="btn sm" :class="{ toggled: !!reservedIds[it.drama!.id] }" @click="onReserveClick(it)">
-                {{ reservedIds[it.drama!.id] ? '已预约 ✓' : '预约' }}
-              </button>
-            </div>
-          </div>
-        </div>
-        <div v-if="!dayItems.length" class="state-block inline">
-          <div>这一天暂时没有上新。</div>
-        </div>
-      </div>
-    </template>
-  </template>
-
-  <!-- 追更 tab -->
+  <div v-if="watchStore.loading && !follows.length" class="state-block">
+    <div class="dots">{{ L.loading }}</div>
+  </div>
+  <div v-else-if="!follows.length" class="state-block">
+    <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 21s-7.5-4.9-9.6-9A5.6 5.6 0 0 1 12 6.7 5.6 5.6 0 0 1 21.6 12c-2.1 4.1-9.6 9-9.6 9z" /></svg>
+    <div>还没有追更的剧。</div>
+    <div class="text-muted hint">在详情页点「追剧」，这里就会替你盯着更新（真值存 Go watchstore，无桥时降级本地记录）。</div>
+    <button class="btn primary" @click="router.push('/discover')">去找剧</button>
+  </div>
   <template v-else>
-    <div v-if="watchStore.loading && !follows.length" class="state-block">
-      <div class="dots">读取追更列表…</div>
+    <!-- ③ 站源筛选 chips（v1 _refresh_chips：>1 源才显示） -->
+    <div v-if="showChips" class="chips source-chips" data-testid="source-chips">
+      <button class="chip" :class="{ active: !sourceFilter }" @click="sourceFilter = null">{{ L.filterAll }}</button>
+      <button
+        v-for="s in sourceChips"
+        :key="s"
+        class="chip"
+        :class="{ active: sourceFilter === s }"
+        @click="sourceFilter = s"
+      >
+        {{ chipLabel(s) }}
+      </button>
     </div>
-    <div v-else-if="!follows.length" class="state-block">
-      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M12 21s-7.5-4.9-9.6-9A5.6 5.6 0 0 1 12 6.7 5.6 5.6 0 0 1 21.6 12c-2.1 4.1-9.6 9-9.6 9z" /></svg>
-      <div>还没有追更的剧。</div>
-      <div class="text-muted hint">在详情页点「追剧」，这里就会替你盯着更新（真值存 Go watchstore，无桥时降级本地记录）。</div>
-      <button class="btn primary" @click="router.push('/discover')">去找剧</button>
-    </div>
-    <div v-else class="cal-list">
-      <div v-for="f in follows" :key="f.id" class="cal-row card">
+
+    <div class="cal-list">
+      <div v-for="f in visibleFollows" :key="f.id" class="cal-row card">
         <div class="cal-cover" @click="router.push(detailRoute(f.drama))">
           <img v-if="resolvedCover(f.drama)" :src="coverUrl(resolvedCover(f.drama))" :alt="f.drama.title" />
           <div v-else class="cover-ph" />
@@ -240,14 +228,25 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
           <div class="cal-title-line">
             <button class="cal-title" @click="router.push(detailRoute(f.drama))">{{ f.drama.title }}</button>
             <span class="status">{{ followDate(f) }} 加入</span>
+            <span v-if="watchedEpText(f)" class="status online">{{ watchedEpText(f) }}</span>
           </div>
           <p class="cal-desc text-muted">{{ releaseStatusText(f.drama.releaseStatus) || f.drama.description }}</p>
           <div class="cal-foot">
             <div class="spacer" />
+            <button v-if="hasProgress(f)" class="btn primary sm" :title="watchedEpText(f)" @click="goResume(f)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
+              {{ L.resume }}
+            </button>
+            <button class="btn sm" :class="{ toggled: watchStore.isSeen(f.id) }" @click="onMarkSeen(f)">
+              {{ watchStore.isSeen(f.id) ? L.seenOn : L.markSeen }}
+            </button>
             <button class="btn sm" @click="router.push(detailRoute(f.drama))">去详情页</button>
             <button class="btn sm danger" @click="unfollow(f)">取消追剧</button>
           </div>
         </div>
+      </div>
+      <div v-if="!visibleFollows.length" class="state-block inline">
+        <div>{{ L.emptyFiltered }}</div>
       </div>
     </div>
   </template>
@@ -259,43 +258,14 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
 .spacer {
   flex: 1;
 }
-.tabs {
-  display: inline-flex;
-  gap: 4px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 3px;
-  margin-left: 14px;
-}
-.tab {
-  border: none;
-  background: none;
-  color: var(--muted);
-  font-size: 13px;
-  padding: 5px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-}
-.tab.active {
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 600;
-}
-.date-chips {
-  padding-top: 2px;
-}
-.date-chips .chip small {
-  color: var(--muted-2);
-  margin-left: 5px;
-  font-size: 11px;
-}
-.date-chips .chip.active small {
-  color: inherit;
-  opacity: 0.8;
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 24px 0;
 }
 .cal-list {
-  padding: 4px 24px 18px;
+  padding: 12px 24px 18px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -375,11 +345,7 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
   align-items: center;
   gap: 8px;
   margin-top: auto;
-}
-.chip.static {
-  cursor: default;
-  font-size: 11.5px;
-  padding: 2px 9px;
+  flex-wrap: wrap;
 }
 .btn.sm {
   height: 30px;

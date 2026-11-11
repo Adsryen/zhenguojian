@@ -17,6 +17,22 @@ import { useCalendarStore, calDateLabel, todayYmd, type CalendarRow } from '@/st
 const router = useRouter()
 const store = useCalendarStore()
 
+/* 新增文案常量表（组件内维护，返报附键表） */
+const L = {
+  genderAll: '全部',
+  genderMale: '男频',
+  genderFemale: '女频'
+}
+/** v1 calendar_panel.py CHIP_GENDERS：("2",全部) ("1",男频) ("0",女频) */
+const GENDER_CHIPS = [
+  { v: 2, label: L.genderAll },
+  { v: 1, label: L.genderMale },
+  { v: 0, label: L.genderFemale }
+]
+function pickGender(v: number) {
+  void store.setGender(v)
+}
+
 const actionErrorText = ref('')
 let actionErrorTimer: number | undefined
 watch(
@@ -116,6 +132,20 @@ onMounted(() => {
   </div>
 
   <template v-else>
+    <!-- v1 calendar_panel.py 男频/女频胶囊：切频道触发重载（store.setGender → api.calendar 第三形参） -->
+    <div class="chips gender-chips" :data-gender="store.gender">
+      <button
+        v-for="g in GENDER_CHIPS"
+        :key="g.v"
+        class="chip"
+        :class="{ active: store.gender === g.v }"
+        :disabled="store.loading"
+        @click="pickGender(g.v)"
+      >
+        {{ g.label }}
+      </button>
+    </div>
+
     <div class="chips date-chips">
       <button
         v-for="d in dates"
@@ -237,6 +267,9 @@ onMounted(() => {
 }
 .date-chips {
   padding-top: 2px;
+}
+.gender-chips {
+  padding-top: 10px;
 }
 .date-chips .chip small {
   color: var(--muted-2);

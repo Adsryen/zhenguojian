@@ -100,6 +100,9 @@ export const useCalendarStore = defineStore('calendar', {
   state: () => ({
     date: '', // 当前选中日 YYYYMMDD
     dates: [] as string[], // 核心日期轴
+    /** 频道性别筛选（v1 calendar_panel.py CHIP_GENDERS："2"=全部 "1"=男频 "0"=女频）。
+        透传 Go Calendar(date, offset, gender) 第三形参（bindings_calendar.go:43 已有）。 */
+    gender: 2,
     rows: [] as CalendarRow[],
     loading: false,
     error: '',
@@ -158,7 +161,7 @@ export const useCalendarStore = defineStore('calendar', {
       this.loading = true
       this.error = ''
       try {
-        const page: CalendarPayload = await api.calendar(date, 0, 2)
+        const page: CalendarPayload = await api.calendar(date, 0, this.gender)
         const list = (page.items ?? []).map(normalizeItem).filter(Boolean) as CalendarRow[]
         this.dates = (page.dates ?? []).filter((d) => /^\d{8}$/.test(String(d)))
         // v1：首载 date="" 时选 defaultDate ?? dates 末位 ?? 今天
@@ -180,7 +183,7 @@ export const useCalendarStore = defineStore('calendar', {
       if (this.loading || !this.hasMore) return
       this.loading = true
       try {
-        const page: CalendarPayload = await api.calendar(this.date, this.nextOffset, 2)
+        const page: CalendarPayload = await api.calendar(this.date, this.nextOffset, this.gender)
         const list = (page.items ?? []).map(normalizeItem).filter(Boolean) as CalendarRow[]
         const seen = new Set(this.rows.map((r) => r.id))
         this.rows = this.rows.concat(list.filter((r) => !seen.has(r.id)))
@@ -196,6 +199,15 @@ export const useCalendarStore = defineStore('calendar', {
     async selectDate(v: string) {
       if (this.loading || !v || v === this.date) return
       await this.load(v)
+    },
+
+    /** 男频/女频切换（v1 chip 语义）：改频道后整表重载，其余查询态（日期/翻页）保持 */
+    async setGender(g: number) {
+      if (this.loading || this.gender === g) return
+      this.gender = g
+      this.hasMore = false
+      this.nextOffset = 0
+      await this.load(this.date || todayYmd())
     },
 
     /** 前后翻页：优先在 dates 轴上走一格，出轴则按自然日 ±1（核心接受任意 YYYYMMDD） */
