@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
 import type { CalendarItem, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { releaseStatusText } from '@/services/i18n' // v2-D：ongoing/finished 枚举不再裸显（其余中文串透传）
 import { detailRoute } from '@/services/dramaRef'
 import { formatTime, readReservations } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -240,7 +241,7 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
             <button class="cal-title" @click="router.push(detailRoute(f.drama))">{{ f.drama.title }}</button>
             <span class="status">{{ followDate(f) }} 加入</span>
           </div>
-          <p class="cal-desc text-muted">{{ f.drama.releaseStatus || f.drama.description }}</p>
+          <p class="cal-desc text-muted">{{ releaseStatusText(f.drama.releaseStatus) || f.drama.description }}</p>
           <div class="cal-foot">
             <div class="spacer" />
             <button class="btn sm" @click="router.push(detailRoute(f.drama))">去详情页</button>

@@ -117,3 +117,17 @@ func DanmakuAll(session string) (map[string]any, error) {
 	}
 	return Call("danmakuAll", map[string]any{"playbackSession": session})
 }
+
+// DramaCreators 取剧集的演职员条（v1 core_client.drama_creators：
+// payload {"drama": <完整 item 对象>}；overlay 侧只消费 drama.id，但保持
+// v1 同款整对象入参）。data 形状（zhenguojian/sidecar/core_overlay/
+// discovery.go creatorDetailCache 写入）：
+//
+//	{"creators":[{"id","userId","name","avatar","description","role"},…],
+//	 "recordNumber","heat","followers","plays"}
+//
+// 注意：与 BrowseFilters 同走 discovery overlay 通道（engine.go 头注释），
+// 默认构建返回 code=discovery_unavailable，前端据此静默隐藏演员条。
+func DramaCreators(drama map[string]any) (map[string]any, error) {
+	return Call("dramaCreators", map[string]any{"drama": drama})
+}

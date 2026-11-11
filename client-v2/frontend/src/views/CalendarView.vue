@@ -7,7 +7,7 @@
    条目点击 → 详情（detailRoute）；已上线行的「播放」→ playerRoute 第 1 集
    （PlayerView bootFromQuery 缺 c 时自取 detail 章节，安全）。
    分页：滚动到底 loadMore（v1 _calendar_scrolled）。 */
-import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
 import { resolveCover } from '@/services/covers'
@@ -69,20 +69,23 @@ function goPlay(row: CalendarRow) {
   router.push(playerRoute(row.drama, 1))
 }
 
-function onScroll() {
-  if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160) {
+/* 滚动监听挂在页内滚动容器 .cal-scroll 上（不是 window）：App.vue 的
+   .shell-main 是 overflow:hidden 的 flex 列，window 永不产生滚动，
+   旧实现把监听挂在 window 导致「到底加载更多」失效且整页无法滚动。 */
+function onScroll(e: Event) {
+  const el = e.target as HTMLElement
+  if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) {
     void store.loadMore()
   }
 }
 
 onMounted(() => {
   if (!store.loadedOnce) void store.load(store.date)
-  window.addEventListener('scroll', onScroll, { passive: true })
 })
-onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
 </script>
 
 <template>
+  <div class="cal-page">
   <div class="page-head">
     <h1 class="page-title">追剧日历</h1>
     <div class="spacer" />
@@ -99,6 +102,7 @@ onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
     <button class="btn" :disabled="store.loading" @click="store.load(store.date)">刷新</button>
   </div>
 
+  <div class="cal-scroll" @scroll.passive="onScroll">
   <div v-if="MOCK_MODE" class="banner">VITE_MOCK 示例数据，非真实引擎结果</div>
 
   <div v-if="actionErrorText" class="banner warn">{{ actionErrorText }}</div>
@@ -185,9 +189,23 @@ onBeforeUnmount(() => window.removeEventListener('scroll', onScroll))
       <div v-else-if="store.statusText" class="list-status text-muted">{{ store.statusText }}</div>
     </div>
   </template>
+  </div>
+  </div>
 </template>
 
 <style scoped>
+.cal-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.cal-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
 .spacer {
   flex: 1;
 }

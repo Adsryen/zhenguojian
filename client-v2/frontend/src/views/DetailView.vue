@@ -5,12 +5,16 @@
    操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(Resolve→plan→localStorage
     'downloads.queue'，V2-3 才接下载引擎)、追剧(stores/watch → Go watchstore)、看过(stores/watch →
     Go seen-library.json，范围 A 迁移；localStorage 仅降级/一次性迁移源)。
-    追剧真值、「看到第 N 集」锚点与看过标记已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。 */
+ *     追剧真值、「看到第 N 集」锚点与看过标记已接 Go watchstore；下载队列仍待 V2-3 绑定（详见终报）。
+    v2-D（子代理 D）：页面自身作滚动容器（.shell-main 约定，见 style 注释）；更新状态 pill +
+    集数/统计文案本地化（v1 main.py:229/472-485 规则，键在 i18n.ts）；简介下方「演职人员」横排条
+    （App.DramaCreators → native dramaCreators，discovery 未接入/失败整条静默隐藏）。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
-import type { Chapter, DetailResult, Drama } from '@/services/types'
+import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { releaseStatusKey, t, tf } from '@/services/i18n'
 import { chapterEpisode, dramaFromQuery, playerRoute } from '@/services/dramaRef'
 import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -78,6 +82,7 @@ async function loadDetail() {
   if (!d) return
   loading.value = true
   error.value = ''
+  void loadCreators(d) // 演职员条与详情并行拉取，失败静默（见 loadCreators 注释）
   try {
     detail.value = await api.detail(d)
   } catch (e: any) {
@@ -172,16 +177,84 @@ async function onWatchedMark() {
   }
 }
 
+/* ---------- 演职员条（v2-D，对齐 v1 main.py:355-380 _load_creators + creators.py CastStrip） ---------- */
+
+const creators = ref<CreatorEntry[]>([])
+/** 演员账号统计：heat/followers/plays 有值时替换详情头粗估线（v1 _render_meta 同款规则） */
+const creatorStats = ref<CreatorsResult | null>(null)
+
+async function loadCreators(d: Drama) {
+  creators.value = []
+  creatorStats.value = null
+  // v1 只对 hongguo: 前缀剧目查询；discovery 未接入（默认构建恒 discovery_unavailable）
+  // 或核心失败 → 整条静默隐藏，不报错（v1 失败会清条+状态提示，v2 取静默以免常态刷屏）
+  if (!d.id.startsWith('hongguo:')) return
+  try {
+    const res = await api.dramaCreators(d)
+    creators.value = (res.creators ?? []).filter((c) => (c?.name || '').trim() !== '')
+    creatorStats.value = res
+  } catch {
+    /* 静默 */
+  }
+}
+
+/** 头像走 resolveCover（真实桥 = 核心封面管线，v1 avatar_drama 同款 id 约定 creator:<userId>；
+    mock/降级 = cover 原路径）。key = userId||id||name */
+const castCovers = ref<Record<string, string>>({})
+function castKey(c: CreatorEntry): string {
+  return c.userId || c.id || c.name
+}
+watch(creators, (list) => {
+  castCovers.value = {}
+  for (const c of list) {
+    if (!c.avatar) continue
+    const key = castKey(c)
+    void resolveCover({ id: `creator:${key}`, source: 'hongguo', title: c.name, cover: c.avatar } as Drama).then((src) => {
+      if (src) castCovers.value = { ...castCovers.value, [key]: src }
+    })
+  }
+})
+
 /* ---------- 头像区数据 ---------- */
+
+/** ongoing/finished → 标题旁状态 pill（v1 set_release_status：未知值不显示 pill） */
+const statusKey = computed(() => releaseStatusKey(meta.value.releaseStatus))
 
 const heatText = computed(() => {
   const m = meta.value
   const parts: string[] = []
-  if (m.heat) parts.push(`热度 ${m.heat}`)
-  if (m.views) parts.push(`点播 ${m.views}`)
-  if (m.onlineDate) parts.push(m.onlineDate)
-  if (m.releaseStatus) parts.push(m.releaseStatus)
+  const st = creatorStats.value
+  // v1 _render_meta（main.py:472-485）：演员统计有值 → 统计行替换 drama 粗估字段
+  if (st && (st.heat || st.followers || st.plays)) {
+    if (st.heat) parts.push(tf('detail.stat.heat', { v: st.heat }))
+    if (st.followers) parts.push(tf('detail.stat.followers', { v: st.followers }))
+    if (st.plays) parts.push(tf('detail.stat.plays', { v: st.plays }))
+  } else {
+    if (m.heat) parts.push(tf('detail.stat.heat', { v: m.heat }))
+    if (m.views) parts.push(tf('detail.views', { v: m.views }))
+    if (m.onlineDate) parts.push(tf('detail.onlineSince', { date: String(m.onlineDate).slice(0, 10) }))
+  }
+  // 集数文案（v1:476-478）：更新中「已更新 N 集」，其余「共 N 集」
+  const episodes = Number(m.episodes) || 0
+  if (episodes > 0) {
+    parts.push(
+      String(m.releaseStatus || '').toLowerCase() === 'ongoing'
+        ? tf('detail.episodesUpdated', { n: episodes })
+        : tf('detail.episodesTotal', { n: episodes })
+    )
+  }
+  // 非枚举值（如中文「更新至66集」描述串）原样透出，仅 ongoing/finished 被本地化吃掉
+  const raw = String(m.releaseStatus || '').trim()
+  if (raw && !releaseStatusKey(raw)) parts.push(raw)
   return parts
+})
+
+/** 选集区头：按当前已加载章节数走 v1 同款 ongoing/完结措辞 */
+const episodesHead = computed(() => {
+  const n = chapters.value.length
+  return String(meta.value.releaseStatus || '').toLowerCase() === 'ongoing'
+    ? tf('detail.episodesUpdated', { n })
+    : tf('detail.episodesTotal', { n })
 })
 
 const metaTags = computed(() => {
@@ -271,6 +344,7 @@ watch(
         <div class="hero-meta">
           <h1 class="title">
             {{ meta.title || '（无标题）' }}
+            <span v-if="statusKey" class="status-pill" :class="statusKey === 'status.ongoing' ? 'ongoing' : 'finished'">{{ t(statusKey) }}</span>
             <span v-if="meta.vip" class="vip-chip">VIP</span>
           </h1>
           <div v-if="heatText.length" class="heat-row">
@@ -305,6 +379,28 @@ watch(
       <button class="btn" @click="loadDetail()">重试</button>
     </div>
     <template v-else-if="drama">
+      <!-- 演职员条（v2-D）：简介下方横排，discovery 未接入/失败时整条不渲染 -->
+      <div v-if="creators.length" class="cast-section card">
+        <div class="section-head">
+          <h2>{{ t('detail.cast.title') }}</h2>
+        </div>
+        <div class="cast-row">
+          <div
+            v-for="c in creators"
+            :key="castKey(c)"
+            class="cast-item"
+            :title="[c.role, c.description].filter(Boolean).join(' · ') || c.name"
+          >
+            <div class="cast-avatar">
+              <img v-if="castCovers[castKey(c)]" :src="coverUrl(castCovers[castKey(c)])" :alt="c.name" />
+              <span v-else class="cast-initial">{{ (c.name || '').slice(0, 1) }}</span>
+            </div>
+            <span class="cast-name">{{ c.name }}</span>
+            <span v-if="c.role" class="cast-role">{{ c.role }}</span>
+          </div>
+        </div>
+      </div>
+
       <!-- 操作区（v1 detail_layout：播放 primary accent + 下载 success） -->
       <div class="actions">
         <button class="btn primary" :disabled="!chapters.length" @click="goPlay">
@@ -324,8 +420,8 @@ watch(
       <div class="ep-section card">
         <div class="section-head">
           <h2>选集</h2>
-          <span v-if="chapters.length" class="text-muted">共 {{ chapters.length }} 集</span>
-          <span v-else class="text-muted">暂无剧集</span>
+          <span v-if="chapters.length" class="text-muted">{{ episodesHead }}</span>
+          <span v-else class="text-muted">{{ t('detail.noEpisodes') }}</span>
         </div>
         <EpisodeGrid
           v-if="chapters.length"
@@ -343,10 +439,17 @@ watch(
 </template>
 
 <style scoped>
+/* v2-A 滚动修复：App.vue 的 .shell-main 是 overflow:hidden 的 flex column，
+   窗口永不滚动，页面必须自供滚动容器（DiscoverView 走 PosterGrid 内滚，
+   SettingsView 自带 overflow-y:auto —— 本页同款约定）。原 min-height:100%
+   让长详情被 shell-main 裁掉且无从滚动。 */
 .detail {
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 /* 头区 */
 .hero {
@@ -434,6 +537,20 @@ watch(
   border-radius: 4px;
   padding: 2px 7px;
 }
+/* v2-D：更新状态 pill（v1 set_release_status 的 ongoing/finished 本地化） */
+.status-pill {
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  padding: 2px 7px;
+  background: var(--surface-2);
+}
+.status-pill.ongoing {
+  color: var(--success);
+}
+.status-pill.finished {
+  color: var(--muted);
+}
 .heat-row {
   display: flex;
   flex-wrap: wrap;
@@ -509,6 +626,56 @@ watch(
 }
 .section-head .text-muted {
   font-size: 12px;
+}
+/* 演职员条（v2-D，v1 creators.py CastStrip 横排版式；点击暂不跳转，仅 title 提示） */
+.cast-section {
+  margin: 0 24px 10px;
+  padding: 14px 18px;
+}
+.cast-row {
+  display: flex;
+  gap: 18px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.cast-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 64px;
+  flex-shrink: 0;
+}
+.cast-avatar {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--cover-bg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.cast-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cast-initial {
+  font-size: 18px;
+  color: var(--muted);
+}
+.cast-name {
+  font-size: 12px;
+  max-width: 64px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cast-role {
+  font-size: 11px;
+  color: var(--muted);
 }
 /* 三态 */
 .state-block {

@@ -1,6 +1,6 @@
 /* mock fixtures —— 手抄自 v1 引擎真实 catalog 形状（hongguo nativeDrama 字段名逐一对应；
    封面为本地占位 SVG，真实 cover 是引擎返回的 CDN 直链）。仅 VITE_MOCK=1 时使用。 */
-import type { DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
+import type { DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, CreatorsResult, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
 
 export const MOCK_SOURCES: SourceListItem[] = [
   {
@@ -87,7 +87,9 @@ const items: Drama[] = [
     views: '2.1亿',
     onlineDate: '2026-08-14',
     tags: ['漫剧', '改编'],
-    releaseStatus: '更新至66集'
+    // v2-D：改用核心真实枚举（ongoing/finished），mock 才能演到 DetailView 的状态本地化；
+    // 「连载」等中文描述串仍保留一条，验证助手原样透传
+    releaseStatus: 'ongoing'
   },
   {
     metadataSchema: 1,
@@ -104,7 +106,7 @@ const items: Drama[] = [
     views: '1.7亿',
     onlineDate: '2026-09-02',
     tags: ['甜宠'],
-    releaseStatus: '已完结'
+    releaseStatus: 'finished'
   },
   {
     metadataSchema: 1,
@@ -193,6 +195,23 @@ export function mockDetail(drama: Drama): DetailResult {
     },
     chapters: mockChapters(35),
     warning: 'VITE_MOCK 示例数据，非真实引擎结果'
+  }
+}
+
+/** 演职员条 mock（v2-D）：对齐核心 overlay dramaCreators 的 data 形状
+    （zhenguojian/sidecar/core_overlay/discovery.go:41-54）；非 hongguo 剧集返回空列表（与真实通道一致） */
+export function mockDramaCreators(drama: Drama): CreatorsResult {
+  if (!drama.id.startsWith('hongguo:')) return {}
+  return {
+    creators: [
+      { id: '74001', userId: 'u_dao', name: '示例·张导', avatar: '/posters/p1.svg', role: '导演', description: '导演｜代表作示例 A' },
+      { id: '74002', userId: 'u_nan', name: '李忆', avatar: '/posters/p2.svg', role: '主演', description: '饰 男主（示例数据）' },
+      { id: '74003', userId: 'u_nv', name: '王十七', role: '主演', description: '饰 女主（示例数据）' }
+    ],
+    recordNumber: '示例（备案号 V10045）',
+    heat: '1286万',
+    followers: '35.2万',
+    plays: '2.1亿'
   }
 }
 

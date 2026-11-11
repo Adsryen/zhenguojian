@@ -27,6 +27,7 @@ setupContextMenu()
   min-width: 0;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  /* 页面自带滚动容器时这里永不出条；忘写的页面从裁切变可滚，兜底 */
+  overflow-y: auto;
 }
 </style>

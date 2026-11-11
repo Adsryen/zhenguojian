@@ -9,6 +9,7 @@ import type {
   CatalogParams,
   CatalogResult,
   Chapter,
+  CreatorsResult,
   DanmakuWindowResult,
   DetailResult,
   DownloadDirectoryInfo,
@@ -23,7 +24,7 @@ import type {
   SourceListItem,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockCatalog, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import {
   clearHistory as clearHistoryLocal,
@@ -142,6 +143,7 @@ const realApi: NativeApi = {
   toggleSeen: (id) => callGo<{ on: boolean }>('ToggleSeen', id),
   importSeen: (entriesJSON) => callGo<{ added: number }>('ImportSeen', entriesJSON),
   calendar: (date, offset, gender) => callGo<CalendarPayload>('Calendar', date, offset, gender),
+  dramaCreators: (drama) => callGo<CreatorsResult>('DramaCreators', JSON.stringify(drama)),
   resourceSettings: () => callGo<ResourceSettingsSnapshot>('GetResourceSettings'),
   saveResourceSettings: (patch) => callGo<unknown>('SaveResourceSettings', JSON.stringify(patch)),
   buildInfo: () => callGo<BuildInfo>('GetBuildInfo'),
@@ -433,6 +435,10 @@ const mockApi: NativeApi = {
     return { added }
   },
   calendar: async (date) => mockCalendarPage(date || ''),
+  dramaCreators: async (drama) => {
+    await delay(120)
+    return mockDramaCreators(drama)
+  },
   // ── V2-3 下载与合并 mock（fixtures 有状态模拟，tick 1s；轮询消费见 stores/downloads.ts）──
   downloadList: async () => {
     await delay(60)

@@ -263,6 +263,8 @@ export interface NativeApi {
   toggleSeen(dramaId: string): Promise<{ on: boolean }>
   importSeen(entriesJSON: string): Promise<{ added: number }>
   calendar(date: string, offset: number, gender: number): Promise<CalendarPayload>
+  /** 演职员条（v2-D）：真实桥 = App.DramaCreators（bindings_cast.go）；discovery 未接入时 reject，调用方静默隐藏 */
+  dramaCreators(drama: Drama): Promise<CreatorsResult>
   // ── V2-4 设置/指纹 ──
   resourceSettings(): Promise<ResourceSettingsSnapshot>
   saveResourceSettings(patch: Partial<ResourceSettingsSnapshot>): Promise<unknown>
@@ -326,9 +328,28 @@ export interface HistoryRow {
   localPath?: string
 }
 
+/** 演职员单项（核心 overlay dramaCreators 的 creators[]，逐键对齐
+    zhenguojian/sidecar/core_overlay/discovery.go 与 Go 壳层 bindings_cast.go 头注释） */
+export interface CreatorEntry {
+  id?: string
+  userId?: string
+  name: string
+  avatar?: string
+  description?: string
+  role?: string
+}
+
+/** dramaCreators data 平铺：creators + 账号统计（heat/followers/plays 用于详情头替换 drama 粗估字段） */
+export interface CreatorsResult {
+  creators?: CreatorEntry[]
+  recordNumber?: string
+  heat?: string
+  followers?: string
+  plays?: string
+}
+
 /** 上新日历应答（核心 data 平铺；items 兼容 flat CalendarEntry 与 legacy 嵌套 CalendarItem） */
-export interface CalendarPayload {
-  date?: string
+export interface CalendarPayload {  date?: string
   items?: CalendarItem[]
   /** 核心 App.Calendar 透传字段（provider_hongguo_calendar.hongguoCalendarPage） */
   dates?: string[]

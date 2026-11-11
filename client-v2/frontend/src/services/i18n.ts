@@ -246,7 +246,19 @@ const zh: Record<string, string> = {
   'downloads.toastNoChapters': '该剧暂无可下载分集',
   'downloads.toastChapterFail': '分集加载失败：{m}',
   'downloads.toastEnqueued': '已加入下载队列 {n} 集',
-  'downloads.toastEnqueueFail': '入队失败：{m}'
+  'downloads.toastEnqueueFail': '入队失败：{m}',
+  // ── v2-D：更新状态本地化 + 详情演职员/统计（v1 对齐 main.py:229/472-485、creators.py:104） ──
+  'status.ongoing': '更新中',
+  'status.finished': '已完结',
+  'detail.cast.title': '演职人员',
+  'detail.episodesUpdated': '已更新 {n} 集',
+  'detail.episodesTotal': '共 {n} 集',
+  'detail.noEpisodes': '暂无剧集',
+  'detail.onlineSince': '{date} 上线',
+  'detail.stat.heat': '{v} 热度',
+  'detail.stat.followers': '{v} 人追剧',
+  'detail.stat.plays': '{v} 次播放',
+  'detail.views': '点播 {v}'
 }
 
 const en: Record<string, string> = {
@@ -454,7 +466,18 @@ const en: Record<string, string> = {
   'downloads.toastNoChapters': 'This drama has no downloadable episodes',
   'downloads.toastChapterFail': 'Episode list failed: {m}',
   'downloads.toastEnqueued': 'Added {n} episodes to the download queue',
-  'downloads.toastEnqueueFail': 'Enqueue failed: {m}'
+  'downloads.toastEnqueueFail': 'Enqueue failed: {m}',
+  'status.ongoing': 'Ongoing',
+  'status.finished': 'Completed',
+  'detail.cast.title': 'Cast & Crew',
+  'detail.episodesUpdated': '{n} episodes updated',
+  'detail.episodesTotal': '{n} episodes in total',
+  'detail.noEpisodes': 'No episodes',
+  'detail.onlineSince': 'Online since {date}',
+  'detail.stat.heat': '{v} heat',
+  'detail.stat.followers': '{v} followers',
+  'detail.stat.plays': '{v} plays',
+  'detail.views': '{v} views'
 }
 
 const dicts: Record<Locale, Record<string, string>> = { zh, en }
@@ -477,3 +500,22 @@ export function tf(key: string, params: Record<string, string | number>): string
 
 // 首屏把 lang 属性同步到当前 locale（主题走 main.ts 的 applyTheme 一行）
 document.documentElement.setAttribute('lang', locale.value === 'en' ? 'en' : 'zh-CN')
+
+/* ────────────────────────────── v2-D 状态文案助手 ──────────────────────────────
+   核心 releaseStatus 是英文枚举（ongoing/finished）；v1 展示层本地化为
+   更新中/已完结（zhenguojian/app/zhenguojian/main.py:229-236），其它值
+   （含 mock fixtures 的中文「更新至66集」类描述串）原样透出。 */
+
+/** ongoing/finished → i18n 键；其它 → 空串（调用方决定隐藏或原样展示） */
+export function releaseStatusKey(raw?: string): string {
+  const s = (raw || '').trim().toLowerCase()
+  if (s === 'ongoing') return 'status.ongoing'
+  if (s === 'finished') return 'status.finished'
+  return ''
+}
+
+/** ongoing/finished → 本地化文案；其它非空值原样返回（trim 后） */
+export function releaseStatusText(raw?: string): string {
+  const k = releaseStatusKey(raw)
+  return k ? t(k) : (raw || '').trim()
+}
