@@ -6,6 +6,8 @@
 import { defineStore } from 'pinia'
 import { api, MOCK_MODE } from '@/services/api'
 import type {
+  ArchiveGroupRow,
+  ArchiveScanResult,
   DownloadDirectoryInfo,
   DownloadJobRow,
   DownloadSettingsSnapshot,
@@ -55,6 +57,9 @@ export interface DownloadsStoreState {
   settings: DownloadSettingsSnapshot | null
   /** 核心下载根目录（bindings DownloadDirectory），归档页自证扫描位置 */
   downloadDir: DownloadDirectoryInfo | null
+  /** 归档目录扫描结果（App.ArchiveScan，交付 C）；null=尚未扫描（回落索引 archived 列表） */
+  archive: ArchiveScanResult | null
+  archiveLoading: boolean
   attached: boolean
   lastError: string
   busyId: string
@@ -69,6 +74,8 @@ export const useDownloadsStore = defineStore('downloads', {
     mergeVerify: true,
     settings: null,
     downloadDir: null,
+    archive: null,
+    archiveLoading: false,
     attached: false,
     lastError: '',
     busyId: ''
@@ -77,8 +84,14 @@ export const useDownloadsStore = defineStore('downloads', {
   getters: {
     /** 未归档任务（下载队列 tab） */
     activeJobs: (s): DownloadJobRow[] => s.jobs.filter((j) => !j.archived),
-    /** 归档任务（归档 tab） */
+    /** 归档任务（归档 tab）——扫描失败/未扫描时的回落数据源（保留单条恢复/删除入口） */
     archivedJobs: (s): DownloadJobRow[] => s.jobs.filter((j) => j.archived && j.state === 'completed'),
+    /** 归档扫描分组（文件系统为准，mtime 倒序由 Go 侧保证）；null=尚无结果 */
+    archiveGroups: (s): ArchiveGroupRow[] | null => (s.archive ? s.archive.groups : null),
+    /** 归档计数：扫描分组数优先，未扫描回落索引 archived 行数 */
+    archiveCount(): number {
+      return this.archive ? this.archive.groups.length : this.archivedJobs.length
+    },
     /** 按剧分组的已完成分集（合并入口），≥2 集才可整季合并（v1 _merge_targets 语义） */
     mergeGroups: (s): Array<{ dramaId: string; drama: Drama; title: string; jobs: DownloadJobRow[] }> => {
       const byDrama = new Map<string, DownloadJobRow[]>()
@@ -197,6 +210,20 @@ export const useDownloadsStore = defineStore('downloads', {
       }
     },
 
+    /** 归档目录扫描（交付 C）：force=忽略已缓存结果重扫；失败保留旧值并记 lastError */
+    async loadArchive(force = false) {
+      if (this.archiveLoading) return
+      if (this.archive && !force) return
+      this.archiveLoading = true
+      try {
+        this.archive = await api.archiveScan()
+      } catch (err) {
+        this.lastError = err instanceof Error ? err.message : String(err)
+      } finally {
+        this.archiveLoading = false
+      }
+    },
+
     /** 统一动作包装：记录 busyId 禁用按钮，成功后立即刷一次快照（事件回推有 ≤1.5s 延迟） */
     async run(id: string, fn: () => Promise<unknown>): Promise<boolean> {
       this.busyId = id
@@ -221,7 +248,11 @@ export const useDownloadsStore = defineStore('downloads', {
         archive: api.downloadArchive,
         restore: api.downloadRestore
       } as const
-      return this.run(job.id, () => map[command](job.id))
+      return this.run(job.id, () => map[command](job.id)).then((ok) => {
+        // 归档/恢复改变 archived 旗标 → 扫描分组徽标需重取（交付 C 联动）
+        if (ok && (command === 'archive' || command === 'restore')) void this.loadArchive(true)
+        return ok
+      })
     },
 
     retry(job: DownloadJobRow) {

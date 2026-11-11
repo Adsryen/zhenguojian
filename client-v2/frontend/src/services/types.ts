@@ -332,6 +332,8 @@ export interface NativeApi {
   mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
   mergeCancel(id: string): Promise<{ ok: boolean }>
   downloadDirectory(): Promise<DownloadDirectoryInfo>
+  /** 归档目录扫描（App.ArchiveScan → downloadsvc.ScanArchiveRoot；交付 B/C） */
+  archiveScan(): Promise<ArchiveScanResult>
   // ── 搜索联想（bindings_suggest.go App.Suggest；核心应答 items=string[]，红果专属 ≤10 条，app_suggestions.go:10-21）──
   /** 切集预缓冲（bindings_suggest.go App.PreloadEpisode；失败静默） */
   preloadEpisode(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<string>
@@ -367,6 +369,33 @@ export interface NativeApi {
 export interface DownloadDirectoryInfo {
   directory: string
   exists: boolean
+}
+
+/** 归档扫描分组（downloadsvc.ArchiveGroup，ScanArchiveRoot 文件系统为准 + 索引富化） */
+export interface ArchiveGroupRow {
+  name: string
+  /** *.mp4/*.mkv 分集产物计数（=「N 集」） */
+  episodes: number
+  bytes: number
+  /** 最近产物 mtime（unix ms） */
+  mtime: number
+  hasMerged: boolean
+  mergedCount?: number
+  mergedBytes?: number
+  /** 索引记录里该剧分集带 archived 旗标 */
+  archived?: boolean
+  /** 剧名来自索引记录；false=文件系统孤儿组 */
+  indexed?: boolean
+  folders?: string[]
+  /** 点开目标（相对 directory，slash 分隔）：最新合并产物或最新分集目录 */
+  openPath: string
+}
+
+/** App.ArchiveScan 应答；目录不存在 → exists:false + groups:[] */
+export interface ArchiveScanResult {
+  directory: string
+  exists: boolean
+  groups: ArchiveGroupRow[]
 }
 
 /** watchstore 追剧行（v1 follow 行同构子集；字段表见主代理契约） */

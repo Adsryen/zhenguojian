@@ -3,6 +3,7 @@
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
 import { ApiError } from './types'
 import type {
+  ArchiveScanResult,
   BrowseFiltersResult,
   BuildInfo,
   CalendarPayload,
@@ -37,7 +38,7 @@ import type {
   UpdateStatus,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockArchiveScan, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
 import { mockSuggestions } from './fixtures'
@@ -336,6 +337,7 @@ const realApi: NativeApi = {
     ),
   mergeCancel: (id) => callGo<{ ok: boolean }>('MergeCancel', id),
   downloadDirectory: () => callGo<DownloadDirectoryInfo>('DownloadDirectory'),
+  archiveScan: () => callGo<ArchiveScanResult>('ArchiveScan'),
   preloadEpisode: (drama, chapter, index, quality) =>
     callGo<string>('PreloadEpisode', JSON.stringify(drama), JSON.stringify(chapter), index, quality),
   openDownloadPath: (path) => callGo<void>('OpenDownloadPath', path),
@@ -824,6 +826,7 @@ const mockApi: NativeApi = {
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
   mergeCancel: async (id) => mockMergeCancel(id),
   downloadDirectory: async () => mockDownloadDirectory(),
+  archiveScan: async () => mockArchiveScan(),
   preloadEpisode: async () => '',
   openDownloadPath: async (path: string) => {
     if (typeof window !== 'undefined') window.__zgjOpenPath = path

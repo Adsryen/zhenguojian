@@ -1,6 +1,6 @@
 /* mock fixtures —— 手抄自 v1 引擎真实 catalog 形状（hongguo nativeDrama 字段名逐一对应；
    封面为本地占位 SVG，真实 cover 是引擎返回的 CDN 直链）。仅 VITE_MOCK=1 时使用。 */
-import type { CreatorEntry, CreatorProfileResult, CreatorWorksSnapshot, DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, CreatorsResult, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
+import type { ArchiveScanResult, CreatorEntry, CreatorProfileResult, CreatorWorksSnapshot, DanmakuItem, DanmakuWindowResult, CalendarEntry, CalendarItem, CalendarPayload, CatalogResult, Chapter, CreatorsResult, DetailResult, Drama, ResolvePlan, SourceListItem } from './types'
 
 export const MOCK_SOURCES: SourceListItem[] = [
   {
@@ -825,6 +825,57 @@ export function mockDownloadDirectory(): { directory: string; exists: boolean } 
   // 纯 Windows 路径形状：openDownloadPath 等消费端不做 CJK 假设，
   // 演示横幅文案由消费端 MOCK_MODE 自行标注
   return { directory: 'D:\\ZhenguoJian\\downloads', exists: true }
+}
+
+/** 归档目录扫描 mock（真实面：App.ArchiveScan → downloadsvc.ScanArchiveRoot）。
+ *  3 组样例树（示例数据）：一世之尊=分集+合并产物回组（含合并徽标）、
+ *  闪婚老公是大佬=纯下载分集（archived 旗标）、凡人修仙传=文件系统孤儿大文件组（indexed:false）。
+ *  localStorage 'zgj.mock.archiveMissing'='1' → exists:false 空态（验证脚本用）。 */
+export function mockArchiveScan(): ArchiveScanResult {
+  const directory = mockDownloadDirectory().directory
+  if (typeof localStorage !== 'undefined' && localStorage.getItem('zgj.mock.archiveMissing') === '1') {
+    return { directory, exists: false, groups: [] }
+  }
+  const day = 86_400_000
+  const now = Date.now()
+  const groups = [
+    {
+      name: '一世之尊',
+      episodes: 2,
+      bytes: 1_572_866_048,
+      mtime: now - day,
+      hasMerged: true,
+      mergedCount: 1,
+      mergedBytes: 3_221_225_472,
+      archived: true,
+      indexed: true,
+      folders: ['hongguo/mock0001', 'hongguo/mock0002'],
+      openPath: '合并/一世之尊 全001-002集.mkv',
+    },
+    {
+      name: '闪婚老公是大佬',
+      episodes: 1,
+      bytes: 402_653_184,
+      mtime: now - 3 * day,
+      hasMerged: false,
+      archived: true,
+      indexed: true,
+      folders: ['xh/mock0004'],
+      openPath: 'xh/mock0004',
+    },
+    {
+      name: '凡人修仙传',
+      episodes: 30,
+      bytes: 17_179_869_184,
+      mtime: now - 7 * day,
+      hasMerged: false,
+      archived: false,
+      indexed: false,
+      folders: ['fanren/mock0030'],
+      openPath: 'fanren/mock0030',
+    },
+  ]
+  return { directory, exists: true, groups }
 }
 
 /* ---------------------------------------------------------------- V2-2 剧库推荐（有状态 mock）

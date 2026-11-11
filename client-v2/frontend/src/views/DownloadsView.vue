@@ -274,6 +274,49 @@ function openPathTitle(job: DownloadJobRow): string {
   return job.folder ? `${t('downloads.statbar.openFolder')}：${job.folder}` : t('downloads.statbar.openTodo')
 }
 
+/* ---------------------------------------------------------------- 归档扫描（交付 C）
+   数据源 = App.ArchiveScan（downloadsvc.ScanArchiveRoot，文件系统为准 + 索引富化）：
+   一个剧一张卡（N 集 / 大小 / mtime / 含合并徽标），点开走 openDownloadPath 现有链路；
+   扫描不可用（旧绑定异常/未返回）时回落原「索引 archived 逐条列表」，保留恢复/删除入口。 */
+watch(tab, (v) => {
+  if (v === 'archive') void store.loadArchive()
+})
+
+function archiveCover(name: string): string {
+  return name.trim().slice(0, 1) || '?'
+}
+
+function archiveMtimeText(ms: number): string {
+  if (!ms) return ''
+  const d = new Date(ms)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+async function openArchiveGroup(g: { name: string; openPath: string }) {
+  const dir = store.archive?.directory || store.downloadDir?.directory
+  if (!dir || !g.openPath || g.openPath === '.') {
+    showToast(t('downloads.statbar.openTodo'))
+    return
+  }
+  try {
+    await api.openDownloadPath(`${dir}/${g.openPath}`)
+  } catch (e) {
+    showToast(tf('downloads.toastOpenFail', { e: (e as Error)?.message ?? String(e) }))
+  }
+}
+
+async function copyArchiveDir() {
+  const dir = store.archive?.directory || store.downloadDir?.directory || ''
+  if (!dir) return
+  try {
+    await navigator.clipboard.writeText(dir)
+    showToast(t('downloads.archive.copied'))
+  } catch {
+    showToast(t('downloads.archive.copyFail'))
+  }
+}
+
 /* ---------------------------------------------------------------- 设置面板 */
 
 const showSettings = ref(false)
@@ -493,8 +536,8 @@ async function onEnqueue() {
     <button class="tab" :class="{ on: tab === 'merges' }" @click="tab = 'merges'">
       {{ t('downloads.tabMerges') }}<em>{{ store.merges.length }}</em>
     </button>
-    <button class="tab" :class="{ on: tab === 'archive' }" @click="tab = 'archive'">
-      {{ t('downloads.tabArchive') }}<em>{{ store.archivedJobs.length }}</em>
+    <button class="tab" :class="{ on: tab === 'archive' }" data-testid="tab-archive" @click="tab = 'archive'">
+      {{ t('downloads.tabArchive') }}<em data-testid="archive-count">{{ store.archiveCount }}</em>
     </button>
   </div>
 
@@ -686,39 +729,85 @@ async function onEnqueue() {
 
   <!-- 归档 -->
   <template v-if="tab === 'archive'">
-    <!-- 界面自证：归档任务来自核心下载索引，索引文件位于下列目录（v1 语义=下载目录） -->
-    <div v-if="store.downloadDir" class="dir-line text-muted">
+    <!-- 界面自证：扫描位置 = 核心下载根目录（App.ArchiveScan → downloadDirectory） -->
+    <div v-if="store.archive || store.downloadDir" class="dir-line text-muted">
       <span class="dir-ic">📂</span>
-      <span>{{ t('downloads.archiveDirPrefix') }}{{ store.downloadDir.directory }}</span>
-      <span v-if="!store.downloadDir.exists" class="pill pill-failed">{{ t('downloads.dirMissing') }}</span>
+      <span>{{ t('downloads.archiveDirPrefix') }}{{ store.archive?.directory || store.downloadDir?.directory }}</span>
+      <span v-if="store.archive && !store.archive.exists" class="pill pill-failed">{{ t('downloads.dirMissing') }}</span>
+      <button class="btn small" data-testid="copy-dir" @click="copyArchiveDir">{{ t('downloads.archive.copyPath') }}</button>
+      <button class="btn small" data-testid="rescan" :disabled="store.archiveLoading" @click="store.loadArchive(true)">{{ t('downloads.archive.rescan') }}</button>
     </div>
-    <div v-if="!store.archivedJobs.length" class="state-block">
-      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
-      <!-- 待 i18n 收敛 -->
-      <div v-if="store.downloadDir && !store.downloadDir.exists">{{ tf('downloads.dirMissingLine', { d: store.downloadDir.directory }) }}</div>
-      <div v-else>{{ t('downloads.archiveEmpty') }}</div>
-      <div v-if="store.downloadDir && !store.downloadDir.exists" class="text-muted hint">
-        {{ t('downloads.dirMissingHint') }}
+
+    <div v-if="store.archiveLoading && !store.archive" class="state-block text-muted" data-testid="archive-scanning">
+      {{ t('downloads.archive.scanning') }}
+    </div>
+
+    <!-- 扫描结果：文件系统分组（交付 B/C） -->
+    <template v-else-if="store.archive">
+      <!-- 目录不存在 → 空态带真实路径（上方 dir-line 有复制按钮） -->
+      <div v-if="!store.archive.exists" class="state-block" data-testid="archive-missing">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
+        <div class="dir-missing-line">{{ tf('downloads.dirMissingLine', { d: store.archive.directory }) }}</div>
+        <div class="text-muted hint">{{ t('downloads.dirMissingHint') }}</div>
       </div>
-      <div v-else class="text-muted hint">{{ t('downloads.archiveHint') }}</div>
-    </div>
-    <div v-else class="card list">
-      <div v-for="(job, i) in store.archivedJobs" :key="job.id" class="row" :class="{ divided: i > 0, busy: store.busyId === job.id }">
-        <span class="row-check placeholder" />
-        <div class="r-main">
-          <div class="r-line1">
-            <span class="r-title">{{ titleOf(job) }}</span>
-            <span class="r-ep text-muted">{{ epLabel(job) }}</span>
-            <span class="pill pill-completed">{{ t('downloads.state.completedArchived') }}</span>
+      <div v-else-if="!store.archive.groups.length" class="state-block" data-testid="archive-empty">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
+        <div>{{ t('downloads.archiveEmpty') }}</div>
+        <div class="text-muted hint">{{ t('downloads.archive.noMedia') }}</div>
+      </div>
+      <div v-else class="card list" data-testid="archive-groups">
+        <div v-for="(g, i) in store.archive.groups" :key="g.name" class="row" :class="{ divided: i > 0 }">
+          <span class="g-avatar" aria-hidden="true">{{ archiveCover(g.name) }}</span>
+          <div class="r-main">
+            <div class="r-line1">
+              <span class="r-title">{{ g.name }}</span>
+              <span class="r-ep text-muted" data-testid="archive-eps">{{ tf('downloads.archive.episodesN', { n: g.episodes }) }}</span>
+              <span v-if="g.hasMerged" class="pill pill-completed" data-testid="merged-badge">{{ t('downloads.archive.mergedBadge') }}</span>
+              <span v-if="g.archived" class="pill pill-paused" data-testid="archived-badge">{{ t('downloads.state.completedArchived') }}</span>
+              <span v-if="!g.indexed" class="pill" data-testid="orphan-badge">{{ t('downloads.archive.orphanBadge') }}</span>
+            </div>
+            <div class="r-line2 text-muted" data-testid="archive-meta">
+              <span>{{ fmtBytes(g.bytes) }}</span>
+              <span v-if="g.mergedBytes"> · {{ tf('downloads.archive.mergedSize', { s: fmtBytes(g.mergedBytes) }) }}</span>
+              <span v-if="g.mtime"> · {{ tf('downloads.archive.mtime', { d: archiveMtimeText(g.mtime) }) }}</span>
+            </div>
+          </div>
+          <div class="r-ops">
+            <button class="btn small" data-testid="row-open" :title="tf('downloads.archive.openTip', { p: g.openPath })" @click="openArchiveGroup(g)">{{ t('downloads.statbar.openFolder') }}</button>
           </div>
         </div>
-        <div class="r-ops">
-          <button class="btn small" data-testid="row-open" :title="openPathTitle(job)" @click="openJobFolder(job)">{{ t('downloads.statbar.openFolder') }}</button>
-          <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
-          <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
+      </div>
+    </template>
+
+    <!-- 扫描不可用（真实桥旧版/异常）→ 回落索引 archived 逐条列表，保留恢复/删除入口 -->
+    <template v-else>
+      <div v-if="!store.archivedJobs.length" class="state-block">
+        <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18l-2 13H5L3 7zm3 0V5a2 2 0 012-2h8a2 2 0 012 2v2M9 12h6" /></svg>
+        <div v-if="store.downloadDir && !store.downloadDir.exists">{{ tf('downloads.dirMissingLine', { d: store.downloadDir.directory }) }}</div>
+        <div v-else>{{ t('downloads.archiveEmpty') }}</div>
+        <div v-if="store.downloadDir && !store.downloadDir.exists" class="text-muted hint">
+          {{ t('downloads.dirMissingHint') }}
+        </div>
+        <div v-else class="text-muted hint">{{ t('downloads.archiveHint') }}</div>
+      </div>
+      <div v-else class="card list">
+        <div v-for="(job, i) in store.archivedJobs" :key="job.id" class="row" :class="{ divided: i > 0, busy: store.busyId === job.id }">
+          <span class="row-check placeholder" />
+          <div class="r-main">
+            <div class="r-line1">
+              <span class="r-title">{{ titleOf(job) }}</span>
+              <span class="r-ep text-muted">{{ epLabel(job) }}</span>
+              <span class="pill pill-completed">{{ t('downloads.state.completedArchived') }}</span>
+            </div>
+          </div>
+          <div class="r-ops">
+            <button class="btn small" data-testid="row-open" :title="openPathTitle(job)" @click="openJobFolder(job)">{{ t('downloads.statbar.openFolder') }}</button>
+            <button class="btn small" :disabled="!!store.busyId" @click="store.control(job, 'restore')">{{ t('downloads.restore') }}</button>
+            <button class="btn small danger" :disabled="!!store.busyId" @click="store.control(job, 'remove')">{{ t('downloads.remove') }}</button>
+          </div>
         </div>
       </div>
-    </div>
+    </template>
   </template>
 
   <p class="footnote text-muted">
@@ -749,6 +838,23 @@ async function onEnqueue() {
 }
 .dir-ic {
   font-size: 13px;
+}
+.g-avatar {
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--surface-2, var(--surface));
+  border: 1px solid var(--border);
+  font-size: 14px;
+  font-weight: 600;
+}
+.dir-missing-line {
+  max-width: 560px;
+  word-break: break-all;
 }
 .hint {
   font-size: 12px;
