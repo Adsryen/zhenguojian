@@ -334,6 +334,20 @@ export interface NativeApi {
   /** 资源管理器打开下载目录/文件（bindings_download_windows.go App.OpenDownloadPath） */
   openDownloadPath(path: string): Promise<void>
   suggestions(query: string): Promise<string[]>
+  // ── V-UPD 程序内更新（bindings_update.go；事件 update:available / update:progress）──
+  /** App.vue mount 懒触发启动自动检查（真实桥首次调用起 goroutine；mock 走 localStorage+定时器） */
+  updateStartup(): Promise<{ ok: boolean }>
+  /** 手动检查；force=false 时 30s 冷却回缓存（cooldown=true） */
+  updateCheck(force: boolean): Promise<UpdateCheckResult>
+  /** 当前版本/通道/最近检查/下载状态/设置摘要（UI 轮询面） */
+  updateStatus(): Promise<UpdateStatus>
+  /** 下载（或续传）tag 的资产；asset 空=默认 exe；进度走事件/mock 定时器 */
+  updateDownload(tag: string, asset: string): Promise<{ ok: boolean }>
+  updateCancel(): Promise<{ ok: boolean }>
+  /** 应用已下载更新：exe→重启替换（restarting），zip→manual 指引 */
+  updateApply(): Promise<UpdateApplyResult>
+  updateSettingsGet(): Promise<UpdateSettings>
+  updateSettingsSet(patch: Partial<UpdateSettings>): Promise<UpdateSettings>
 }
 
 /** 核心下载根目录（bindings_download.go DownloadDirectory：core action downloadDirectory + os.Stat） */
@@ -525,3 +539,101 @@ export class ApiError extends Error {
     this.retryAt = retryAt
   }
 }
+
+// ── V-UPD 程序内更新（对应 Go internal/updater JSON 面）──
+
+/** 发布资产（zhenGuoJian-v2.exe / -app.zip 等） */
+export interface UpdateAsset {
+  name: string
+  url: string
+  size: number
+}
+
+/** 一次 GitHub Releases 检查选出的最新发布 */
+export interface UpdateRelease {
+  tag: string
+  version: string
+  prerelease: boolean
+  publishedAt: string
+  body: string
+  assets: UpdateAsset[]
+}
+
+/** UpdateCheck 应答：available=false 时看 skippedTag/cooldown/error 区分语义 */
+export interface UpdateCheckResult {
+  available: boolean
+  current: string
+  dev: boolean
+  channel: 'stable' | 'prerelease'
+  skippedTag?: string
+  cooldown?: boolean
+  checkedAt: number
+  error?: string
+  release?: UpdateRelease
+}
+
+/** 下载任务状态（update:progress 事件同款字段 + dest） */
+export interface UpdateDownloadState {
+  tag: string
+  asset: string
+  dest: string
+  state: 'idle' | 'downloading' | 'done' | 'error' | 'canceled'
+  total: number
+  done: number
+  pct: number
+  speedBps: number
+  error?: string
+}
+
+/** update:progress 事件 payload */
+export interface UpdateProgressEvent {
+  tag: string
+  asset: string
+  total?: number
+  done?: number
+  pct?: number
+  speedBps?: number
+  state: 'downloading' | 'done' | 'error' | 'canceled'
+  error?: string
+}
+
+/** update:available 事件 payload */
+export interface UpdateAvailableEvent {
+  tag: string
+  version: string
+  publishedAt?: string
+  body?: string
+  current?: string
+  dev?: boolean
+  channel?: string
+  assets?: UpdateAsset[]
+}
+
+/** Go 侧 update-settings.json（真实桥）；mock 面同构存 localStorage */
+export interface UpdateSettings {
+  autocheck: boolean
+  prerelease: boolean
+  mirrorPrefix: string
+  ignoredTag: string
+  lastCheckAt: number
+}
+
+/** UpdateStatus 应答 */
+export interface UpdateStatus {
+  current: string
+  dev: boolean
+  channel: 'stable' | 'prerelease'
+  checking: boolean
+  settings?: UpdateSettings
+  lastCheck?: UpdateCheckResult
+  download?: UpdateDownloadState
+}
+
+/** UpdateApply 应答：restart=已排定重启；manual=zip 手动解压指引 */
+export interface UpdateApplyResult {
+  kind: 'restart' | 'manual'
+  restarting?: boolean
+  updateDir?: string
+  hint?: string
+}
+
