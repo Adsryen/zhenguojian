@@ -16,13 +16,15 @@
 截图：sorani-captcha.png（M2 对话框滑块页）、sorani-row.png（M4 已登录行）。
 
 用法：python3 verification/sorani_verify.py
-（自动复用已在跑的 5188；否则自行 `npm run dev:mock -- --port 5188 --strictPort` 并在结束关闭。）
+自管理 dev:mock（独占 5188，端口预检 + 严格收口，见 _devserver.py）。
 """
 import asyncio
 import os
 import re
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 
@@ -68,21 +70,10 @@ async def real_drag(page, handle_sel, dx_total, steps=20, dy_jitter=1):
 async def main():
     from playwright.async_api import async_playwright
 
-    spawned = None
-    if not port_open("127.0.0.1", PORT):
-        spawned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=open(os.path.join(HERE, ".dev_sorani_mock.log"), "w"),
-            stderr=subprocess.STDOUT,
-        )
-        for _ in range(80):
-            if port_open("127.0.0.1", PORT):
-                break
-            time.sleep(0.5)
-        else:
-            print("dev server 未能启动，见 verification/.dev_sorani_mock.log")
-            sys.exit(2)
+    # 启停走 _devserver：进门先断言端口为空（不再「复用已在跑的 5188」），
+    # 收口是 SIGTERM→wait→SIGKILL→回查端口。旧写法 Popen 没有 start_new_session、
+    # 结束只 terminate()，本轮实测泄漏过一次 5188。
+    spawned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="sorani")
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(executable_path=EXEC, args=["--no-sandbox"])
@@ -95,7 +86,17 @@ async def main():
 
         # ---- M1 ----
         badge = page.locator("[data-testid='sorani-status']")
-        m1_text = (await badge.inner_text()).strip()
+        # 状态是异步读核心的：行渲染出来时徽标先显示「未知」（读不到不谎报未登录，见
+        # SettingsView:340），读完才是「未登录」。旧写法在 wait_for_selector(row) 之后
+        # 立刻取文本，是时序赌运气：HEAD 恰好赢，本轮 api.ts 多一个 i18n 依赖后首帧
+        # 变成「未知」就红了。改成等落定，且落不到仍然红。
+        try:
+            await page.wait_for_function(
+                "() => document.querySelector('[data-testid=sorani-status]')"
+                "?.textContent.trim() === '未登录'", timeout=8000)
+            m1_text = "未登录"
+        except Exception:
+            m1_text = (await badge.inner_text()).strip()
         check("M1 站源账号行 + 未登录", m1_text == "未登录", m1_text)
 
         # ---- M2 登录 → 状态页 → 滑块页两图 ----
@@ -255,12 +256,7 @@ async def main():
 
         await browser.close()
 
-    if spawned:
-        spawned.terminate()
-        try:
-            spawned.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            spawned.kill()
+    _devserver.stop_dev(spawned, PORT, name="sorani")
 
     failed = [r for r in RESULTS if r[0] == "FAIL"]
     print(f"\n== {len(RESULTS) - len(failed)}/{len(RESULTS)} PASS ==")
