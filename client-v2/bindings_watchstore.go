@@ -6,8 +6,14 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 
 	"zhenguojian/client-v2/internal/native"
+	"zhenguojian/client-v2/internal/player"
 	"zhenguojian/client-v2/internal/watchstore"
 )
 
@@ -147,6 +153,100 @@ func (a *App) ObserveDrama(dramaJSON string) (string, error) {
 		"changed":  !jsonObjectsEqual(before, after),
 		"row":      after,
 	})
+}
+
+// PlayerOpenLocal 播一个本地成品文件（v1 main.py:2609 open_local 的壳层入口）。
+//
+// ⚠ 路径校验在这里做，**不下沉给播放器**：前端的字符串能是什么都有可能，
+// 而 mpv 拿到什么路径就会读什么文件。所以只放两种：
+//   1. 合并成品 <下载根>/合并/<名>.mp4
+//   2. 分集成品 <下载根>/<jobId>/media.mp4
+// —— 也就是 v1 那两处成品位置（bindings_download.go:238-240 的同一口径）。
+// 判定用 filepath.Rel 而不是 strings.HasPrefix：前者能识破 `..` 上跳，
+// 后者会被 `/downloads/../windows/win.ini` 这种串骗过去。
+func (a *App) PlayerOpenLocal(path string, resumeSeconds float64) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("本地文件已不存在：")
+	}
+	root, err := a.downloadRootDir()
+	if err != nil {
+		return "", err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if err := checkLocalPlayable(root, abs); err != nil {
+		return "", err
+	}
+	st, err := os.Stat(abs)
+	if err != nil || st.IsDir() {
+		// v1 的同一条用户可见语义（watch.py:641「本地文件已不存在：<文件名>」）
+		return "", fmt.Errorf("本地文件已不存在：%s", filepath.Base(abs))
+	}
+	if err := a.playerSvc.OpenLocal(a.ctx, player.LocalRequest{
+		Path:     abs,
+		Title:    filepath.Base(abs),
+		ResumeMs: int64(resumeSeconds * 1000),
+	}); err != nil {
+		return "", err
+	}
+	return marshalJSON(a.playerSvc.State())
+}
+
+// checkLocalPlayable 把"能不能播这个路径"抽成纯函数，好让它能被单测直接打。
+// 安全规则写在 PlayerOpenLocal 的注释里，这里只落判定：必须是下载根**之下**的文件。
+//
+// 两点不是可选的细节：
+//   · 用 filepath.Rel 而不是 strings.HasPrefix——HasPrefix 会被 `..` 上跳骗过去
+//     （`/downloads/../windows/win.ini` 前缀照样是 /downloads）；
+//     反过来 Rel 也会认兄弟目录同名前缀（`/downloads-evil` vs `/downloads`），
+//     所以判定的是"相对路径不能以 .. 开头"，不是"字符串是不是前缀"。
+//   · 大小写：Windows 文件系统不区分大小写，`C:\Downloads` 与 `c:\downloads` 是同一个目录，
+//     照字面比较会把自家成品拒掉；Linux 区分大小写，折叠又会把根外路径放进来的
+//     （`/data/Downloads/x` 折叠后像 `/data/downloads/x`）。
+//     所以折叠只按当前平台语义开，测试用 fold 参数把两种平台行为都能在这台 Linux 上跑出来。
+func checkLocalPlayable(root, abs string) error {
+	r, a := normalizeForContainment(root, abs, isCaseInsensitiveOS())
+	rel, err := filepath.Rel(r, a)
+	if err != nil {
+		return fmt.Errorf("只允许播放下载目录下的成品文件（无法归一化路径：%s）", filepath.Base(abs))
+	}
+	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("只允许播放下载目录下的成品文件（拒绝越界路径：%s）", filepath.Base(abs))
+	}
+	return nil
+}
+
+// normalizeForContainment 把两个路径整理成"可以做包含判断"的形态。
+// foldCase=true（Windows）时统一小写，Linux 保持大小写敏感。
+func normalizeForContainment(root, abs string, foldCase bool) (string, string) {
+	r, a := filepath.Clean(root), filepath.Clean(abs)
+	if foldCase {
+		return strings.ToLower(r), strings.ToLower(a)
+	}
+	return r, a
+}
+
+// isCaseInsensitiveOS 只有 Windows 按不区分大小写处理。
+// 本机跑不了 Windows 单测，所以判定与折叠都做成参数，让测试能同时覆盖两种平台语义。
+func isCaseInsensitiveOS() bool { return runtime.GOOS == "windows" }
+
+// downloadRootDir 取核心 `downloadDirectory` 的绝对路径（与归档扫描、设置页同源）。
+func (a *App) downloadRootDir() (string, error) {
+	data, err := native.Call("downloadDirectory", nil)
+	if err != nil {
+		return "", err
+	}
+	dir, _ := data["directory"].(string)
+	if strings.TrimSpace(dir) == "" {
+		return "", errors.New("还没有可用的下载目录")
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
 }
 
 func (a *App) CancelReservation(dramaID string) (string, error) {

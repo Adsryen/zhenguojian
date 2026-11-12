@@ -19,6 +19,43 @@ import (
 	"testing"
 )
 
+func TestCheckLocalPlayable(t *testing.T) {
+	// 规则来自 v1：可播的只有下载根里的成品（合并输出 / 分集目录），
+	// 而不是"任何用户能拼出来的路径"——壳层直接把字符串交给 mpv 就等于开了个任意文件读取口。
+	root := filepath.Join(string(filepath.Separator), "data", "downloads")
+	cases := []struct {
+		name string
+		abs  string
+		ok   bool
+	}{
+		{"合并成品在根下", filepath.Join(root, "合并", "某剧 S01.mp4"), true},
+		{"分集成品在根下", filepath.Join(root, "job123", "media.mp4"), true},
+		{"根目录本身不给播", root, false},
+		{".. 上跳到系统文件", filepath.Join(root, "..", "..", "windows", "win.ini"), false},
+		{"根外的绝对路径", filepath.Join(string(filepath.Separator), "etc", "passwd"), false},
+		{"兄弟目录同名前缀", filepath.Join(string(filepath.Separator), "data", "downloads-evil", "a.mp4"), false},
+	}
+	for _, c := range cases {
+		err := checkLocalPlayable(root, c.abs)
+		if (err == nil) != c.ok {
+			t.Errorf("%s: 期望 ok=%v，实得 err=%v", c.name, c.ok, err)
+		}
+	}
+}
+
+func TestNormalizeForContainment(t *testing.T) {
+	// Windows 语义：大小写不同仍是同一个目录，不能把自家成品拒掉。
+	r, a := normalizeForContainment(`C:\Downloads`, `c:\downloads\合并\a.mp4`, true)
+	if rel, err := filepath.Rel(r, a); err != nil || rel == ".." || strings.HasPrefix(rel, "..") {
+		t.Fatalf("Windows 折叠后应判定在根内，得 rel=%q err=%v", rel, err)
+	}
+	// Linux 语义：大小写不同就是不同目录，必须拒绝（折叠成小写就等于放行越界路径）。
+	r2, a2 := normalizeForContainment("/data/downloads", "/data/Downloads/a.mp4", false)
+	if rel, err := filepath.Rel(r2, a2); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Fatalf("Linux 不该把大小写不同的目录当成同一个，得 rel=%q", rel)
+	}
+}
+
 func TestCoverMime(t *testing.T) {
 	heic := append([]byte{0, 0, 0, 0}, []byte("ftypheic")...)
 	jpeg := []byte{0xFF, 0xD8, 0xFF, 0xE0, 'J', 'F', 'I', 'F'}

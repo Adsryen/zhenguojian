@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -408,6 +409,75 @@ func (s *Service) Open(ctx context.Context, req Request) error {
 		return err
 	}
 	return nil
+}
+
+// LocalRequest 是一次本地文件播放请求（v1 main.py:2609 open_local(path, decryption_key, resume)）。
+type LocalRequest struct {
+	// Path 必须是**已校验过**的绝对路径（校验在壳层 App.PlayerOpenLocal 做：
+	// 只允许下载根之下的普通文件——前端传什么都有可能，这里不能当它可信）。
+	Path          string
+	Title         string
+	DecryptionKey string
+	ResumeMs      int64
+}
+
+// OpenLocal 播一个本地成品文件（合并输出 / 已下载分集），**不走 Resolver**。
+//
+// 对端是 v1 `open_local`（main.py:2609-2640）：本地文件没有季/集概念，
+// v1 于是把选集条清空、把上一集/下一集按钮关掉（`set_neighbours(False, False)`）。
+// 这里对应地把 req 的 Index/DramaID/Chapter 留空、Session 留空——
+// 弹幕抓取按 `plan.Session != ""` 才启动（见上面 Open 的同一处判断），
+// 于是本地播放天然不会去线上抓一集不存在的弹幕；
+// v1 的本地弹幕是挂**下载时保存的同名 .ass**（main.py:1880 _attach_sidecar_danmaku），
+// 那是下一件事（需要下载侧的 .ass 命名约定），本函数不假装已经做了。
+func (s *Service) OpenLocal(ctx context.Context, req LocalRequest) error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return ErrClosed
+	}
+	s.mu.Unlock()
+
+	if strings.TrimSpace(req.Path) == "" {
+		return errors.New("player: 本地路径为空")
+	}
+	plan := Plan{URL: req.Path, Local: true, DecryptionKey: req.DecryptionKey}
+	title := req.Title
+	if title == "" {
+		title = filepath.Base(req.Path)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	// Index 0 / 无 drama：告诉所有读 req 的地方"这不是某一集"
+	// （进度回写、下一季判断、ASS key 都靠它，见 v1 清空选集条的同款动机）。
+	s.req = &Request{Title: title}
+	s.plan = &plan
+	s.durMs = 0
+	s.pendingResumeMs = req.ResumeMs
+	if s.pendingResumeMs < 0 {
+		s.pendingResumeMs = 0
+	}
+	s.rebuilds = 0
+	s.endedFired = false
+	s.lastPosMs = 0
+	s.lastVersion = 0
+	s.assPath = ""
+	s.wantPaused = false
+
+	// 换集同款清理：撤下上一集的弹幕轨，且**不给本地文件设抓取窗口**。
+	if s.subAttached && s.p != nil {
+		_ = s.p.SubRemove()
+		s.subAttached = false
+	}
+	if s.fetcher != nil {
+		s.fetcher.SetEpisode(danmaku.Episode{})
+	}
+
+	return s.applySourceLocked()
 }
 
 // Play 继续播放。
