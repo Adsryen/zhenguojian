@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""搜索页联想词（v1 对齐，子代理 G）验证（headless chromium + mock dev server @5184）。
+"""搜索页联想词（v1 对齐，子代理 G）验证（headless chromium + mock dev server @5192）。
 
-自动拉起/关闭 `npm run dev:mock -- --port 5184 --strictPort`（谁拉起谁关闭；若 5184 已被占用
-则复用并在结束时保留——5180/5182/5183 上可能存在其他代理的 vite，与本验证无关，勿杀，
-`pgrep -af vite` 可查）。
+自动拉起/关闭 `npm run dev:mock -- --port 5192 --strictPort`，启停走 `_devserver`：
+**进门先断言端口为空**，被占就硬失败。旧写法是「若 5184 已被占用则复用并在结束时保留」，
+并把 5180/5182/5183 上别人的 vite 当正常现象——那正是 detail_download_verify ② 假红灯
+（R8）的机制：探测到别人应答的 200 就以为自己起好了。`pgrep -af vite` 仍可查，
+但泄漏现在是错误而不是状态。
 
 断言：
   S0 进入搜索页，当前源=红果短剧。
@@ -32,7 +34,7 @@ from playwright.sync_api import sync_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND = os.path.dirname(HERE)
-PORT = 5184
+PORT = 5192
 BASE = f"http://127.0.0.1:{PORT}"
 EXE = "/home/ryen/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
 SEARCH_URL = BASE + "/#/search"
@@ -84,6 +86,9 @@ def kill_group(proc):
             pass
 
 
+import _devserver
+
+
 def calls(page):
     return page.evaluate("window.__zgjSuggestCalls || 0")
 
@@ -130,19 +135,7 @@ def reset_storage(page, source="hongguo", locale=None):
 
 
 def main():
-    spawned = None
-    if not port_open():
-        spawned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=open(os.path.join(HERE, ".dev_suggest.log"), "w"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        if not wait_port():
-            kill_group(spawned)
-            print("FAIL S0 dev server 未能启动（见 verification/.dev_suggest.log）")
-            sys.exit(1)
+    spawned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="suggest")
 
     try:
         with sync_playwright() as p:
@@ -291,8 +284,7 @@ def main():
             ctx.close()
             browser.close()
     finally:
-        if spawned:
-            kill_group(spawned)
+        _devserver.stop_dev(spawned, PORT, name="suggest")
 
     print(f"{'ALL PASS' if not failures else 'FAILED: ' + ', '.join(failures)}")
     sys.exit(0 if not failures else 1)

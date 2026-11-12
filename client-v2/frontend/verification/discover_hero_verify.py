@@ -15,7 +15,8 @@
   A5 注入空数据 / 单条数据不崩（无 pageerror、状态正确）
 
 用法：python3 verification/discover_hero_verify.py
-（自管理 dev:mock：端口 5183 --strictPort；已在监听则复用。）
+（自管理 dev:mock：**独占端口 5191**，启停走 `_devserver`——旧写法「已在监听则复用」
+     会让别的脚本的 vite 冒充本脚本的服务器，制造与 R8 同类的假结果。）
 """
 import asyncio
 import os
@@ -26,10 +27,12 @@ import time
 
 from playwright.async_api import async_playwright
 
+import _devserver
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 FRONTEND = ROOT  # 脚本已从仓库根 verification/ 迁入 frontend/verification/
-PORT = 5183
+PORT = 5191
 BASE = f"http://127.0.0.1:{PORT}"
 SHOT = os.path.join(HERE, "discover-hero.png")
 SHOT_PULL = os.path.join(HERE, "discover-hero-pull.png")
@@ -56,23 +59,8 @@ def port_open(port):
 
 
 def start_server():
-    """dev:mock 自管理：端口已开则复用（他人实例）；否则起一个，退出时关闭。"""
-    if port_open(PORT):
-        print(f"[dev] {PORT} 已在监听，复用现有 dev:mock")
-        return None
-    proc = subprocess.Popen(
-        ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-        cwd=FRONTEND,
-        stdout=open(LOG, "w"),
-        stderr=subprocess.STDOUT,
-    )
-    for _ in range(90):
-        if port_open(PORT):
-            print(f"[dev] {BASE} ready")
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.25)
+    """dev:mock 自管理：端口预检 + 就绪等待见 _devserver.py（不再复用他人实例）。"""
+    return _devserver.start_dev(FRONTEND, PORT, True, HERE, name="discover-hero")
     raise RuntimeError(f"dev:mock 起不来，日志见 {LOG}")
 
 
@@ -265,12 +253,7 @@ async def main():
 
             await browser.close()
     finally:
-        if proc is not None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=6)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        _devserver.stop_dev(proc, PORT, name="discover-hero")
 
     check("无 JS 运行时错误", not errors, "; ".join(errors[:3]))
     print(f"\n截图：{SHOT}\n      {SHOT_PULL}（下拉中）\n      {SHOT_EMPTY}（空数据）")
