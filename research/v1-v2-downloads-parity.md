@@ -36,7 +36,7 @@ ALWAYS_ON_ICONS = {"failed": ("retry",)}   # 失败行的「重试」常驻提�
 | 全部暂停 `:1090` / 全部继续 `:1092` | `:455 / :456 controlAll('pauseAll'\|'resumeAll')` | ✅ |
 | 一键合并整季 `:1207` | `:577 downloads.mergeSeason`（按剧组） | ✅ |
 | 合并选中分集 `:1213` | `:585 downloads.mergeSelected` | ✅ |
-| **按季合并选中 `:1219`（勾选左侧多部剧，按季序逐季各出一个成品）** | Go 侧 ✅（`MergeStartMulti`，提交 `4a32dfa`/`b0ef1c3`，CI `43323235422` ✓）；**界面 ⏭ 待接** | 🟡 **能力已补、用户还摸不到**。原本缺的原因是 `MergeStart` 两种 mode 都锁死单剧：`season` 要单个 `dramaID`（空就报「缺少剧集信息」），`selected` 更是逐条比对剧号、混合直接拒绝：`else if jobDramaID(job) != dramaID { return nil, errors.New("请选择同一部剧的分集合并") }` —— v2 界面上那句报错就是能力缺失的可见症状。新开一条绑定而不是加第三种 mode，理由写在 `internal/downloadsvc/multi.go` 与 `bindings_download.go` 注释里 |
+| **按季合并选中 `:1219`（勾选左侧多部剧，按季序逐季各出一个成品）** | ✅ **已贯通**（Go `MergeStartMulti`，提交 `4a32dfa`/`b0ef1c3`，CI `43323235422` ✓；界面 `cdbd1ad`，`merge_multi_verify` @5210 13 条 ALL PASS） | 🟡→✅ **能力补齐、界面也接上了**。原本缺的原因是 `MergeStart` 两种 mode 都锁死单剧：`season` 要单个 `dramaID`（空就报「缺少剧集信息」），`selected` 更是逐条比对剧号、混合直接拒绝：`else if jobDramaID(job) != dramaID { return nil, errors.New("请选择同一部剧的分集合并") }` —— v2 界面上那句报错就是能力缺失的可见症状。新开一条绑定而不是加第三种 mode，理由写在 `internal/downloadsvc/multi.go` 与 `bindings_download.go` 注释里 |
 | **删除该剧 `:1195`**（danger；tooltip「移除左侧选中剧集的全部下载任务和已保存分集」） | 无该按钮 | ❌ **缺按钮，但能力已在**：`stores/downloads.ts:267 removeBatch(ids)` + `selectAll` 现成。缺的是"按剧一次性选中并删除"的**入口位置**——v1 有左侧剧列表，v2 队列页是平铺列表 + 筛选，这个按钮该放哪是 UI 决定，不猜 |
 | 停止全部合并 | `:694 store.mergeCancel('')` | ✅ v2 多出 |
 | 下载位置…（选择文件夹 / 恢复默认 / 取消 / 确定 `:335-357`） | 无 | ⚠ 刻意不做，理由与证据见 `v1-v2-settings-parity.md` 第 1 条（v2 下载根由核心决定，客户端无写入口） |
@@ -79,12 +79,26 @@ v1 第一刀是 `.strip(" 　-·~～")`，两端对称的字符集；`第3季` �
 那根连字符已经在**结尾**，所以照样被吃掉。我把两刀在脑子里合并成了一刀。
 已补三条用例钉住（结尾的吃 / 紧贴的吃 / 中间的留）。
 
-### 剩下那一步的落点（我的打算，想改说一句就行）
+### 落点已按这个打算做完（第四十四轮，提交 `cdbd1ad`）
 
 v1 靠左侧剧列表的复选框；v2 下载页没有那个列表，但**「合并」页签已经按剧分组**
 （每行一颗「一键合并整季」）。所以给那些分组行加复选、
 选中≥2 时出现「按季合并选中（N 部）」，是 v1 那套选择在最接近的现有结构上的落点，
 不是新造一个页面。
+
+实际做完的样子（`DownloadsView.vue` 的「合并入口」那一行）：
+每颗分组 chip 前面挂一个复选（`data-testid=merge-group-check`），
+勾选 ≥2 才出现 `merge-multi` 那颗，标签「按季合并选中（N 部）」与 tooltip
+逐字照 v1（只把「左侧」去掉——v2 没有那个列表，留着就是指一个不存在的东西）；
+排完清空勾选，批次按钮随之消失。
+错误话术按 Go 的 `[multi_none] / [multi_targets] / [multi_running]` 码取 i18n，
+**中文句子只进日志**，所以英文界面不会看到中文（第 42 轮 ⑦b 立的规矩）。
+
+mock 面刻意**不复刻季序与命名**（那是第二个真相，Go 的规则表已有单测），
+所以 `merge_multi_verify` 只断言"两部剧各有一条在排的合并"和码名一致，
+不断言输出文件名。`multi_targets` 门槛在 mock 里走不到
+（内置示例态恰好两部可合并，与"勾 ≥2 才出按钮"互斥），
+这条边界写在脚本 docstring 与运行时 NOTE 里，没有为了凑一条绿去给产品临时加注入缝。
 
 ⚠ 一条 v1 有、我没做的差异写在 multi.go 文件头：v1 多季批次"完成后不自动播放"。
 v2 的自动播放由前端按最后一条完成决定，现在不需要旗标；
