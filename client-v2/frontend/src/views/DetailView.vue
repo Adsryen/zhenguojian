@@ -458,7 +458,7 @@ watch(
       </div>
     </div>
     <div v-else-if="error" class="state-block">
-      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5.01" /></svg>
+      <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" /></svg>
       <div>详情加载失败：{{ error }}</div>
       <button class="btn" @click="loadDetail()">重试</button>
     </div>

@@ -38,7 +38,7 @@ import type {
   UpdateStatus,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockArchiveScan, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockArchiveScan, mockHongguoFilterGroups, mockSourceCategoryGroups, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
 import { mockSuggestions } from './fixtures'
@@ -491,10 +491,12 @@ const mockApi: NativeApi = {
     await delay(150)
     return mockResolvePlan(drama, chapter, index)
   },
-  browseFilters: async () => {
+  browseFilters: async (source: string) => {
     await delay(120)
-    // 与默认构建（无 overlay）一致：模拟 discovery_unavailable，触发前端兜底 chips
-    throw new ApiError('筛选墙通道未启用（mock 与默认构建一致）', 'discovery_unavailable')
+    // mock 与 v2overlay 构建的真实形状一致：红果=服务端筛选面板（genre/别名 category 组），
+    // 其余站源=discoveryBrowseFilters 归一的 category 分类组（fixtures 表）。
+    if (!source || source === 'hongguo') return mockHongguoFilterGroups()
+    return mockSourceCategoryGroups(source)
   },
   playerOpen: async (drama: Drama, chapter: Chapter, index: number, quality?: string) => {
     void quality // mock 面画质无真实语义

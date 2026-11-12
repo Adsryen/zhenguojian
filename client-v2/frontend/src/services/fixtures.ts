@@ -1071,3 +1071,65 @@ export function mockSuggestions(query: string): string[] {
   }
   return out.slice(0, 10)
 }
+
+// ── browseFilters mock（与 v2overlay 构建真实形状一致）──
+
+export interface MockFilterGroup { key: string; name: string; options: { id: string; name: string }[] }
+
+export function mockHongguoFilterGroups(): { groups: MockFilterGroup[] } {
+  return {
+    groups: [
+      {
+        key: 'genre',
+        name: '体裁',
+        options: [
+          { id: 'short_play', name: '真人剧' },
+          { id: 'comic_series', name: '漫剧' },
+          { id: 'ai_series', name: 'AI剧' }
+        ]
+      },
+      {
+        key: 'creation_status',
+        name: '状态',
+        options: [
+          { id: 'creation_status_0', name: '已完结' },
+          { id: 'creation_status_1', name: '连载中' }
+        ]
+      },
+      // discoveryOverlay 的红果别名组（v2 芯片行消费）
+      {
+        key: 'category',
+        name: '体裁',
+        options: [
+          { id: 'short_play', name: '真人剧' },
+          { id: 'comic_series', name: '漫剧' },
+          { id: 'ai_series', name: 'AI剧' }
+        ]
+      }
+    ]
+  }
+}
+
+const MOCK_SOURCE_CATEGORIES: Record<string, { id: string; name: string }[]> = {
+  huangdou: [{ id: '男频', name: '男频' }, { id: '女频', name: '女频' }],
+  yeguo: [{ id: '热播', name: '热播' }, { id: 'new', name: '最新' }],
+  youzi: [
+    { id: 'dramas', name: 'AI短剧' },
+    { id: 'ai-face-swap', name: 'AI换脸' },
+    { id: 'ai-adult/real', name: 'AI真人' },
+    { id: 'ai-adult/anime', name: 'AI动漫' },
+    { id: 'ai-adult/remix', name: 'AI魔改' }
+  ],
+  guipian: [{ id: '恐怖', name: '恐怖' }, { id: '悬疑', name: '悬疑' }],
+  'huangguo-video': [{ id: '1', name: '热门' }, { id: '2', name: '新上线' }],
+  sorani: [{ id: '1', name: '国产' }, { id: '2', name: '日韩' }, { id: '5', name: '其他' }]
+}
+
+export function mockSourceCategoryGroups(source: string): { groups: MockFilterGroup[] } {
+  const options = MOCK_SOURCE_CATEGORIES[source] ?? []
+  return {
+    groups: [
+      { key: 'category', name: '分类', options: [{ id: '', name: '全部' }, ...options] }
+    ]
+  }
+}

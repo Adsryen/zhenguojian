@@ -90,6 +90,9 @@ const FALLBACK_CHIPS: Chip[] = [
   { id: 'ai_series', name: 'AI剧' }
 ]
 
+// 红果 genre 体裁组里的合法芯片 id（其余行如主题/时间不进芯片行）。
+const GENRE_TAB_IDS = new Set(['', 'short_play', 'comic_series', 'ai_series'])
+
 /* ---- hero 大卡（v1 browse_panel.py:388-394：首个分类且 items 非空 → items[0] 上墙剔除、其余进网格） ----
    - 仅首个分类（chips[0]，兜底即「全部」）出 hero，与 v1 _is_first_tab 同口径；
      分类页签切走后 v1 也不出 hero
@@ -167,14 +170,19 @@ function selectDrama(d: Drama) {
 async function loadChips(source: string) {
   try {
     const res = await api.browseFilters(source)
-    const cat = res.groups?.find((g) => g.key === 'category')
-    if (cat?.options?.length) {
-      chips.value = [{ id: '', name: '全部' }, ...cat.options.map((o) => ({ id: o.id, name: o.name }))]
+    // 红果（含空 source）走服务端筛选面板：体裁在 key=genre 组；
+    // 其余站源 discoveryBrowseFilters 归一为 key=category 分类组。
+    const group = res.groups?.find((g) => g.key === 'genre') ?? res.groups?.find((g) => g.key === 'category')
+    if (group?.options?.length) {
+      const options = group.key === 'genre'
+        ? group.options.filter((o) => GENRE_TAB_IDS.has(o.id))
+        : group.options
+      chips.value = [{ id: '', name: '全部' }, ...options.map((o) => ({ id: o.id, name: o.name }))]
       return
     }
-    throw new ApiError('无 category 组', 'empty_filters')
+    throw new ApiError('无 genre/category 组', 'empty_filters')
   } catch (e: any) {
-    if (e?.code !== 'discovery_unavailable') console.warn('browseFilters 兜底:', e?.message ?? e)
+    console.info('browseFilters 兜底:', e?.code === 'discovery_unavailable' ? '构建通道缺 overlay' : e?.message ?? e)
     chips.value = FALLBACK_CHIPS
   }
 }
@@ -338,7 +346,7 @@ onBeforeUnmount(() => {
   </div>
   <div v-else-if="error && !loading" class="state-block">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-      <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5.01" />
+      <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" />
     </svg>
     <div>{{ error }}</div>
     <button class="btn" @click="loadFirst(true)">重试</button>

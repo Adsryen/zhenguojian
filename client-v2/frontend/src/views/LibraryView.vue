@@ -94,15 +94,17 @@ const canLoadMore = computed(() => !loading.value && !loadingMore.value && hasMo
 async function loadChips(source: string) {
   try {
     const res = await api.browseFilters(source)
-    const cat = res.groups?.find((g) => g.key === 'category')
-    const opts = (cat?.options ?? []).filter((o) => GENRE_IDS.has(o.id))
+    // 红果筛选面板体裁在 key=genre 组；category 组为其他站源的分类（交集过滤保底）
+    const group = res.groups?.find((g) => g.key === 'genre') ?? res.groups?.find((g) => g.key === 'category')
+    // genre 组只取体裁行（主题/时间等维度行 key 不同，不会误入）
+    const opts = (group?.options ?? []).filter((o) => GENRE_IDS.has(o.id))
     if (opts.length) {
       chips.value = [{ id: '', name: t('library.genre.all') }, ...opts.map((o) => ({ id: o.id, name: o.name || o.id }))]
       return
     }
-    throw new ApiError('browseFilters: no category group', 'empty_filters')
+    throw new ApiError('browseFilters: no genre/category group', 'empty_filters')
   } catch (e: any) {
-    if (e?.code !== 'discovery_unavailable') console.warn('browseFilters 兜底:', e?.message ?? e)
+    console.info('browseFilters 兜底:', e?.code === 'discovery_unavailable' ? '构建通道缺 overlay' : e?.message ?? e)
     chips.value = GENRES
   }
 }
@@ -489,7 +491,7 @@ onUnmounted(() => {
       </div>
       <div v-else-if="error && !loading" class="state-block" data-testid="lib-error">
         <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
-          <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5.01" />
+          <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" />
         </svg>
         <div>{{ error }}</div>
         <button class="btn" @click="loadFirst(true)">{{ t('search.retry') }}</button>
