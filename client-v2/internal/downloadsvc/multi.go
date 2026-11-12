@@ -194,7 +194,9 @@ func buildMultiTargets(dramas []map[string]any, jobs []map[string]any) []MultiTa
 // MergeStartMulti 一次排入多季合并（v1 start_merge_multi）。
 func (s *Service) MergeStartMulti(dramas []map[string]any) (map[string]any, error) {
 	if len(dramas) == 0 {
-		return nil, errors.New("请先勾选要合并的剧集")
+		// 尾巴 `[multi_none]` 是本仓既有错误码约定（api.ts callGoRaw 剥成 ApiError.code）：
+		// 界面按 code 取 i18n，这句中文只进日志——否则英文界面会吐中文。
+		return nil, errors.New("请先勾选要合并的剧集 [multi_none]")
 	}
 	if s.call == nil {
 		return nil, errors.New("下载服务未接线（缺少核心门面）")
@@ -209,7 +211,7 @@ func (s *Service) MergeStartMulti(dramas []map[string]any) (map[string]any, erro
 	// v2 没有左侧剧列表，去掉"左侧"两个字，其余照抄。
 	if len(targets) < 2 {
 		s.mu.Unlock()
-		return nil, errors.New("请先勾选至少两部要合并的剧集（每部至少完成 2 集）")
+		return nil, errors.New("请先勾选至少两部要合并的剧集（每部至少完成 2 集） [multi_targets]")
 	}
 
 	queued := 0
@@ -279,7 +281,7 @@ func (s *Service) MergeStartMulti(dramas []map[string]any) (map[string]any, erro
 
 	if queued == 0 {
 		return map[string]any{"queued": 0, "skipped": skipped, "outputs": []string{}},
-			fmt.Errorf("选中的 %d 部都在合并中，没有可排的新任务", skipped)
+			fmt.Errorf("选中的 %d 部都在合并中，没有可排的新任务 [multi_running]", skipped)
 	}
 	s.wakeWorker()
 	s.markMergesDirty()
