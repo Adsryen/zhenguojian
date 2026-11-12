@@ -361,6 +361,13 @@ func (a *App) PlayerSeek(ms float64) (string, error) { return "", a.playerSvc.Se
 func (a *App) PlayerSpeed(v float64) (string, error) { return "", a.playerSvc.SetSpeed(v) }
 func (a *App) PlayerVolume(v int) (string, error)    { return "", a.playerSvc.SetVolume(v) }
 func (a *App) PlayerDanmaku(on bool) (string, error) { return "", a.playerSvc.SetDanmakuEnabled(on) }
+
+// PlayerDanmakuOpacity 弹幕不透明度（0.05–1.0；≤0 或 >1 一律按 1.0 不透明）。
+// 对应 v1 播放控制条上的「透明 NN%」竖向滑条：改完 Go 侧立即用已抓数据重渲染 ASS
+// 并重挂字幕轨，前端不需要自己拼 alpha。
+func (a *App) PlayerDanmakuOpacity(v float64) (string, error) {
+	return "", a.playerSvc.SetDanmakuOpacity(v)
+}
 func (a *App) PlayerState() (string, error)          { return marshalJSON(a.playerSvc.State()) }
 func (a *App) PlayerClosePlayer() (string, error)    { return "", a.playerSvc.Close() }
 

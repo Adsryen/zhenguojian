@@ -165,13 +165,20 @@ type Config struct {
 	MaxRebuilds  int                    // 断线自动重建上限，默认 3；超限发 player:error 放弃
 	AssKeep      int                    // 每剧保留的 ASS 文件数；0 → WriteAss 默认
 	FetcherOpts  danmaku.FetcherOptions // 弹幕抓取节奏覆盖；零值 = v1 默认
+	// DanmakuOpacity 初始不透明度（0.05–1.0）；0 = 未设 → 按 1.0 不透明。
+	// 对齐 v1 danmaku 面板的「透明 NN%」滑条初值来源（v1 读 app-settings.json）。
+	DanmakuOpacity float64
 }
 
 // DanmakuState 快照里的弹幕部分。
 type DanmakuState struct {
-	Enabled bool   `json:"enabled"`
-	Count   int    `json:"count"`
-	Note    string `json:"note"`
+	Enabled bool    `json:"enabled"`
+	Count   int     `json:"count"`
+	Note    string  `json:"note"`
+	// Opacity 当前不透明度（0.05–1.0）。v1 把它存在 app-settings.json，
+	// v2 由前端存 zgj.player.danmakuOpacity 并在开弹幕时回灌；这里只报当前生效值，
+	// 未设过（内部 0）一律报 1.0，避免前端拿到 0 又渲染成"全透明"。
+	Opacity float64 `json:"opacity"`
 }
 
 // EpisodeRef 快照里的当前集标识。
@@ -220,6 +227,7 @@ type Service struct {
 
 	// 弹幕
 	enabled     bool // Config.DanmakuSource 非 nil 时默认开
+	opacity     float64 // 弹幕不透明度 0.05–1.0；0 = 未设（按 1.0，见 danmaku.AssOptions.normalize）
 	fetcher     *danmaku.Fetcher
 	subAttached bool
 	lastVersion int64
@@ -260,6 +268,10 @@ func New(cfg Config) *Service {
 		wantSpeed:  1.0,
 		wantVolume: 100,
 		enabled:    cfg.DanmakuSource != nil,
+		// 初始不透明度来自 Config（v1 是 app-settings.json 里的 danmaku_opacity；
+		// v2 前端存 zgj.player.danmakuOpacity 并在开弹幕时回灌）。
+		// 零值 = 未设，由 opacityValueLocked / ass.go 统一按 1.0 处理。
+		opacity: cfg.DanmakuOpacity,
 	}
 	if cfg.DanmakuSource != nil {
 		s.fetcher = danmaku.NewFetcher(cfg.DanmakuSource, cfg.FetcherOpts)
@@ -491,6 +503,37 @@ func (s *Service) SetDanmakuEnabled(on bool) error {
 	return nil
 }
 
+// opacityValueLocked 把内部零值翻成对外语义「未设 = 不透明 1.0」。调用方需持锁。
+func (s *Service) opacityValueLocked() float64 {
+	if s.opacity <= 0 {
+		return 1.0
+	}
+	return s.opacity
+}
+
+// SetDanmakuOpacity 设弹幕不透明度（v1 danmaku 面板「透明 NN%」滑条的对端）。
+// 钳位规则与 danmaku.AssOptions.normalize 一致：0/越界按 1.0，下限 0.05；
+// 改完立即用已抓数据重渲染挂载（v1「改透明度立即重建字幕并 sub-reload」）。
+// 弹幕关着时只存值，不触发渲染（与 SetDanmakuEnabled 的关档语义一致）。
+func (s *Service) SetDanmakuOpacity(v float64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if v <= 0 || v > 1 {
+		// 与 ass.go 同规则：0 与越界都视为「未设」→ 不透明
+		v = 1.0
+	}
+	v = max(0.05, min(1.0, v)) // Go 1.21+ 内建 min/max（与 ass.go 同款写法，免引 math）
+	if s.opacity == v {
+		return nil
+	}
+	s.opacity = v
+	if s.enabled && s.p != nil {
+		s.refreshTrackLocked()
+	}
+	s.emitStatsLocked()
+	return nil
+}
+
 // Close 停服务：quit mpv + 清弹幕状态。可重复调用（幂等）。
 func (s *Service) Close() error {
 	s.mu.Lock()
@@ -536,7 +579,7 @@ func (s *Service) State() Snapshot {
 
 func (s *Service) snapshotLocked() Snapshot {
 	snap := Snapshot{Speed: s.wantSpeed, Volume: s.wantVolume,
-		Danmaku: DanmakuState{Enabled: s.enabled}}
+		Danmaku: DanmakuState{Enabled: s.enabled, Opacity: s.opacityValueLocked()}}
 	if s.p != nil {
 		st := s.p.State()
 		snap.PosMs = msOf(st.Position)
@@ -840,7 +883,7 @@ func (s *Service) refreshTrackLocked() {
 	if len(items) == 0 {
 		return
 	}
-	text := danmaku.BuildAss(items, s.durMs, danmaku.AssOptions{})
+	text := danmaku.BuildAss(items, s.durMs, danmaku.AssOptions{Opacity: s.opacity})
 	if text == "" {
 		return
 	}

@@ -74,6 +74,19 @@ func (f *fakeMpv) callIndex(sub string) int {
 
 func (f *fakeMpv) hasCall(sub string) bool { return f.callIndex(sub) >= 0 }
 
+// callCount 按前缀统计调用次数（sub-reload 之类没有专用 helper 的动作用它）。
+func callCount(f *fakeMpv, prefix string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, prefix) {
+			n++
+		}
+	}
+	return n
+}
+
 // subAddCount 已记录的 sub-add 次数（开启弹幕重渲染应再挂一次，不能用 hasCall）。
 func subAddCount(f *fakeMpv) int {
 	f.mu.Lock()
@@ -684,4 +697,90 @@ func TestPlanDecodesNativeShape(t *testing.T) {
 		p.Headers["Referer"] != "https://example.test" || p.Headers["Cookie"] != "a=b" {
 		t.Fatalf("核心 plan 字段丢失: %+v", p)
 	}
+}
+
+// TestDanmakuOpacityRendersAndClamps 覆盖 v1「透明 NN%」滑条的 Go 对端：
+// 变更即重渲染（已挂轨时走 sub-reload）、快照回报、钳位与幂等、关档只存值。
+func TestDanmakuOpacityRendersAndClamps(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.svc.Open(context.Background(), openReq(1)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	f0 := h.l.nth(0)
+	f0.setLoaded(1.0, 120.0)
+	h.em.waitEvent(t, "danmaku:stats", time.Second, func(p any) bool {
+		m, _ := p.(map[string]any)
+		return m["count"] == 3
+	})
+	waitFor(t, time.Second, func() bool { return f0.hasCall("sub-add") }, "首窗挂载")
+
+	// ① 未设过时快照必须报 1.0：内部零值直接透出去，前端会渲染成「全透明」。
+	if got := h.svc.State().Danmaku.Opacity; got != 1.0 {
+		t.Fatalf("未设过 opacity 应报 1.0，得 %v", got)
+	}
+
+	// ② 变更立即重渲染；已挂轨 → sub-reload（v1 sub-reload 增量刷新，不重挂）
+	before := callCount(f0, "sub-reload")
+	if err := h.svc.SetDanmakuOpacity(0.4); err != nil {
+		t.Fatalf("SetDanmakuOpacity: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return callCount(f0, "sub-reload") > before }, "透明度变更后 sub-reload")
+	if got := h.svc.State().Danmaku.Opacity; got != 0.4 {
+		t.Fatalf("快照 opacity 应为 0.4，得 %v", got)
+	}
+	// ③ ASS 里的 alpha 必须是 v1 口径 round((1-opacity)*255)：0.4 → 153 = 0x99
+	body, err := os.ReadFile(h.svc.assPath)
+	if err != nil {
+		t.Fatalf("读 ASS 失败: %v", err)
+	}
+	if !strings.Contains(string(body), "&H99") {
+		t.Fatalf("opacity 0.4 应写 alpha &H99…，ASS 未包含：%d 字节", len(body))
+	}
+
+	// ④ 钳位与 ass.go 同规则：0/负/超界 → 1.0；过小 → 下限 0.05
+	for _, tc := range []struct{ in, want float64 }{{0, 1.0}, {-3, 1.0}, {1.7, 1.0}, {0.01, 0.05}} {
+		if err := h.svc.SetDanmakuOpacity(tc.in); err != nil {
+			t.Fatalf("SetDanmakuOpacity(%v): %v", tc.in, err)
+		}
+		if got := h.svc.State().Danmaku.Opacity; got != tc.want {
+			t.Fatalf("输入 %v 应钳成 %v，得 %v", tc.in, tc.want, got)
+		}
+	}
+
+	// ⑤ 同值不再重渲染（幂等，避免前端每次拖动都重建字幕）
+	if err := h.svc.SetDanmakuOpacity(0.5); err != nil {
+		t.Fatalf("SetDanmakuOpacity(0.5): %v", err)
+	}
+	n := callCount(f0, "sub-reload")
+	if err := h.svc.SetDanmakuOpacity(0.5); err != nil {
+		t.Fatalf("重复 SetDanmakuOpacity(0.5): %v", err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := callCount(f0, "sub-reload"); got != n {
+		t.Fatalf("同值不应再 sub-reload：%d → %d", n, got)
+	}
+
+	// ⑥ 关弹幕时只存值不渲染；再开启时用新透明度渲染（alpha 0.2 → 204 = 0xCC）
+	if err := h.svc.SetDanmakuEnabled(false); err != nil {
+		t.Fatalf("关弹幕: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return f0.hasCall("sub-remove") }, "关弹幕撤轨")
+	n = callCount(f0, "sub-reload")
+	if err := h.svc.SetDanmakuOpacity(0.2); err != nil {
+		t.Fatalf("关档 SetDanmakuOpacity: %v", err)
+	}
+	time.Sleep(120 * time.Millisecond)
+	if got := callCount(f0, "sub-reload"); got != n {
+		t.Fatalf("关弹幕时改透明度不该重渲染：%d → %d", n, got)
+	}
+	if got := h.svc.State().Danmaku.Opacity; got != 0.2 {
+		t.Fatalf("关档也要记住 opacity，得 %v", got)
+	}
+	if err := h.svc.SetDanmakuEnabled(true); err != nil {
+		t.Fatalf("开弹幕: %v", err)
+	}
+	waitFor(t, time.Second, func() bool {
+		b, err := os.ReadFile(h.svc.assPath)
+		return err == nil && strings.Contains(string(b), "&HCC")
+	}, "开启后用新透明度重建 ASS")
 }

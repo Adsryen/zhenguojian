@@ -57,6 +57,11 @@ jobs:
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
           $LASTEXITCODE -eq 0 -or (throw "vet failed")
+          # Go 单测：这台 Windows runner 是**唯一**能跑它们的地方（开发机无 Go 工具链）。
+          # 之前 CI 只有 vet + build，仓里那批 player/clipcover/embed 单测其实从没被机器验过——
+          # 纯前端改动能靠 playwright 自证，Go 侧改动没有这一层就只能靠人肉 review。
+          go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./...
+          if ($LASTEXITCODE -ne 0) { throw "go test failed" }
           # 发布版本号编译进二进制（main.buildVersion）：版本判定与「应用版本」的第一权威，
           # 不依赖 exe 同级 build-info.json（单文件更新后旧文件会污染判定）。dispatch 跑=dev。
           $binVer = if ("$env:GITHUB_REF" -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "v0.0.0-dev" }
