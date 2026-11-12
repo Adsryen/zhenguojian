@@ -38,9 +38,29 @@ jobs:
           # 另外：早先 `go test ./...` 在 ubuntu 上也因为 go:embed all:frontend/dist
           # 需要非空目录而 setup failed —— 那条现在不适用，因为不再构建根包。
           go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./internal/...
-          # 沙箱/查工具路径这几段不需要网络与 ffmpeg，所以逐条打出名字留证据：
-          # `ok 包名 0.00x s` 只能证明"没失败"，证明不了具体哪几条跑过。
-          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -v -run 'TestPrepare|TestLookupTool|TestMpvCandidates|TestRunSurvives|TestPipeline|TestStep|TestAllTerminal|TestMergeSettled|TestSkip|TestTrunc|TestJobList|TestShouldKeep' ./internal/selftest/
+          # 上一版这里用手写 `-run 'TestA|TestB|…'` 过滤器来"逐条留名"，
+          # 结果它**静默漏掉了 2 个用例**（TestRunAllOK、TestRunFailureSetsExitOneAndKeepsDetail
+          # 不在任何一条 alternative 里）：CI 打印 15 条 PASS 看着很齐，实际声明的是 17 个。
+          # 手写过滤器就是这种"看起来在管覆盖，其实在管名字"的东西。
+          # 换成硬门禁：**执行到的顶层用例数必须等于源码里声明的 `func Test*` 数**，
+          # 不符就红——新增用例不需要再改过滤器，漏跑反而会立刻暴露。
+          set +e
+          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -v ./internal/selftest/ > "$RUNNER_TEMP/st-v.txt" 2>&1
+          rc=$?
+          set -e
+          ran=$(grep -cE '^--- (PASS|FAIL|SKIP): Test' "$RUNNER_TEMP/st-v.txt")
+          declared=$(grep -hoE '^func Test[A-Za-z0-9_]+' internal/selftest/*_test.go | sort -u | wc -l)
+          echo "selftest 用例：执行 $ran / 声明 $declared"
+          grep -E '^--- (PASS|FAIL|SKIP): Test' "$RUNNER_TEMP/st-v.txt" | sed 's/ (.*)//'
+          if [ "$ran" -ne "$declared" ]; then
+            echo "::error title=selftest 覆盖对不上::执行 $ran ≠ 声明 $declared，有测试没被跑到（或包被跳过）"
+            tail -n 30 "$RUNNER_TEMP/st-v.txt"
+            exit 1
+          fi
+          if [ "$rc" -ne 0 ]; then
+            tail -n 40 "$RUNNER_TEMP/st-v.txt"
+            exit "$rc"
+          fi
 
   windows:
     runs-on: windows-latest
