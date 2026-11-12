@@ -99,6 +99,103 @@ EXEMPT_REASONS = {
 BASELINE: dict = {}
 
 
+# ───────────────────────── .ts 一侧（R9c）─────────────────────────
+# .vue 之外，stores/services 也在造展示文案（toast、状态标签、诊断文本），
+# 此前完全不在覆盖内 —— 本轮实测 88 行中文串字面量散在 11 个 .ts 里。
+# 判据与 .vue 同源：块注释/行注释不算；console.* 归开发者日志；
+# 真数据/算法用的中文（不是界面）进 TS_EXEMPT 并写明原因。
+
+TS_SKIP_FILES = {
+    "services/i18n.ts",      # 字典本体
+    "services/fixtures.ts",  # VITE_MOCK 假数据（剧名/简介/标签是内容）
+}
+
+# 不是界面文案的 .ts 中文：(子串, 原因)
+TS_EXEMPT = {
+    "services/series.ts": [
+        ("季", "多季标题解析/归并算法：处理的是中文剧名本身（v1 series.py 1:1 端口），不是界面文案"),
+        ("十", "同上：中文数字表"),
+        ("百", "同上：中文数字表"),
+    ],
+    "services/api.ts": [
+        ("滑块</text>", "mock 验证码 SVG 画布里的图形文字，VITE_MOCK 专用素材"),
+        ("未检测到 Wails 原生桥", "启动诊断文案，进 console 与降级提示；本轮先登记，见 notes R9c"),
+        ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
+    ],
+    "services/coverSave.ts": [
+        ("<safe_name(title)>", "v1 契约注释里的文件名模板（对齐 decrypt.safe_name），不是文案"),
+        ('"短剧"', "v1 safe_name 的 fallback 参数逐字对齐（main.py:1495），改了会偏离 v1 落盘名"),
+        ("海报图片", "File System Access 类型描述，随 locale 的意义弱；本轮先登记"),
+    ],
+}
+
+# .ts 一侧欠账表（R9c 建立）。规则同 .vue：多一处红、少一处也必须回来调低。
+# 重新生成用 `--rebase`，它按当前实测打印可粘贴的字典。
+TS_BASELINE = {
+    "stores/player.ts": 19,
+    "stores/watch.ts": 16,
+    "services/api.ts": 13,
+    "stores/calendar.ts": 12,
+    "stores/app.ts": 5,
+    "services/covers.ts": 4,
+    "services/coverSave.ts": 2,
+    "stores/searchAll.ts": 2,
+}
+
+
+def scan_ts_file(path):
+    rows = []
+    devlog = []
+    text = open(path, encoding="utf-8").read()
+    in_block = False
+    for i, raw in enumerate(text.split("\n"), 1):
+        line = raw
+        if in_block:
+            if "*/" in line:
+                in_block = False
+                line = line.split("*/", 1)[1]
+            else:
+                continue
+        if "/*" in line and "*/" not in line:
+            head = line.split("/*", 1)[0]
+            in_block = True
+            line = head
+        line = re.sub(r"/\*.*?\*/", "", line)
+        code = line.split("//")[0]
+        st = code.strip()
+        if st.startswith("*"):
+            continue
+        lits = [m.group(0) for m in STR_LITERAL.finditer(code) if CJK.search(m.group(0))]
+        if not lits:
+            continue
+        r = rel(path)
+        for needle, _ in TS_EXEMPT.get(r, []):
+            if needle in code:
+                break
+        else:
+            if re.search(r"\bconsole\.\w+\s*\(", code):
+                devlog.append((r, i, lits[0][:60]))
+            else:
+                rows.append((r, i, "ts", code.strip()[:120]))
+    return rows, devlog
+
+
+def scan_ts():
+    rows, devlog = [], []
+    for root, dirs, files in os.walk(SRC):
+        dirs[:] = [d for d in dirs if d not in ("node_modules",)]
+        for f in files:
+            if not f.endswith(".ts") or f.endswith((".d.ts", ".test.ts")):
+                continue
+            p = os.path.join(root, f)
+            if rel(p) in TS_SKIP_FILES:
+                continue
+            a, b = scan_ts_file(p)
+            rows.extend(a)
+            devlog.extend(b)
+    return rows, devlog
+
+
 def rel(path):
     return os.path.relpath(path, SRC).replace(os.sep, "/")
 
@@ -177,10 +274,15 @@ def scan_file(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="逐条打印违规")
+    ap.add_argument("--rebase", action="store_true",
+                    help="按当前实测打印 BASELINE / TS_BASELINE 字典（还完债后粘贴回来）")
     args = ap.parse_args()
 
     all_rows = []
     dev_logs = []
+    ts_rows, ts_logs = scan_ts()
+    all_rows.extend(ts_rows)
+    dev_logs.extend(ts_logs)
     for root, dirs, files in os.walk(SRC):
         dirs[:] = [d for d in dirs if d not in ("node_modules",)]
         for f in files:
@@ -194,16 +296,35 @@ def main():
             dev_logs.extend(logs)
 
     total_vue = sum(1 for _ in [1 for root, _, files in os.walk(SRC) for f in files if f.endswith(".vue")])
+    if args.rebase:
+        vue_part, ts_part = {}, {}
+        for r, _, kind, _ in all_rows:
+            (ts_part if kind == "ts" else vue_part)[r] = (ts_part if kind == "ts" else vue_part).get(r, 0) + 1
+        for name, d in (("BASELINE", vue_part), ("TS_BASELINE", ts_part)):
+            print(f"{name} = {{")
+            for r in sorted(d, key=lambda x: (-d[x], x)):
+                print(f'    "{r}": {d[r]},')
+            print("}")
+        print(f"# 合计 {len(all_rows)} 处（.vue {sum(vue_part.values())} / .ts {sum(ts_part.values())}）")
+        return 0
+
     byfile = {}
     for r, _, _, _ in all_rows:
         byfile[r] = byfile.get(r, 0) + 1
     print(f"扫描 {total_vue} 个 .vue（豁免文件 {len(EXEMPT_FILES)} 个、逐条豁免 "
-          f"{sum(len(v) for v in EXEMPT_REASONS.values())} 条，基线文件 {len(BASELINE)} 个）："
+          f"{sum(len(v) for v in EXEMPT_REASONS.values())} + .ts 豁免 "
+          f"{sum(len(v) for v in TS_EXEMPT.values())} 条，基线文件 {len(BASELINE) + len(TS_BASELINE)} 个）："
           f"界面中文 {len(all_rows)} 处 / 基线 {sum(BASELINE.values())} 处；"
           f"开发者日志中文 {len(dev_logs)} 处（不判红）")
+    byfile_all = {}
+    for r, _, _, _ in all_rows:
+        byfile_all[r] = byfile_all.get(r, 0) + 1
+    # TS_BASELINE 是 .ts 一侧的欠账表（.vue 侧 BASELINE 已清空）
+    for r, n in TS_BASELINE.items():
+        byfile_all.setdefault(r, n)
     bad = []
-    for r in sorted(set(byfile) | set(BASELINE)):
-        now, base = byfile.get(r, 0), BASELINE.get(r, 0)
+    for r in sorted(set(byfile_all) | set(BASELINE) | set(TS_BASELINE)):
+        now, base = byfile_all.get(r, 0), {**BASELINE, **TS_BASELINE}.get(r, 0)
         if now > base:
             bad.append(f"超出基线 {now - base} 处：{r}（{now} > {base}）—— 新写的中文必须走 i18n")
         elif now < base:
