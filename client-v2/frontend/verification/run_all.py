@@ -187,6 +187,22 @@ def main():
     if args.selftest:
         return selftest()
 
+    # 开工前预检：两个脚本默认抢同一个端口 → 直接不跑。
+    # 为什么要在跑之前查而不是跑完看残留：撞号时前一个脚本的服务器会被后一个当成
+    # "已在监听"复用（除非它自己做了预检），于是**绿是在别人的构建上测的**——
+    # R8 那条假红灯就是这么来的，而当时我是靠事后 ss -ltn + 人工对表才找到的。
+    # 现在把对表变成机器做的（审计逻辑与被测形状都由 ports_audit --selftest 钉着）。
+    import ports_audit
+    _per, _owner, conflicts = ports_audit.audit_dir(HERE)
+    if conflicts:
+        print("FAIL 端口冲突，先别跑（否则会测到别人的服务器）：")
+        for p2, files in sorted(conflicts.items()):
+            print(f"  {p2} ← {', '.join(files)}")
+        print("处置：给后加入的脚本换空闲号（5200 段起步），并同步 spec 端口表；"
+              "跑 `python3 ports_audit.py --selftest` 确认抽取判据没退化。")
+        return 1
+    print(f"端口预检 OK：{len(_owner)} 个号被 {len(_per)} 个脚本独占，无争用")
+
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
     if not scripts:
