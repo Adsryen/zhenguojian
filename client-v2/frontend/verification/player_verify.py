@@ -278,7 +278,8 @@ def main():
             q_val = page.locator(".pl-select.quality").input_value()
             check("⑦ 画质选择写 LS 且下拉值跟手", ls_q == "720" and q_val == "720", f"ls={ls_q} value={q_val}")
             # 画质已接核心 resolve：dev:mock 走「已切换到720P」实链分支；无桥/演示态出占位提示
-            check("⑦ 画质切换提示文案出现", ok7 and ("画质切换待核心接线" in toast or "已切换到720P" in toast), f"toast={toast}")
+            check("⑦ 画质切换提示文案出现", ok7 and ("已切换到720P，从原位置继续播放" in toast
+                                 or "演示模式或未载入剧目" in toast), f"toast={toast}")
 
             # ── 截图：面板展开 + toast 可见 ──
             page.wait_for_timeout(400)

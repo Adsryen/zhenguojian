@@ -12,7 +12,7 @@
    - 连播开关 zgj.player.autoplay（默认开）：markEnded → 自动 playNext（v1 连播语义）；
    - 画质 zgj.player.quality（auto/1080/720/540，v1 QUALITY_INDEX_SLUGS 档位序）：
      PlayerOpen 尚无 quality 形参（不改 app.go），切换=重开当前集续播占位 + hint 提示
-     「画质切换待核心接线」，不假成功——核心接线见返报「依赖请求」；
+     「演示模式或未载入剧目：…」（player.qualityDeferred），不假成功；
    - 进度节流保存（v1 main.py:2495 同款）：播放中 position 变化≥5s 或距上次≥5s tick
      即 saveWatch(false)，崩溃不丢进度；shutdown 落盘保留；
    - M 静音=音量 0 ↔ 恢复（桥无 mpv mute 属性，用 setVolume 近似，见返报差异）。 */
@@ -549,7 +549,7 @@ export const usePlayerStore = defineStore('player', {
       this.quality = q
       localStorage.setItem(QUALITY_KEY, q)
       if (this.demoMode || !this.drama) {
-        this.setHint(t('player.qualityPending'))
+        this.setHint(t('player.qualityDeferred'))
         return
       }
       const pos = this.position

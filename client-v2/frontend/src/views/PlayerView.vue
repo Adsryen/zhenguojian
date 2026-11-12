@@ -23,7 +23,8 @@
       current watch 自动切分组，DOM 落位由本层 scrollIntoView '.ep-btn.current' 补齐），
       点击切集走 store.openEpisode(drama, ep, 0, chapter)。
    ⑤ 画质下拉（自动/1080/720/540）：PlayerOpen 无 quality 形参（禁改 app.go）→
-      偏好持久化 + 「重开当前集」占位 + hint「画质切换待核心接线」（stores/player.ts setQuality）。
+      偏好持久化 + 切档重开原位续播 + hint 两条分支（stores/player.ts setQuality：
+     真实态「已切换到{q}…」／演示或无剧目「player.qualityDeferred」）。
    ⑥ 进度 5s 节流保存：见 store.applySnapshot → maybePersistWatch（v1 main.py:2495 同款）。
    布局契约不变：.pl-top/.pl-stage/.pl-bar 仍为垂直兄弟链（pl-mid 内 stage 在 bar 之上），
    hitbands 断言（top.bottom<=stage.top、bar.top>=stage.bottom）继续成立。 */

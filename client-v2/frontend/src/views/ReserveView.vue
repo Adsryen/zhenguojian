@@ -12,8 +12,10 @@
       （drama.source，缺失回落 id 前缀，排除 local —— v1 _source_group），排序对齐
       设置页 orderedSources；「全部」+ 各源 displayName（app store，拿不到显 name/slug）；
       仅 >1 源时显示（v1 chip_bar.setVisible）；纯前端派生过滤，不发请求。
-   —— 日历条目绑定（// TODO binding: native.Reservations）随日历 tab 一并移交
-      CalendarView/stores/calendar（Go Calendar 绑定已接线），本页不再有日历数据面。 */
+   —— 日历条目数据面早已整体移交 CalendarView/stores/calendar，并且**已接真桥**：
+      stores/calendar.ts:107 透传 Go Calendar(date, offset, gender)（bindings_calendar.go:43）。
+      旧注释里那句 `TODO binding: native.Reservations` 会让人以为还欠一个绑定，其实不欠：
+      reserved 旗标走 watchstore 行（calendar.ts loadFlags），本页也没有日历数据面。 */
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'

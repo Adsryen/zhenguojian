@@ -477,7 +477,10 @@ const zh: Record<string, string> = {
   'player.seekFailed': '跳转失败',
   'player.speedFailed': '倍速失败',
   'player.danmakuFailed': '弹幕开关失败',
-  'player.qualityPending': '画质切换待核心接线：偏好已记住',
+  // 分支真意：演示模式或还没载入剧目时才走这里（setQuality 里 `demoMode || !drama`）。
+  // 核心画质接线早已完成（见 ⑦ 的另一分支「已切换到{q}，从原位置继续播放」），
+  // 所以旧文案「画质切换待核心接线」是一句已经过期的谎话，键名一起改成 qualityDeferred。
+  'player.qualityDeferred': '演示模式或未载入剧目：画质偏好已记住，未重开当前集',
   'player.qualitySwitched': '已切换到{q}，从原位置继续播放',
   // ── R9c-2：watch store 的失败文案（zh 与 errText 拼接结果逐字一致）──
   'watch.errLoadRows': '读取观看数据失败：{m}',
@@ -1102,7 +1105,7 @@ const en: Record<string, string> = {
   'player.seekFailed': 'Seek failed',
   'player.speedFailed': 'Speed change failed',
   'player.danmakuFailed': 'Danmaku toggle failed',
-  'player.qualityPending': 'Quality switch pending core wiring: preference saved',
+  'player.qualityDeferred': 'Demo mode or no drama loaded: quality saved, current episode not reopened',
   'player.qualitySwitched': 'Switched to {q}, resuming from the same position',
   // ── R9c-2: watch store failure messages (zh byte-identical to old errText output) ──
   'watch.errLoadRows': 'Failed to load watch data: {m}',
