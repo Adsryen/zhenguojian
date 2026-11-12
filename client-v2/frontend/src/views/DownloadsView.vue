@@ -186,6 +186,40 @@ const selectedSingleDrama = computed(() => {
 
 /* 整季合并入口：每部剧已完成≥2（v1 _merge_targets 语义） */
 
+// R22b「按季合并选中」的落点：v1 靠左侧剧列表的复选框，
+// v2 没有那个列表，但这里已经**按剧分组**（每颗 chip 就是一部剧），
+// 所以复选挂在 chip 上、选中≥2 时出现那颗批次按钮 —— 是最接近的现有结构，不是新造页面。
+const multiIds = ref<string[]>([])
+const mergingMulti = ref(false)
+const multiDramas = computed(() =>
+  store.mergeGroups.filter((g) => multiIds.value.includes(g.dramaId)).map((g) => g.drama))
+
+function toggleMergeGroup(id: string) {
+  multiIds.value = multiIds.value.includes(id)
+    ? multiIds.value.filter((x) => x !== id)
+    : [...multiIds.value, id]
+}
+
+async function onMergeMulti() {
+  if (multiDramas.value.length < 2) return
+  mergingMulti.value = true
+  try {
+    const res = await store.mergeStartMulti(multiDramas.value)
+    showToast(tf('downloads.mergeMultiDone', { n: res.queued }))
+    multiIds.value = [] // 排完清勾选：留着会让人以为还要再点一次
+  } catch (e: any) {
+    // 按 code 取句子（Go 的错误串只进日志，界面不许显示中文句子给英文用户）
+    const map: Record<string, string> = {
+      multi_targets: t('downloads.mergeMultiFew'),
+      multi_none: t('downloads.mergeMultiNone'),
+      multi_running: t('downloads.mergeMultiAllRunning')
+    }
+    showToast(map[e?.code] ?? (e?.message ?? t('downloads.mergeFail')))
+  } finally {
+    mergingMulti.value = false
+  }
+}
+
 async function onMergeSeason(drama: Drama) {
   const res = await store.mergeSeason(drama)
   if (res) showToast(tf('downloads.toastMerged', { t: drama.title }))
@@ -594,15 +628,35 @@ async function onEnqueue() {
 
     <div v-if="store.mergeGroups.length || selectedJobs.length" class="merge-bar card">
       <span class="mb-label">{{ t('downloads.mergeEntry') }}</span>
+      <span v-for="g in store.mergeGroups" :key="g.dramaId" class="mb-group">
+        <input
+          type="checkbox"
+          class="mb-check"
+          data-testid="merge-group-check"
+          :checked="multiIds.includes(g.dramaId)"
+          :disabled="!!store.busyId"
+          :aria-label="t('downloads.mergeGroupPick')"
+          :title="t('downloads.mergeGroupPick')"
+          @change="toggleMergeGroup(g.dramaId)"
+        />
+        <button
+          class="chip"
+          :disabled="!!store.busyId"
+          :title="tf('downloads.mergeSeasonTip', { n: g.jobs.length })"
+          @click="onMergeSeason(g.drama)"
+        >
+          {{ tf('downloads.mergeSeason', { t: g.title, n: g.jobs.length }) }}
+        </button>
+      </span>
       <button
-        v-for="g in store.mergeGroups"
-        :key="g.dramaId"
-        class="chip"
-        :disabled="!!store.busyId"
-        :title="tf('downloads.mergeSeasonTip', { n: g.jobs.length })"
-        @click="onMergeSeason(g.drama)"
+        v-if="multiIds.length >= 2"
+        class="chip primary"
+        data-testid="merge-multi"
+        :disabled="!!store.busyId || mergingMulti"
+        :title="t('downloads.mergeMultiTip')"
+        @click="onMergeMulti"
       >
-        {{ tf('downloads.mergeSeason', { t: g.title, n: g.jobs.length }) }}
+        {{ tf('downloads.mergeMulti', { n: multiIds.length }) }}
       </button>
       <button
         v-if="selectedJobs.length >= 2 && selectedCompletable && selectedSingleDrama"

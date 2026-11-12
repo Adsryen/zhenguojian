@@ -309,6 +309,14 @@ export const useDownloadsStore = defineStore('downloads', {
       }
     },
 
+    /** R22b「按季合并选中」：勾选的剧交给 Go 算季序与命名（见 internal/downloadsvc/multi.go）。
+     *  错误**照实上抛**给调用方显示，不吞——v1 那句"至少两部"的门槛就是要让用户看到。 */
+    async mergeStartMulti(dramas: Drama[]): Promise<{ queued: number; outputs: string[] }> {
+      const res = await api.mergeStartMulti(dramas)
+      await this.refresh()
+      return { queued: res.queued, outputs: res.outputs ?? [] }
+    },
+
     saveSettings(concurrency: number, bySource: boolean, mergeVerify: boolean) {
       return this.run('settings', async () => {
         this.settings = await api.saveDownloadSettings(concurrency, bySource, mergeVerify)

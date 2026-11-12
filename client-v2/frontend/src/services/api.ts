@@ -39,7 +39,7 @@ import type {
   UpdateStatus,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockArchiveScan, mockHongguoFilterGroups, mockSourceCategoryGroups, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockArchiveScan, mockHongguoFilterGroups, mockSourceCategoryGroups, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockMergeStartMulti, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
 import { mockSuggestions } from './fixtures'
@@ -350,6 +350,9 @@ const realApi: NativeApi = {
     callGo<DownloadSettingsSnapshot>('SaveDownloadSettings', concurrency, bySource, mergeVerify),
   setDanmakuDownload: (on) =>
     callGo<{ danmakuDownload: boolean }>('DownloadSetDanmakuDownload', on),
+  mergeStartMulti: (dramas) =>
+    callGo<{ queued: number; replaced?: number; skipped?: number; outputs: string[] }>(
+      'MergeStartMulti', JSON.stringify(dramas ?? [])),
   mergeStart: (mode, drama, jobIds) =>
     callGo<{ queued: number; replaced: boolean; episodes: number[] }>(
       'MergeStart',
@@ -947,6 +950,7 @@ const mockApi: NativeApi = {
     return { danmakuDownload: !!on }
   },
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
+  mergeStartMulti: async (dramas) => mockMergeStartMulti(dramas),
   mergeCancel: async (id) => mockMergeCancel(id),
   downloadDirectory: async () => mockDownloadDirectory(),
   archiveScan: async () => mockArchiveScan(),

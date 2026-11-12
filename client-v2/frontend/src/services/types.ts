@@ -355,6 +355,10 @@ export interface NativeApi {
   /** R22a③：单独设「下载时保存弹幕」，不连带改并发（v1 那个勾选框就是即点即存）。 */
   setDanmakuDownload(on: boolean): Promise<{ danmakuDownload: boolean }>
   mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
+  /** R22b「按季合并选中」（v1 start_merge_multi → App.MergeStartMulti）。
+   *  勾选的剧由前端给出；季序、命名、`不足 2 集丢掉`、`运行中的季跳过` 全在 Go 算，
+   *  规则表见 internal/downloadsvc/multi.go 与它的单测。 */
+  mergeStartMulti(dramas: Drama[]): Promise<{ queued: number; replaced?: number; skipped?: number; outputs: string[] }>
   mergeCancel(id: string): Promise<{ ok: boolean }>
   downloadDirectory(): Promise<DownloadDirectoryInfo>
   /** 归档目录扫描（App.ArchiveScan → downloadsvc.ScanArchiveRoot；交付 B/C） */

@@ -764,6 +764,52 @@ export function mockSaveDownloadSettings(concurrency: number, bySource: boolean,
   return mockDownloadSettings()
 }
 
+/**
+ * mock 面「按季合并选中」。
+ *
+ * ⚠ 这里**故意不复刻** Go 的规则表（季序、`<去季号名> S%02dE%02d.mkv` 命名、
+ * 同名冲突 ` (2)`、"每部至少完成 2 集"的挑选、"运行中的季跳过而不是报错"）——
+ * 那些都在 `internal/downloadsvc/multi.go` 有单测，抄到 mock 里就是第二个真相，
+ * 一定会漂（本任务第 27/35/41 轮同一个病根）。
+ *
+ * mock 只承担两件事，够把 UI 接上：
+ *  ① 「不足两部整批不发起」这条**门槛**要照 v1 报错，否则界面上那颗按钮
+ *     的错误分支永远走不到；
+ *  ② 排进去的条目要能在「合并」列表里看见（复用 mockMergeStart 的排队实现）。
+ * 所以断言只验"按下的集合对不对、结果有没有落到列表、错误话术出不出现"，
+ * 不验命名与季序——那两条属于 Go 的测试。
+ */
+export function mockMergeStartMulti(dramas: Drama[]): {
+  queued: number; replaced?: number; skipped?: number; outputs: string[]
+} {
+  const state = mockDlState()
+  if (!dramas?.length) {
+    throw Object.assign(new Error('请先勾选要合并的剧集'), { code: 'multi_none' })
+  }
+  const completable = dramas.filter((d) =>
+    state.jobs.filter((j) => !j.archived && j.state === 'completed' && j.drama?.id === d.id).length >= 2)
+  if (completable.length < 2) {
+    // code 与 Go 侧 `[multi_targets]` **同一套**，界面那段 switch 在 mock 下走的是同一条代码。
+    // ⚠ 刻意不在 api.ts 里"靠中文子串反推 code"：那是手写字符串匹配，
+    //   改一个字就静默失效，而且静态扫描器会把它当成硬编码界面文案抓出来（本轮真抓了 3 处）。
+    //   ApiError 类在 api.ts（这里 import 会成环），所以直接造一个同形状的 Error：
+    //   读侧只看 `e.code` / `e.message`，两者行为一致。
+    throw Object.assign(
+      new Error('请先勾选至少两部要合并的剧集（每部至少完成 2 集）'),
+      { code: 'multi_targets' }
+    )
+  }
+  let queued = 0
+  const outputs: string[] = []
+  for (const d of completable) {
+    const res = mockMergeStart('season', d, [])
+    queued += res.queued
+    const last = state.merges[state.merges.length - 1]
+    outputs.push(last?.output ?? '')
+  }
+  return { queued, outputs }
+}
+
 export function mockMergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): { queued: number; replaced: boolean; episodes: number[] } {
   const state = mockDlState()
   let candidates: DownloadJobRow[] = []
