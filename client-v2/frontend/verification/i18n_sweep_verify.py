@@ -365,7 +365,17 @@ async def main():
                     scope = ".page-head, .hist-list, .footnote"
                 elif url.startswith("/#/player"):
                     # v2-6-parity：chrome 已键化，不再整组豁免 .pl-group（title/弹幕按钮一起扫）
-                    scope = ".pl-bar, .pl-panel"
+                    # R9c-2：真实走一遍「切画质」——文案由 stores/player.ts 经 i18n 生成，
+                    # zh 路径由 player_verify ⑦ 断言，这里断 en 路径零 CJK。
+                    # 不用 .pl-status：mock 下走的是真实 openEpisode，store.status 为空，
+                    # 元素压根不渲染（第一版我就断错了这个，超时 30s 才发现）。
+                    await page.locator(".pl-select.quality").select_option("720")
+                    await page.wait_for_selector(".pl-toast", timeout=15000)
+                    toast = await page.locator(".pl-toast").first.inner_text()
+                    check("en|player 画质 toast 英化且零 CJK",
+                          "Switched to 720P" in toast and not CJK_RE.search(toast),
+                          f"toast={toast[:80]}")
+                    scope = ".pl-bar, .pl-panel, .pl-toast"
                     excludes = [x for x in excludes if x not in (".pl-label", ".pl-panel-cur", ".pl-badge")]
                 else:
                     scope = sel

@@ -132,7 +132,6 @@ TS_EXEMPT = {
 # .ts 一侧欠账表（R9c 建立）。规则同 .vue：多一处红、少一处也必须回来调低。
 # 重新生成用 `--rebase`，它按当前实测打印可粘贴的字典。
 TS_BASELINE = {
-    "stores/player.ts": 19,
     "stores/watch.ts": 16,
     "services/api.ts": 13,
     "stores/calendar.ts": 12,

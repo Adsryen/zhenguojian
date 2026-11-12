@@ -18,6 +18,7 @@
    - M 静音=音量 0 ↔ 恢复（桥无 mpv mute 属性，用 setVolume 近似，见返报差异）。 */
 import { defineStore } from 'pinia'
 import { api, MOCK_MODE } from '@/services/api'
+import { t, tf } from '@/services/i18n'
 import {
   ApiError,
   type Chapter,
@@ -38,7 +39,12 @@ export const DM_DEMO_KEY = 'zgj.danmaku.demo'
 export const AUTOPLAY_KEY = 'zgj.player.autoplay'
 export const QUALITY_KEY = 'zgj.player.quality'
 export const QUALITY_CHOICES = ['auto', '1080', '720', '540'] as const
-const QUALITY_LABELS: Record<string, string> = { auto: '自动', '1080': '1080P', '720': '720P', '540': '540P' }
+const qualityLabel = (q: string): string =>
+  q === 'auto' ? t('player.qualityAuto') : (QUALITY_MAP[q] ?? q)
+
+/* R9c-2：数字档位是 ASCII 标签，只有「自动」是需要翻译的词，
+   所以不再维护整表中文的 QUALITY_LABELS（已随本次收敛删除，避免留下没人用的中文常量）。 */
+const QUALITY_MAP: Record<string, string> = { '1080': '1080P', '720': '720P', '540': '540P' }
 /** v1 main.py:2495 节流参数：5s 时间窗 / 5s 位移阈值 */
 export const WATCH_SAVE_INTERVAL_MS = 5000
 export const WATCH_SAVE_POS_DELTA = 5
@@ -175,7 +181,7 @@ export const usePlayerStore = defineStore('player', {
       this.error = ''
       const forcedDemo = localStorage.getItem(DM_DEMO_KEY) === '1'
       if (forcedDemo || (!MOCK_MODE && !bridgeAvailable())) {
-        await this.startDemo(String(q.title ?? '演示影片'))
+        await this.startDemo(String(q.title ?? t('player.demoTitle')))
         this.loading = false
         return
       }
@@ -200,9 +206,9 @@ export const usePlayerStore = defineStore('player', {
         // V2-F 修正：mock 面 api 从不走桥，`!bridgeAvailable()` 恒真会把 bad_video 这类
         // 真实播放错误也吞成演示模式；回落只应发生在「非 mock 且无桥」或桥级错误码。
         if (e?.code === 'bridge_missing' || e?.code === 'not_ready' || (!MOCK_MODE && !bridgeAvailable())) {
-          await this.startDemo(String(q.title ?? drama.title) || '演示影片')
+          await this.startDemo(String(q.title ?? drama.title) || t('player.demoTitle'))
         } else {
-          this.error = e?.message ? `播放失败：${e.message}` : '播放失败'
+          this.error = e?.message ? tf('player.playFailedMsg', { m: e.message }) : t('player.playFailed')
         }
       } finally {
         this.loading = false
@@ -231,7 +237,7 @@ export const usePlayerStore = defineStore('player', {
       this.drama = drama
       this.episodeIndex = ep
       this.currentChapter = chapter
-      this.title = `${drama.title || '影片'} · 第${ep}集`
+      this.title = tf('player.titleWithEpisode', { title: drama.title || t('player.titleFallback'), n: ep })
       this.eof = false
       this.eofHandledAt = 0 // 集级播完幂等随会话重置（同集重开——如画质占位——也能再触发）
       this.nextSeason = null
@@ -258,7 +264,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await this.openEpisode(this.drama, this.episodeIndex + 1, 0)
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '下一集打开失败'
+        this.error = (e as ApiError)?.message ?? t('player.nextOpenFailed')
       } finally {
         this.loading = false
       }
@@ -272,7 +278,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await this.openEpisode(this.drama, this.episodeIndex - 1, 0)
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '上一集打开失败'
+        this.error = (e as ApiError)?.message ?? t('player.prevOpenFailed')
       } finally {
         this.loading = false
       }
@@ -302,7 +308,7 @@ export const usePlayerStore = defineStore('player', {
       }
       if (typeof s.eof === 'boolean') this.eof = s.eof
       if (s.episode?.title && s.episode?.index) {
-        const label = `${s.episode.title} · 第${s.episode.index}集`
+        const label = tf('player.titleWithEpisode', { title: s.episode.title, n: s.episode.index })
         if (label !== this.title) this.title = label
       }
       // V2-F：崩溃不丢进度——每次快照都过一遍 5s 节流判定（v1 main.py:2495 同款）
@@ -312,8 +318,8 @@ export const usePlayerStore = defineStore('player', {
     /** 演示模式：本地时钟 + fixtures 弹幕，不触碰 Go */
     async startDemo(title: string) {
       this.demoMode = true
-      this.title = title ? `${title}（示例数据）` : '示例数据'
-      this.status = '演示模式：PlayerOpen/播放桥不可用，当前为示例数据'
+      this.title = title ? tf('player.demoWithSuffix', { title }) : t('player.badgeDemo')
+      this.status = t('player.demoStatus')
       this.opened = true
       this.running = true
       this.paused = false
@@ -411,11 +417,11 @@ export const usePlayerStore = defineStore('player', {
       this.paused = true
       this.running = true
       if (this.autoplay && !this.demoMode && this.hasNextEpisode) {
-        this.status = '本集已播完，自动连播下一集'
+        this.status = t('player.endedAutoplay')
         void this.playNext()
         return
       }
-      this.status = '本集已播完，可播放下一集'
+      this.status = t('player.endedNext')
       // v1 _check_next_season_after_end：只有「本季真结局」（无下一集）才查下一季，
       // 不跨季自动播放——查到由 UI 给「去看下一季」入口；查无静默（v1 状态栏 6s 语义并入 hint）。
       if (!this.hasNextEpisode && this.drama && !this.demoMode) {
@@ -429,7 +435,7 @@ export const usePlayerStore = defineStore('player', {
       if (!drama) return
       const hit = await lookupNextSeason(drama)
       this.nextSeason = hit
-      if (!hit) this.status = '本剧已播放完毕（没查到下一季，可在详情页预约）'
+      if (!hit) this.status = t('player.seriesEndNoNext')
     },
 
     /** V2-F：节流落盘——播放中位移≥5s 或距上次≥5s 即写 saveWatch（未完成态） */
@@ -477,7 +483,7 @@ export const usePlayerStore = defineStore('player', {
         this.paused = !this.paused
         this.eof = false
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '操作失败'
+        this.error = (e as ApiError)?.message ?? t('player.actionFailed')
       }
     },
 
@@ -496,7 +502,7 @@ export const usePlayerStore = defineStore('player', {
         this.eof = false
         this.eofHandledAt = 0 // seek 回片内允许再次判定播完
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '跳转失败'
+        this.error = (e as ApiError)?.message ?? t('player.seekFailed')
       }
     },
 
@@ -510,7 +516,7 @@ export const usePlayerStore = defineStore('player', {
         await api.setSpeed(snapped)
         this.speed = snapped
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '倍速失败'
+        this.error = (e as ApiError)?.message ?? t('player.speedFailed')
       }
     },
 
@@ -543,7 +549,7 @@ export const usePlayerStore = defineStore('player', {
       this.quality = q
       localStorage.setItem(QUALITY_KEY, q)
       if (this.demoMode || !this.drama) {
-        this.setHint('画质切换待核心接线：偏好已记住')
+        this.setHint(t('player.qualityPending'))
         return
       }
       const pos = this.position
@@ -551,7 +557,7 @@ export const usePlayerStore = defineStore('player', {
       this.loading = true
       try {
         await this.openEpisode(this.drama, this.episodeIndex, pos, chapter)
-        this.setHint(`已切换到${QUALITY_LABELS[q] ?? q}，从原位置继续播放`)
+        this.setHint(tf('player.qualitySwitched', { q: qualityLabel(q) }))
       } catch {
         /* 重开失败不叠加提示，错误位已有 */
       } finally {
@@ -576,7 +582,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await api.setDanmaku(on)
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? '弹幕开关失败'
+        this.error = (e as ApiError)?.message ?? t('player.danmakuFailed')
       }
     },
 
