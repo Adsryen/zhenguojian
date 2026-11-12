@@ -10,6 +10,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 
 	"zhenguojian/client-v2/internal/downloadsvc"
@@ -210,6 +211,33 @@ func (a *App) MergeStart(mode, dramaJSON, jobIDsJSON string) (string, error) {
 		return "", err
 	}
 	out, err := svc.MergeStart(mode, drama, ids)
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(out)
+}
+
+// MergeStartMulti 一次排入「按季合并选中」（v1 downloads.py:1964-1974 start_merge_multi）。
+//
+// 为什么必须新开一条而不是给 MergeStart 加第三种 mode：
+// 现有两种 mode 都把范围锁死在**一部剧**里（season 要单个 dramaID，
+// selected 遇到跨剧直接报「请选择同一部剧的分集合并」），
+// 要塞进"多部剧、每季各一个成品"就得改返回形状（单条 → 多条），
+// 那会让已有两个调用点和它们的断言一起变形。新开一条是加法，风险小得多。
+//
+// 入参是勾选的剧（JSON 数组，每项至少要有 id/title）。
+// 季序、`不足 2 集丢掉`、`<去季号安全名> S%02dE%02d.mkv` 命名与同名冲突后缀
+// 全在 internal/downloadsvc/multi.go 按 v1 规则算，规则表有单测。
+func (a *App) MergeStartMulti(dramasJSON string) (string, error) {
+	svc, err := a.getDownloadSvc()
+	if err != nil {
+		return "", err
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(dramasJSON), &raw); err != nil {
+		return "", fmt.Errorf("合并剧集清单无效: %w", err)
+	}
+	out, err := svc.MergeStartMulti(raw)
 	if err != nil {
 		return "", err
 	}
