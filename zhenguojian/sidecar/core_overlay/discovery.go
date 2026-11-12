@@ -132,6 +132,12 @@ func NativeDiscovery(payload string) string {
 			result, err = engine.discoveryWorks(ctx, input)
 		case "browseFilters":
 			result, err = engine.discoveryBrowseFilters(ctx, input)
+			// v2 前端筛选芯片按 key=category 读取；红果服务端面板把体裁放在
+			// key=genre。这里为体裁组补一个 category 别名组（选项同一份），
+			// v1 面板继续按 genre/主题原样消费，零行为变化。
+			if err == nil {
+				result = aliasHongguoGenreGroup(result)
+			}
 		case "browseFiltered":
 			result, err = engine.discoveryBrowse(ctx, input)
 		default:
@@ -449,4 +455,44 @@ func (engine *nativeEngine) discoveryBrowse(ctx context.Context, input discovery
 		return nil, errors.New("筛选分页未前进")
 	}
 	return map[string]any{"items": items, "hasMore": hasMore, "nextOffset": next, "sessionId": mapString(data, "session_id"), "offset": strconv.Itoa(input.Offset)}, nil
+}
+
+// aliasHongguoGenreGroup：若 groups 里有 genre 组且没有 category 组，
+// 追加一份 key=category 的同选项组（供 v2 DiscoverView 单芯片行语义使用）。
+func aliasHongguoGenreGroup(res any) any {
+	m, ok := res.(map[string]any)
+	if !ok {
+		return res
+	}
+	// NativeDiscovery 应答为完整信封 {"ok":true,"data":{…}}：
+	// 组数组在 data 层；解包后的平铺形态也兼容。
+	if inner, isEnv := m["data"].(map[string]any); isEnv {
+		m = inner
+	}
+	rawGroups, ok := m["groups"].([]any)
+	if !ok {
+		return res
+	}
+	var genreRow any
+	hasCategory := false
+	for _, g := range rawGroups {
+		row := nestedMap(g)
+		switch mapString(row, "key") {
+		case "genre":
+			genreRow = g
+		case "category":
+			hasCategory = true
+		}
+	}
+	if genreRow == nil || hasCategory {
+		return res
+	}
+	alias := nestedMap(genreRow)
+	clone := map[string]any{}
+	for k, v := range alias {
+		clone[k] = v
+	}
+	clone["key"] = "category"
+	m["groups"] = append(rawGroups, clone)
+	return res
 }
