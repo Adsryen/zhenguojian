@@ -209,6 +209,42 @@ async def main():
             d = await page.evaluate(READ_JS)
             check("⑦b 清旗标点「重新扫描」→ 分组恢复渲染（3 组）", d["rowCount"] == 3)
 
+            # ---------- ⑧ 归档组的「播放」（v1 downloads.py:620-664 归档行播放） ----------
+            # v2 归档页签按剧分组，只有 openPath 指向**具体成品文件**（合并产物）时才可播；
+            # 分集目录（`<站源>/<jobId>`）不是文件，给按钮就是死按钮。
+            play_btns = await page.locator("[data-testid=archive-play]").count()
+            rows = page.locator("[data-testid=archive-groups] .row")
+            has0 = await rows.nth(0).locator("[data-testid=archive-play]").count()
+            has1 = await rows.nth(1).locator("[data-testid=archive-play]").count()
+            has2 = await rows.nth(2).locator("[data-testid=archive-play]").count()
+            check(
+                "⑧a 只有含合并产物的那一组有「播放」（其余两组是分集目录，不给死按钮）",
+                play_btns == 1 and (has0, has1, has2) == (1, 0, 0),
+                f"总数={play_btns} 逐组={(has0, has1, has2)}",
+            )
+
+            # 播放 → 本地会话：标题「本地播放 <文件名>」，且不渲染选集侧栏
+            await rows.nth(0).locator("[data-testid=archive-play]").click()
+            await page.locator(".pl-title").wait_for(state="visible", timeout=15000)
+            await page.wait_for_timeout(2500)
+            title = (await page.locator(".pl-title").inner_text()).strip()
+            check(
+                "⑧b 点播放 → 播放器标题「本地播放 一世之尊 全001-002集.mkv」（v1 main.py:2634 同一条链）",
+                title == "本地播放 一世之尊 全001-002集.mkv",
+                f"title={title!r}",
+            )
+            panel = await page.locator(".pl-panel").count()
+            check("⑧c 本地会话不渲染选集侧栏（合并成品没有分集概念）", panel == 0, f"panel={panel}")
+            # 剧集 id 用 v1 自己的兜底形状 `local:<规范化名称>`
+            # （v1 save_local_watch 反查不到剧集时就是这么写 id 的；v2 没有 episodes.json 库索引，
+            #  所以归档页来的本地播放一律走这个兜底 id —— 不是漏做反查）
+            lid = await page.evaluate(
+                "() => document.querySelector('#app').__vue_app__"
+                ".config.globalProperties.$pinia.state.value.player.drama?.id ?? ''"
+            )
+            check("⑧d 剧集 id 用 v1 的兜底形状 local:<规范化名称>", lid.startswith("local:") and len(lid) > 6,
+                  f"id={lid!r}")
+
             await browser.close()
     finally:
         _devserver.stop_dev(owned, PORT, name="archive-scan")

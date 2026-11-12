@@ -370,6 +370,8 @@ const zh: Record<string, string> = {
   // ── 归档目录扫描（交付 C：App.ArchiveScan 分组视图）──
   'downloads.archive.scanning': '正在扫描归档目录…',
   'downloads.archive.rescan': '重新扫描',
+  'downloads.archivePlayTip': '直接播放这一部的合并成品',
+  'downloads.archivePlayNoFile': '这一组没有可直接播放的成品文件（只有分集目录）',
   'downloads.archive.copyPath': '复制路径',
   'downloads.archive.copied': '已复制目录路径',
   'downloads.archive.copyFail': '复制失败，请手动选择路径',
@@ -1057,6 +1059,8 @@ const en: Record<string, string> = {
   // ── Archive folder scan (delivery C: App.ArchiveScan grouped view) ──
   'downloads.archive.scanning': 'Scanning archive folder…',
   'downloads.archive.rescan': 'Rescan',
+  'downloads.archivePlayTip': 'Play the merged file of this title',
+  'downloads.archivePlayNoFile': 'No playable file in this group (episode folders only)',
   'downloads.archive.copyPath': 'Copy path',
   'downloads.archive.copied': 'Directory path copied',
   'downloads.archive.copyFail': 'Copy failed; select the path manually',

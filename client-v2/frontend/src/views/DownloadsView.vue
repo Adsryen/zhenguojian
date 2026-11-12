@@ -352,6 +352,40 @@ function archiveMtimeText(ms: number): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
+/* v1 的归档文件行有「播放」（downloads.py:620-664，`playRequested.emit(path)` →
+ * main.py:2684 → open_local）。v2 的归档页签是**按剧分组**而不是按文件成行，
+ * 所以只有 `openPath` 指向具体成品文件（合并产物）时才有可播的东西——
+ * 分集目录（`<站源>/<jobId>`）不是文件，硬给一颗按钮就是死按钮。
+ *
+ * ⚠ drama id 用 `local:<名称>` 兜底，这是**照 v1 自己写的兜底形状**
+ * （watchstore.py `save_local_watch` 找不到对应剧时 `id = "local:" + 规范化的文件名 stem`），
+ * 不是我发明的键。v2 没有 v1 那套 `episodes.json` 库索引可以反查剧集，
+ * 所以归档页来的本地播放一律走这个兜底 id：
+ * 进度会记成一条独立的历史行（v1 同样如此），反查不到真实剧集是既成事实，
+ * 写在这是为了别让人以为这里少做了一次反查。 */
+const ARCHIVE_FILE_RE = /\.(mkv|mp4)$/i
+
+function archivePlayable(g: { openPath?: string }): boolean {
+  return ARCHIVE_FILE_RE.test(g.openPath || '')
+}
+
+function archiveLocalDramaId(name: string): string {
+  // v1 的兜底键形状："local:" + 规范化 stem（去空白/标点、小写）
+  const norm = String(name || '').toLowerCase().replace(/[\s\p{P}]+/gu, '')
+  return `local:${norm || 'unknown'}`
+}
+
+async function onPlayArchiveGroup(g: { name: string; openPath: string }) {
+  const dir = store.archive?.directory || store.downloadDir?.directory
+  if (!dir || !archivePlayable(g)) {
+    showToast(t('downloads.archivePlayNoFile'))
+    return
+  }
+  void router.push(playerRoute(
+    { id: archiveLocalDramaId(g.name), title: g.name, source: '', cover: '', episodes: 0 } as Drama,
+    0, 0, null, `${dir}/${g.openPath}`))
+}
+
 async function openArchiveGroup(g: { name: string; openPath: string }) {
   const dir = store.archive?.directory || store.downloadDir?.directory
   if (!dir || !g.openPath || g.openPath === '.') {
@@ -888,6 +922,15 @@ async function onEnqueue() {
             </div>
           </div>
           <div class="r-ops">
+            <!-- v1 归档行有「播放」；这里只有 openPath 指向成品文件（合并产物）时才给，
+                 分集目录不是文件，给了就是死按钮。 -->
+            <button
+              v-if="archivePlayable(g)"
+              class="btn small"
+              data-testid="archive-play"
+              :title="t('downloads.archivePlayTip')"
+              @click="onPlayArchiveGroup(g)"
+            >{{ t('downloads.play') }}</button>
             <button class="btn small" data-testid="row-open" :title="tf('downloads.archive.openTip', { p: g.openPath })" @click="openArchiveGroup(g)">{{ t('downloads.statbar.openFolder') }}</button>
           </div>
         </div>

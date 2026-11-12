@@ -43,16 +43,30 @@ v1 的本地播放入口在**追剧页与历史页**（外加下载页的合并�
    本机跑不了 Windows，所以把 fold 做成参数，`TestNormalizeForContainment`
    一条测试同时跑两种平台语义。
 
-## 还没做的三件（都在 v1 有据，别当成已对齐）
+## 那三件的状态（第四十六轮复核，全部已完成）
 
-1. **前端入口**：追剧/历史行若 `localPath` 存在 → 调 `PlayerOpenLocal`，
-   否则走现在的 resolve；文件不在时给 v1 那句「本地文件已不存在：<文件名>」；
-   播放器标题「本地播放 <文件名>」。
-2. **`localPath` 的写入侧**：v1 是 `save_local_watch`（文件名 stem 反查剧集 + 写进 history 行）。
-   Go 里字段与序列化都在，缺 writer 与 `Store` 侧的 `_resolve_local` 等价物。
-   **没有这一件，第 1 件永远不会触发**（行里压根没有 localPath）。
-3. **本地弹幕 sidecar .ass**（`main.py:1880`）：`OpenLocal` 现在只是"不去线上抓"，
-   没有挂下载时保存的同名 .ass —— 需要下载侧的命名约定一起做。
+| 件 | v1 出处 | 现在 | 验证 |
+|---|---|---|---|
+| ① `localPath` 写入侧 | watchstore.py:608-637 save_local_watch | ✅ `App.SaveLocalWatch`（函数本来就在，缺的是绑定/调用点/测试——第 41 轮更正过我的说法） | Go 6 组单测（去抖阈值两侧、finished 必落盘、duration=0 回落、绝对路径、空 id） |
+| ② 前端入口 | watch.py:636-645 | ✅ 历史行带 localPath → `?lp=` → 播放器本地分支 | history_local_play_verify 14 条 |
+| ③ 旁挂弹幕 | main.py:1880-1895 + library.py:413-475 | ✅ 写（danmaku.CollectSidecar）+ 挂（OpenLocal 里 DetectSidecar）+ 触发（跃迁 + 有界重试）+ 开关（勾选框） | sidecar/local/danmaku_toggle 各测 + CI ✓ |
+
+第四十五轮还接通了 v1 真有的另一件事：**双击「合并」页签已完成的条目播放成品**
+（`itemDoubleClicked` 1139 → `_open_merge_entry` 1495-1498 → `_play_merged_path` 1631-1640），
+以及第四十六轮的**归档组「播放」**（v1 downloads.py:620-664 归档行播放）。
+
+### 归档页签的粒度差异（别当成漏做）
+
+v1 归档区是**按文件成行**，每行都能播放/删除；v2 是**按剧分组**（`ArchiveGroup`），
+`openPath` 要么指向合并产物文件、要么指向最新分集目录。
+所以 v2 的「播放」只在 `openPath` 是 `.mkv/.mp4` 时出现，分集目录那两组**故意不给按钮**
+——给了就是死按钮。这条差异写在 DownloadsView 的注释与 `downloads_archive_scan_verify` ⑧a 的断言里。
+
+### 一处 v1 的兜底形状我照搬了，并注明为什么
+
+归档页来的本地播放没有真实剧集 id（v2 没移植 v1 的 `episodes.json` 库索引，反查不到剧集），
+所以 id 用 v1 自己在 `save_local_watch` 里用的兜底形状 `local:<规范化名称>`
+（实测 `local:一世之尊`）。这是**照 v1 的兜底**，不是我发明的键，也不是漏做反查。
 
 ## 一条方法论：我的阳性对照在 CI 上真的拦了一次假绿
 
