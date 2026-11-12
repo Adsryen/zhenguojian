@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
@@ -38,6 +39,8 @@ type App struct {
 	// quitting 托盘「退出程序」/更新重启旗标：OnBeforeClose 仅在置位时放行关闭，
 	// 否则 X = 隐藏主窗后台运行（防误关断下载 + 防用户以为已退而再开第二实例）。
 	quitting atomic.Bool
+	// trayHintShown 首次 X→托盘 提示只弹一次。
+	trayHintShown atomic.Bool
 }
 
 func NewApp() *App {
@@ -105,7 +108,13 @@ func NewApp() *App {
 
 // allowQuit 放行一次真退出（置旗标）。runtime.Quit 在 Windows 走 WM_CLOSE →
 // 会经过 beforeClose；更新重启（bindings_update.go）与托盘退出都必须先调它。
-func (a *App) allowQuit() { a.quitting.Store(true) }
+func (a *App) allowQuit() {
+	a.quitting.Store(true)
+	// 退出看门狗：OnShutdown 各步虽有界，但 wails 窗口销毁链路历史上出过卡死
+	// （用户实锤：托盘退出后进程不没，只能任务管理器）。5 秒后仍在世就硬退出，
+	// 正常路径早已结束，AfterFunc 随进程消失，不会误伤。
+	time.AfterFunc(5*time.Second, func() { os.Exit(0) })
+}
 
 // beforeClose 挂 wails OnBeforeClose：返回 true=允许关闭。X 不再退出——隐藏主窗
 // 进托盘（进程与下载/合并任务继续，双击托盘图标恢复）；托盘未运行（非 Windows
@@ -115,6 +124,13 @@ func (a *App) beforeClose(ctx context.Context) bool {
 		return true
 	}
 	runtime.WindowHide(ctx)
+	if !a.trayHintShown.Swap(true) {
+		go func() {
+			_ = tray.ShowInfoBox("已最小化到托盘",
+				"程序仍在后台运行（下载/合并不中断）。托盘图标可能被收进「显示隐藏的图标」箭头里；"+
+					"右键图标选择「退出程序」才是真退出。")
+		}()
+	}
 	return false
 }
 

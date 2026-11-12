@@ -138,6 +138,9 @@ func (c coreSource) FetchWindow(_ context.Context, session string, startMs, endM
 }
 
 // Config 注入 Service 的全部外部依赖；零值走括号里的默认。
+// openResolveTimeout 是 Open 阶段解析播放地址的硬上限（见 Open 内注释）。
+const openResolveTimeout = 60 * time.Second
+
 type Config struct {
 	Resolver Resolver // Open 取播放计划；nil → Open 直接报错
 	// MpvLauncher 造 mpv 实例；nil = 默认包装 mpv.New。
@@ -332,8 +335,16 @@ func (s *Service) Open(ctx context.Context, req Request) error {
 	if s.cfg.Resolver == nil {
 		return errors.New("player: 未注入 Resolver，无法解析播放地址")
 	}
-	plan, err := s.cfg.Resolver.Resolve(ctx, req)
+	// 解析必须有界：核心 resolve 内部对上游 403/限流会做多轮重试（单轮可达分钟级），
+	// 无超时时前端会永远停在「正在打开播放会话…」（用户实锤且控制台无报错）。
+	// 60s 上限后给出可操作的错误文案。
+	rctx, rcancel := context.WithTimeout(ctx, openResolveTimeout)
+	plan, err := s.cfg.Resolver.Resolve(rctx, req)
+	rcancel()
 	if err != nil {
+		if rctx.Err() != nil && ctx.Err() == nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			return fmt.Errorf("获取播放地址超时（%d 秒）：上游可能限流或网络不通，可在设置→网络与下载调整代理后重试", int(openResolveTimeout/time.Second))
+		}
 		return err
 	}
 	if plan.URL == "" {
