@@ -6,9 +6,21 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"zhenguojian/client-v2/internal/native"
 )
+
+// baseMpvName 与 mpvCandidates 内部用的是同一套名字规则，单独抽出来给断言用，
+// 免得测试里再抄一遍规则（抄两遍就有一个会过期）。
+func baseMpvName() string {
+	if runtime.GOOS == "windows" {
+		return "mpv.exe"
+	}
+	return "mpv"
+}
 
 // 这组单测**不碰网络也不碰核心**：Run 只吃 []Step，
 // 所以能纯本地验的就是"自检这套机器本身"的契约——结局分类、退出码、
@@ -242,5 +254,135 @@ func TestStepInventoryMatchesV1Parity(t *testing.T) {
 	}
 	if dec == nil || dec.Run != nil || !strings.Contains(dec.Pending, "不适用") {
 		t.Fatalf("decrypt 应为注明『不适用』的 SKIP 步：%+v", dec)
+	}
+}
+
+// ── 第二十六轮：把"只是编译过"的沙箱/查路径逻辑变成 CI 真执行过的逻辑 ──
+// 上一轮的诚实边界是「九步全部只拿到编译 + 纯逻辑单测」。
+// 沙箱、查工具路径、报告写不干净这几段其实**不需要网络也不需要 ffmpeg**，
+// 所以完全可以在 CI 上真跑——那就别把它们和 7/9 步一起留在"从未执行"里。
+
+func TestPrepareSandboxLifecycle(t *testing.T) {
+	before := os.Getenv("ZHENGUO_DATA")
+	t.Cleanup(func() { _ = os.Setenv("ZHENGUO_DATA", before) })
+
+	cleanup, err := Prepare()
+	if err != nil {
+		t.Fatalf("Prepare 失败: %v", err)
+	}
+	dir := SandboxDir()
+	if dir == "" {
+		t.Fatalf("SandboxDir 应记录临时目录")
+	}
+	if got := os.Getenv("ZHENGUO_DATA"); got != dir {
+		t.Fatalf("ZHENGUO_DATA 应指向沙箱：env=%q dir=%q", got, dir)
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		t.Fatalf("沙箱目录必须真的存在：%v", err)
+	}
+	if !sandboxReady {
+		t.Fatalf("sandboxReady 未置真，pipeline 步会拒绝运行")
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("cleanup 后沙箱应被删除，仍在：%v", err)
+	}
+	if os.Getenv("ZHENGUO_DATA") != "" {
+		t.Fatalf("cleanup 应清掉 ZHENGUO_DATA，得 %q", os.Getenv("ZHENGUO_DATA"))
+	}
+	if sandboxReady || SandboxDir() != "" {
+		t.Fatalf("cleanup 后状态没复位：ready=%v dir=%q", sandboxReady, SandboxDir())
+	}
+}
+
+// 这条钉的是"沙箱早于 Init"的实际效果：DataDir 读到的就是沙箱，
+// 而不是用户真库（%LOCALAPPDATA%\ZhenguoJian）。上一轮这条只有注释，没有执行过。
+func TestPrepareMakesDataDirPointAtSandbox(t *testing.T) {
+	before := os.Getenv("ZHENGUO_DATA")
+	t.Cleanup(func() { _ = os.Setenv("ZHENGUO_DATA", before) })
+
+	cleanup, err := Prepare()
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer cleanup()
+	dir, err := native.DataDir()
+	if err != nil {
+		t.Fatalf("DataDir: %v", err)
+	}
+	if dir != SandboxDir() {
+		t.Fatalf("DataDir 应等于沙箱目录，得 %q vs %q", dir, SandboxDir())
+	}
+	if real, err2 := os.UserConfigDir(); err2 == nil && strings.HasPrefix(dir, real) {
+		t.Fatalf("沙箱不该落在用户配置目录下：%q（%q）", dir, real)
+	}
+}
+
+func TestLookupToolEnvOverrideWins(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "fake-ffmpeg.bin")
+	if err := os.WriteFile(stub, []byte("x"), 0o755); err != nil {
+		t.Fatalf("写桩: %v", err)
+	}
+	t.Setenv("ZHENGUO_FFMPEG", stub)
+	got, err := lookupTool("ffmpeg")
+	if err != nil || got != stub {
+		t.Fatalf("env 指定的路径必须优先，得 %q err=%v", got, err)
+	}
+}
+
+// env 指到一个不存在的文件时必须**报错**而不是悄悄回落到 PATH：
+// 否则"我明明指定了 ffmpeg 却用了一个别处的"这种问题永远查不出来。
+func TestLookupToolRejectsBrokenEnvPath(t *testing.T) {
+	t.Setenv("ZHENGUO_FFMPEG", filepath.Join(t.TempDir(), "nope-not-here"))
+	_, err := lookupTool("ffmpeg")
+	if err == nil || !strings.Contains(err.Error(), "ZHENGUO_FFMPEG") {
+		t.Fatalf("应报出是哪个环境变量指错了，得 %v", err)
+	}
+}
+
+func TestLookupToolFallsBackToPATH(t *testing.T) {
+	dir := t.TempDir()
+	stub := filepath.Join(dir, "ffprobe")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("写桩: %v", err)
+	}
+	t.Setenv("ZHENGUO_FFPROBE", "")          // 空串=未设（代码里走 TrimSpace 判空）
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := lookupTool("ffprobe")
+	if err != nil {
+		t.Fatalf("PATH 里的桩应该能找到: %v", err)
+	}
+	if filepath.Base(got) != "ffprobe" {
+		t.Fatalf("找到了别的东西：%q", got)
+	}
+}
+
+// v1/v2 打包布局是 exe 同级放 runtime\（app.zip + runtime.zip），
+// 候选顺序必须"同级优先、runtime 次之"，否则装了 runtime 却报找不到。
+func TestMpvCandidatesOrderAndLayout(t *testing.T) {
+	got := mpvCandidates(`D:\app`)
+	if len(got) != 3 {
+		t.Fatalf("应有三个候选，得 %v", got)
+	}
+	if !strings.HasSuffix(got[0], filepath.Join("D:\\app", baseMpvName())) {
+		t.Fatalf("第一候选应为 exe 同级：%v", got[0])
+	}
+	if !strings.Contains(got[1], "runtime") {
+		t.Fatalf("第二候选应覆盖 runtime\\ 布局：%v", got[1])
+	}
+}
+
+func TestRunSurvivesUnwritableReportDir(t *testing.T) {
+	orig := reportDir
+	reportDir = func() (string, error) { return "", fmt.Errorf("没地方写") }
+	t.Cleanup(func() { reportDir = orig })
+	var buf bytes.Buffer
+	_, code := Run(&buf, []Step{okStep("resources", nil)}, "v-test")
+	if code != 0 {
+		t.Fatalf("报告写不出不该改变退出码，得 %d", code)
+	}
+	if !strings.Contains(buf.String(), "报告未落盘") {
+		t.Fatalf("写不出报告必须说出来：\n%s", buf.String())
 	}
 }
