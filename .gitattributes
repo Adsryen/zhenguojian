@@ -7,3 +7,54 @@
 # picking either side (task state lives in task.json, not index.md). See
 # .trellis/spec/cli/backend/directory-structure.md for details.
 .trellis/workspace/*/journal-*.md merge=union
+
+# 换行符统一：仓库内文本一律以 LF 存储、LF 签出。
+# 背景：这个仓库同时被 Windows 开发机和 Syncthing 共享，文本文件被写成 CRLF 后
+# git 会把整文件报成 modified（一次实测 25 个文件、7898 行「改动」全是换行符），
+# 真改动被噪声埋掉。加了本段并 `git add --renormalize .` 之后幻影消失。
+* text=auto eol=lf
+
+# Windows 批处理必须是 CRLF：cmd.exe 对 LF-only 的 .bat 会错解析标签/goto，
+# 双击「一键打包.bat」直接起不来。这条不要并入上面的 eol=lf。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：禁止任何换行符转换，也避免 diff 噪声。
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.heic binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.exe binary
+*.dll binary
+*.lib binary
+*.zip binary
+*.mp4 binary
+*.mkv binary
+*.ass binary
+*.qsv binary
+
+# Go / 前端 / 文档常见文本，显式钉住（避免被启发式误判为二进制）
+*.go text
+*.mod text
+*.sum text
+*.py text
+*.vue text
+*.ts text
+*.js text
+*.json text
+*.md text
+*.yml text
+*.yaml text
+*.toml text
+*.txt text
+*.svg text
+*.sh text
+*.nsi text eol=crlf
+*.nsh text eol=crlf

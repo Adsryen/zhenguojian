@@ -15,11 +15,10 @@ dist-win/
 # v2 desktop shell build outputs
 client-v2/*.exe
 client-v2/build/bin/
-
-# v2 desktop shell build outputs
-client-v2/*.exe
-client-v2/build/bin/
 client-v2/build/*.json
 
 client-v2/.vite/
 client-v2/*.syso
+
+# 验证/冒烟脚本的运行日志：本地一次性产物，证据以 verification 目录里的截图为准
+**/verification/*.log
