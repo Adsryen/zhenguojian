@@ -2,7 +2,10 @@
 # -*- coding: utf-8 -*-
 """站源卡片手动拖拽排序验证（headless chromium + VITE_MOCK dev server）。
 
-前置：client-v2/frontend 下 `npm run dev:mock` 已监听 127.0.0.1:5173。
+自管理 dev:mock：**独占端口 5193**，启停走 `_devserver`（端口预检 + 退出回查）。
+     旧写法要求人工「先起 5173 的 dev:mock」，没起就在 `/#/settings` 导航上超时——
+     报错长得像页面坏了，其实只是没人起服务器；5173 还被 contextmenu/hitbands/searchall
+     共用，串味风险叠加。
 断言：
   A  默认/持久化/容错：坏档→默认序；存序生效；未知 slug 忽略；清键→红果置顶。
   B  指针拖拽：第 3 张卡拖到第 1 位 → DOM 序变化 + localStorage 落盘 + 刷新保持。
@@ -17,7 +20,13 @@ import sys
 
 from playwright.sync_api import sync_playwright
 
-BASE = "http://127.0.0.1:5173"
+import _devserver
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FRONTEND = os.path.dirname(HERE)  # client-v2/frontend
+
+PORT = 5193
+BASE = f"http://127.0.0.1:{PORT}"
 EXE = "/home/ryen/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
 OUT = os.path.dirname(os.path.abspath(__file__))
 LS_KEY = "zgj.source-order"
@@ -77,6 +86,14 @@ def goto_settings(page):
 
 def main():
     assert os.path.exists(EXE), f"headless shell 不存在: {EXE}"
+    proc = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="sourceorder")
+    try:
+        run_all(proc)
+    finally:
+        _devserver.stop_dev(proc, PORT, name="sourceorder")
+
+
+def run_all(proc):
     with sync_playwright() as p:
         browser = p.chromium.launch(executable_path=EXE)
         ctx = browser.new_context(viewport={"width": 1440, "height": 900})
