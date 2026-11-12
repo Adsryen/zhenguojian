@@ -77,7 +77,7 @@ func TestCollectSidecarWritesBothFiles(t *testing.T) {
 	// 永远不可能命中，于是这条断言实际上只剩 HasPrefix 半边在跑。）
 	lines := strings.Split(string(raw), "\n")
 	if len(lines) < 2 || !strings.HasPrefix(lines[1], " \"") || strings.HasPrefix(lines[1], "  \"") {
-		t.Fatalf("缩进不是 v1 的 1 空格：%q", strings.Join(lines[:min(3, len(lines))], "|"))
+		t.Fatalf("缩进不是 v1 的 1 空格：%q", strings.Join(head(lines, 3), "|"))
 	}
 	if !strings.Contains(string(raw), "\"total\": 2") {
 		t.Fatalf("total 没写进去：%s", string(raw)[:80])
@@ -175,7 +175,7 @@ func TestCollectSidecarGuards(t *testing.T) {
 		!strings.Contains(err.Error(), "核心挂了") {
 		t.Fatalf("fetch 失败该原样上抛: %v", err)
 	}
-	if _, statErr := os.Stat(SidecarPaths(video)[0]); statErr == nil {
+	if assOnly, _ := SidecarPaths(video); fileExists(assOnly) {
 		t.Fatal("fetch 失败却写了 .ass")
 	}
 }
@@ -214,11 +214,20 @@ func TestSidecarDocumentEmptyItemsIsArrayNotNull(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// head 而不是 min：Go 1.21 起 min/max 是内建函数，
+// 在同一个包里再定义一个同名函数会**把内建遮蔽掉**——
+// CI 实测后果是 ass.go:56 与 fetcher.go:271 的浮点 min() 全部编译失败
+// （"我的测试文件让生产代码编译不过"，本机没有 Go 工具链，只有 CI 抓得到）。
+func head(lines []string, n int) []string {
+	if len(lines) < n {
+		return lines
 	}
-	return b
+	return lines[:n]
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func firstLines(s string, n int) string {
