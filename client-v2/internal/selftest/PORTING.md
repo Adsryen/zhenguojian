@@ -18,9 +18,21 @@ v2 运行方式：`client-v2.exe --selftest`（`main.go:31` 判定，不起 GUI�
 | 4 | `search` | `search` | ✅ | `Suggestions("穿越")` + `Catalog(lane="search")` 有结果，取第一条当后续步骤的剧目 |
 | 5 | `detail` | `detail` | ✅ | `native.Detail` 且 **chapters ≥ 2**（v1 原条件） |
 | 6 | `preload` | `preload` | ✅ | `native.Preload` 且 `url` 非空、`local \|\| url 含 127.0.0.1`（v1 原条件逐条搬） |
-| 7 | `download` | `download` | ⛔ SKIP | 需要真实落盘 + 跑完清理（临时库目录、只取 2 集）。直接下真剧会污染用户库，必须先把 `downloadsvc` 的安全用法接进来 |
-| 8 | `decrypt` | `decrypt` | ⛔ SKIP | 依赖第 7 步产物 |
-| 9 | `merge` | `merge` | ⛔ SKIP | 依赖第 7 步产物 + ffmpeg 合成校验 |
+| 7 | `download` | `download` | ✅ 代码完成，**从未执行过** | `downloadsvc.Enqueue` 前 2 集 → 轮询 `Snapshot`（900s / 3s，照 v1）→ 要求 2 条 `completed`；跑在**沙箱数据目录**里（见下） |
+| 8 | `decrypt` | — | ⛔ 不适用（显式 SKIP） | **v2 没有独立的解密发布子系统**：产物保持加密存放，解密发生在 mpv 播放 key（`internal/mpv/player.go:248`）与合并时 ffmpeg `-decryption_key`（`internal/downloadsvc/merge.go:138`）。实质保证由第 9 步的产物校验承担 |
+| 9 | `merge` | `merge` | ✅ 代码完成，**从未执行过** | `MergeStart("selected", …)` → 轮询 merges 落定 → 要求 `state=done` 且 `output` 真实存在且非空（v1 那句 "merged file is not playable on its own" 的 v2 等价物；ffmpeg 全片校验在 downloadsvc 内部） |
+
+## 沙箱：v2 自检不碰用户真库（与 v1 的**行为差异**，不是改进掉链子）
+
+v1 的 download 步先 `core.downloads()` 全 remove、再
+`EpisodePublisher.purge(drama_id, remove_files=True)`——**删的是真实库文件**。
+v2 不把这个权力给自检：`main.go` 在 `Run` 之前调 `selftest.Prepare()`，
+建临时目录并把 `ZHENGUO_DATA` 指过去，**必须早于 `native.Init()`**
+（`DataDir` 只在第一次 initialize 生效，晚设就写进真库了）。
+
+- `newPipeline()` 在沙箱未建立时**直接拒绝**入队（有单测钉住）；
+- 全绿 → 删临时目录；**任何 FAIL → 保留现场并打印路径**
+  （一次真跑的下载/合并成本很高，毁掉现场等于让人再跑一遍）。
 
 ## 两处刻意不同（照抄会永远红，假装通过更糟）
 
@@ -40,6 +52,15 @@ v2 运行方式：`client-v2.exe --selftest`（`main.go:31` 判定，不起 GUI�
 
 也就是说：**六步绿不等于"已与 v1 完全等同"**，`pending` 字段就是这句话的机器版本。
 （这条是这套自检存在的意义——一个把"还没做什么"藏起来的自检比没有更危险。）
+
+## 「代码完成」≠「跑过」
+
+第 7、9 步目前只有两层证据：**CI 编译通过** + **纯逻辑单测通过**
+（终态判断、轮询退出条件、两种快照形状、沙箱前置拒绝、现场保留策略、九步清单守护）。
+`client-v2.exe --selftest` 的这三步**在任何机器上都没执行过**——
+需要打包布局 + 真实网络 + ffmpeg，本机（Linux，无 Go）与 CI（不能连核心网络）都做不到。
+首次在打包机上跑，请把它当成"这三步可能会红"来看待，红了按 detail 里的
+`jobs`/`merges` 摘要排查。
 
 ## 本机与 CI 的验证边界
 
