@@ -479,6 +479,16 @@ const zh: Record<string, string> = {
   'player.danmakuFailed': '弹幕开关失败',
   'player.qualityPending': '画质切换待核心接线：偏好已记住',
   'player.qualitySwitched': '已切换到{q}，从原位置继续播放',
+  // ── R9c-2：watch store 的失败文案（zh 与 errText 拼接结果逐字一致）──
+  'watch.errLoadRows': '读取观看数据失败：{m}',
+  'watch.errLoadSeen': '读取看过标记失败：{m}',
+  'watch.errToggleSeen': '看过标记失败：{m}',
+  'watch.errFollow': '追剧操作失败：{m}',
+  'watch.errUnfollow': '取消追剧失败：{m}',
+  'watch.errReserve': '预约操作失败：{m}',
+  'watch.errUnreserve': '取消预约失败：{m}',
+  'watch.errDelete': '删除记录失败：{m}',
+  'watch.errClear': '清空历史失败：{m}',
   'player.panelEpisode': '· 第{n}集',
   // ── v2-6-parity：DiscoverView chrome 与兜底芯片（zh 与收敛前逐字一致）──
   'discover.refresh': '刷新',
@@ -1070,6 +1080,16 @@ const en: Record<string, string> = {
   'player.danmakuFailed': 'Danmaku toggle failed',
   'player.qualityPending': 'Quality switch pending core wiring: preference saved',
   'player.qualitySwitched': 'Switched to {q}, resuming from the same position',
+  // ── R9c-2: watch store failure messages (zh byte-identical to old errText output) ──
+  'watch.errLoadRows': 'Failed to load watch data: {m}',
+  'watch.errLoadSeen': 'Failed to load seen marks: {m}',
+  'watch.errToggleSeen': 'Failed to update the seen mark: {m}',
+  'watch.errFollow': 'Follow action failed: {m}',
+  'watch.errUnfollow': 'Unfollow failed: {m}',
+  'watch.errReserve': 'Reserve action failed: {m}',
+  'watch.errUnreserve': 'Cancel reserve failed: {m}',
+  'watch.errDelete': 'Failed to delete the entry: {m}',
+  'watch.errClear': 'Failed to clear history: {m}',
   'player.panelEpisode': '· Ep {n}',
   // ── v2-6-parity: DiscoverView chrome + fallback chips ──
   'discover.refresh': 'Refresh',

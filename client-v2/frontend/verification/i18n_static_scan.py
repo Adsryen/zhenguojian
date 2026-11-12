@@ -111,7 +111,18 @@ TS_SKIP_FILES = {
 }
 
 # 不是界面文案的 .ts 中文：(子串, 原因)
+STATUS_REASON = ("watchstore 行状态枚举，逐字对齐 Go 核心（store.go:331/964）；"
+                 "前端只做镜像且无视图渲染 row.status，改译属跨层契约变更")
+
 TS_EXEMPT = {
+    # watchstore 的行状态是 **Go 核心契约**，不是界面文案：
+    # client-v2/internal/watchstore/store.go:331 声明 想看/在看/已看/预约中，
+    # :964 直接 `row["status"] = "预约中"`；v1 python watchstore.py:224 同形。
+    # 前端（stores/watch.ts 的乐观更新镜像、api.ts mock 面）只是照着核心形状写，
+    # 且**没有任何视图渲染 row.status**（ReserveView 显示的是加入时间与看到集数）。
+    # 把它翻成英文属于跨层契约变更，本机没有 Go 工具链，不能改。
+    "stores/watch.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
+    "services/api.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
     "services/series.ts": [
         ("季", "多季标题解析/归并算法：处理的是中文剧名本身（v1 series.py 1:1 端口），不是界面文案"),
         ("十", "同上：中文数字表"),
@@ -132,7 +143,6 @@ TS_EXEMPT = {
 # .ts 一侧欠账表（R9c 建立）。规则同 .vue：多一处红、少一处也必须回来调低。
 # 重新生成用 `--rebase`，它按当前实测打印可粘贴的字典。
 TS_BASELINE = {
-    "stores/watch.ts": 16,
     "services/api.ts": 13,
     "stores/calendar.ts": 12,
     "services/covers.ts": 4,

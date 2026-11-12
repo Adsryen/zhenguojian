@@ -9,6 +9,7 @@
    写操作乐观更新，失败回滚并暴露中文错误文本（this.error）。 */
 import { defineStore } from 'pinia'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
+import { tf } from '@/services/i18n'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import {
   clearHistory as clearHistoryLocal,
@@ -33,10 +34,9 @@ function isBridgeDown(e: unknown): boolean {
   return err?.code === 'bridge_missing' || /未检测到 Wails|原生方法.*不存在|桥不可用/.test(String(err?.message ?? ''))
 }
 
-function errText(e: unknown, action: string): string {
-  const m = (e as Error)?.message ?? String(e)
-  return `${action}失败：${m}`
-}
+/* R9c-2：原先这里用 `${action}失败：${m}` 拼中文句子，9 个调用点各传一个中文动词。
+   拼接式文案换语言就不成句子了，所以整句进 i18n（watch.err*，zh 与旧输出逐字一致），
+   本函数随之删除——留着就是没人调的死码。 */
 
 /* ---------------------------------------------------------------- 降级面映射
    与 api.ts mockApi.watchlist/historyList 同源形状（api.ts:319-347），但两处修正：
@@ -219,7 +219,7 @@ export const useWatchStore = defineStore('watch', {
         this.follows = follows ?? []
         this.history = history ?? []
       } catch (e) {
-        this.error = errText(e, '读取观看数据')
+        this.error = tf('watch.errLoadRows', { m: (e as Error)?.message ?? String(e) })
       } finally {
         this.loading = false
         this.loaded = true
@@ -256,7 +256,7 @@ export const useWatchStore = defineStore('watch', {
         this.seenLoaded = true
       } catch (e) {
         this.seen = localSeenMap() // 桥读失败 → 降级缓存面（下次 force 重试）
-        this.error = errText(e, '读取看过标记')
+        this.error = tf('watch.errLoadSeen', { m: (e as Error)?.message ?? String(e) })
       }
     },
 
@@ -282,7 +282,7 @@ export const useWatchStore = defineStore('watch', {
       } catch (e) {
         if (had) this.seen[dramaId] = prev
         else delete this.seen[dramaId]
-        this.error = errText(e, '看过标记')
+        this.error = tf('watch.errToggleSeen', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -303,7 +303,7 @@ export const useWatchStore = defineStore('watch', {
         return on
       } catch (e) {
         this.follows = prev
-        this.error = errText(e, '追剧操作')
+        this.error = tf('watch.errFollow', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -322,7 +322,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.follows = prev
-        this.error = errText(e, '取消追剧')
+        this.error = tf('watch.errUnfollow', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -347,7 +347,7 @@ export const useWatchStore = defineStore('watch', {
         return on
       } catch (e) {
         this.follows = prev
-        this.error = errText(e, '预约操作')
+        this.error = tf('watch.errReserve', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -367,7 +367,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.follows = prev
-        this.error = errText(e, '取消预约')
+        this.error = tf('watch.errUnreserve', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -415,7 +415,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.history = prev
-        this.error = errText(e, '删除记录')
+        this.error = tf('watch.errDelete', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     },
@@ -433,7 +433,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.history = prev
-        this.error = errText(e, '清空历史')
+        this.error = tf('watch.errClear', { m: (e as Error)?.message ?? String(e) })
         throw e
       }
     }
