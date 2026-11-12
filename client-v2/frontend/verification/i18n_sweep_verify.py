@@ -28,6 +28,8 @@ import re
 import signal
 import socket
 import subprocess
+
+import _devserver
 import sys
 import tempfile
 import time
@@ -40,8 +42,6 @@ BASE = f"http://127.0.0.1:{PORT}"
 EXEC = os.path.expanduser(
     "~/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
 )
-LOG = os.path.join(tempfile.gettempdir(), "zgj_i18n_sweep_vite.log")
-PIDF = os.path.join(tempfile.gettempdir(), f"zgj-i18n-sweep-{PORT}.pid")
 SHOT_PLAYER = os.path.join(HERE, "i18n-sweep-player.png")
 SHOT_DOWNLOADS = os.path.join(HERE, "i18n-sweep-downloads.png")
 
@@ -61,36 +61,14 @@ def port_open():
 
 
 def start_server():
-    if port_open():
-        print(f"复用已在监听:{PORT}")
-        return None
-    proc = subprocess.Popen(
-        ["npm", "run", "dev:mock", "--", "--port", PORT, "--strictPort"],
-        cwd=FRONTEND,
-        stdout=open(LOG, "w"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    with open(PIDF, "w") as f:
-        f.write(str(proc.pid))
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if port_open():
-            return proc
-        time.sleep(0.4)
-    raise RuntimeError("dev server 启动超时")
+    """启停交 _devserver。旧写法「端口已在监听就复用」并 return None ——
+    意味着这个门禁可以在**别人的、可能是旧构建的**服务器上跑绿，
+    而且结束时什么都不杀（泄漏就是这么来的）。"""
+    return _devserver.start_dev(FRONTEND, int(PORT), True, HERE, name="i18n-sweep")
 
 
 def stop_server(proc):
-    if proc:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except Exception:
-            pass
-    try:
-        os.remove(PIDF)
-    except OSError:
-        pass
+    _devserver.stop_dev(proc, int(PORT), name="i18n-sweep")
 
 
 SEED_JS = """

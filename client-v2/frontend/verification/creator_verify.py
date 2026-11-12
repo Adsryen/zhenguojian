@@ -2,8 +2,11 @@
 # -*- coding: utf-8 -*-
 """创作者页（V2-L，子代理 L）验证（headless chromium + mock dev server @5189）。
 
-自动拉起/关闭 `npm run dev:mock -- --port 5189 --strictPort`（谁拉起谁关闭；若端口已被
-占用则复用并在结束时保留——5180/5182/5183/5184 上可能存在其他代理的 vite，勿杀）。
+自动拉起/关闭 dev:mock（独占 5189），启停走 `_devserver`：进门先断言端口为空，
+结束时 SIGTERM→wait→SIGKILL→回查端口确实关闭。
+旧写法是「谁拉起谁关闭；若端口已被占用则复用并在结束时保留」，
+并把 5180/5182/5183/5184 上别人的 vite 视为正常——那等于允许本门禁在未知构建上跑绿，
+也正是 detail_download_verify ② 假红灯（R8）的机制，现已绝迹。
 
 断言：
   C1 直达 /creator?u=<u_dao> → 头部渲染 + 三项统计（粉丝/关注/获赞）非空。

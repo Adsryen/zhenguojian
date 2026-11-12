@@ -25,6 +25,8 @@ import json
 import os
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 
@@ -113,19 +115,9 @@ def do_search(page, text=QUERY):
 
 def main():
     # 0) dev server（谁拉起谁关闭；复用他人端口则结束保留）
-    spawned = None
-    if not port_open():
-        spawned = subprocess.Popen(
-            ["npm", "run", "dev:mock"],
-            cwd=FRONTEND,
-            stdout=open(os.path.join(HERE, ".dev_mock.log"), "w"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,  # 独立进程组：npm 包着 vite，必须整组杀
-        )
-        if not wait_port():
-            kill_group(spawned)
-            print("FAIL A0 dev server 未能启动")
-            sys.exit(1)
+    # 旧写法「谁拉起谁关闭；端口已开就复用」，而且 Popen 连 --port/--strictPort 都不带
+    # ——复用别人的 5173 就等于在未知构建上测，正是端口串味的老问题。改走 _devserver。
+    spawned = _devserver.start_dev(FRONTEND, 5173, True, HERE, name="searchall")
 
     try:
         with sync_playwright() as p:
@@ -272,9 +264,7 @@ def main():
 
             browser.close()
     finally:
-        if spawned:
-            kill_group(spawned)
-            print("[dev:mock 已关闭]")
+        _devserver.stop_dev(spawned, 5173, name="searchall")
 
     print("=" * 46)
     if failures:

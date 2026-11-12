@@ -2,7 +2,9 @@
 # -*- coding: utf-8 -*-
 """剧库榜单侧栏（V2-E）验证（headless chromium + dev:mock，自管理 5178 端口）。
 
-自动拉起/关闭 `npm run dev:mock -- --port 5178 --strictPort`；若端口已被占用则复用并在结束时保留。
+自动拉起/关闭 dev:mock（独占 5178），启停走 `_devserver`：进门先断言端口为空、
+退出回查端口确实关闭。旧写法「若端口已被占用则复用并在结束时保留」等于
+允许在别人的（甚至旧构建的）服务器上跑绿，已废除。
 断言：
   A1 侧栏首屏 10 行，名次 data-rank 依次 1..10（mock 榜 hongguo-hot）。
   A2 切榜（huangdou-all）后逐行标题整体变化，chip 高亮迁移。
@@ -18,6 +20,8 @@
 import os
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 
@@ -95,22 +99,9 @@ def wait_rows(page, n, timeout_ms=15000):
 
 
 def main():
-    mine = None
-    if not port_open():
-        log = open(os.path.join(HERE, ".dev_rankings.log"), "wb")
-        mine = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        if not wait_port():
-            print("FAIL dev server 未能在 40s 内监听", PORT)
-            kill_group(mine)
-            sys.exit(1)
-    else:
-        print(f"复用已在监听:{PORT} 的 dev server（结束时保留）")
+    # 「端口已在监听就复用、结束时保留」= 可以在别人（甚至旧构建）的服务器上跑绿。
+    # 交 _devserver：进门断言端口为空，退出回查端口确实关闭。
+    mine = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="rankings")
 
     js_errors, console_errors = [], []
     try:
@@ -221,8 +212,7 @@ def main():
 
             browser.close()
     finally:
-        if mine is not None:
-            kill_group(mine)
+        _devserver.stop_dev(mine, PORT, name="rankings")
 
     check("A8a 无未捕获 JS 错误", not js_errors, "; ".join(js_errors[:3]))
     check("A8b 无 console error", not console_errors, "; ".join(console_errors[:3]))

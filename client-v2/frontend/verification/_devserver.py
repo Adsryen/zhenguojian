@@ -25,6 +25,7 @@ import urllib.request
 
 
 def port_open(port, host="127.0.0.1", timeout=0.4):
+    port = int(port)   # 有脚本把 PORT 写成字符串，socket.connect_ex 会炸
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(timeout)
         return s.connect_ex((host, port)) == 0
@@ -32,6 +33,7 @@ def port_open(port, host="127.0.0.1", timeout=0.4):
 
 def start_dev(front_dir, port, mock, out_dir, name="dev", ready_timeout=60):
     """起 vite（mock=True 走 dev:mock），返回 Popen。端口被占 = 硬失败，不复用别人的服务器。"""
+    port = int(port)
     if port_open(port):
         raise RuntimeError(
             f"端口 {port} 已被占用（{name}）——多半是上一轮验收脚本泄漏的 vite。"
@@ -59,6 +61,7 @@ def start_dev(front_dir, port, mock, out_dir, name="dev", ready_timeout=60):
 
 def stop_dev(proc, port, name="dev", quiet_port=False):
     """收进程组：SIGTERM → wait(5) → SIGKILL → 回查端口。默认对「没关干净」报错。"""
+    port = int(port)
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     except Exception:

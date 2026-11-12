@@ -14,6 +14,8 @@ import os
 import re
 import signal
 import subprocess
+
+import _devserver
 import sys
 import time
 import urllib.request
@@ -38,22 +40,8 @@ def check(name, cond, detail=""):
 
 
 def start_server():
-    log = open(os.path.join(OUT, "dev-5177.log"), "wb")
-    proc = subprocess.Popen(
-        ["npm", "run", "dev:mock", "--", "--port", "5177", "--strictPort"],
-        cwd=FRONT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-    )
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"dev server 提前退出 code={proc.returncode}，见 dev-5177.log")
-        try:
-            with urllib.request.urlopen(BASE + "/", timeout=2) as r:
-                if r.status == 200:
-                    return proc
-        except Exception:
-            time.sleep(0.5)
-    proc.kill()
+    """启停交 _devserver（端口预检 + 回查端口确实关闭）。"""
+    return _devserver.start_dev(FRONT, 5177, True, OUT, name="calendar-scroll")
     raise RuntimeError("dev server 60s 未就绪，见 dev-5177.log")
 
 
@@ -123,11 +111,7 @@ def main():
 
             browser.close()
     finally:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        try:
-            proc.wait(timeout=10)
-        except Exception:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        _devserver.stop_dev(proc, 5177, name="calendar-scroll")
 
     print(f"\n{'ALL PASS' if not failures else 'FAILURES: ' + ', '.join(failures)}")
     sys.exit(0 if not failures else 1)

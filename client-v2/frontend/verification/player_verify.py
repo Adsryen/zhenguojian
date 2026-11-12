@@ -20,6 +20,8 @@ import json
 import os
 import signal
 import subprocess
+
+import _devserver
 import sys
 import tempfile
 import time
@@ -47,24 +49,10 @@ def check(name, cond, detail=""):
 
 
 def start_server():
-    # V2-F：dev server 日志写系统临时目录，不污染 verification/ 工作区
-    log = open(os.path.join(tempfile.gettempdir(), f"zgj-player-{PORT}.log"), "wb")
-    proc = subprocess.Popen(
-        ["npm", "run", "dev:mock", "--", "--port", PORT, "--strictPort"],
-        cwd=FRONT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True,
-    )
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"dev server 提前退出 code={proc.returncode}，见 dev-{PORT}.log")
-        try:
-            with urllib.request.urlopen(BASE + "/", timeout=2) as r:
-                if r.status == 200:
-                    return proc
-        except Exception:
-            time.sleep(0.5)
-    proc.kill()
-    raise RuntimeError(f"dev server 60s 未就绪，见 dev-{PORT}.log")
+    # 启停交 _devserver：进门断言端口为空、退出回查端口确实关闭。
+    # 旧写法结束时只 killpg(SIGTERM) 一次，既不 wait 也不升级，
+    # 泄漏的 vite 会让别的脚本「复用已在监听的端口」测到旧构建。
+    return _devserver.start_dev(FRONT, PORT, True, OUT, name="player")
 
 
 FS_STUB = """
@@ -299,7 +287,7 @@ def main():
 
             browser.close()
     finally:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        _devserver.stop_dev(proc, PORT, name="player")
 
     if failures:
         print(f"FAILED: {len(failures)} check(s)")
