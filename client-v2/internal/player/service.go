@@ -198,6 +198,15 @@ type Snapshot struct {
 	Volume     int          `json:"volume"`
 	Danmaku    DanmakuState `json:"danmaku"`
 	Episode    EpisodeRef   `json:"episode"`
+	// Local 为真表示这是一次**本地成品文件**会话。
+	// 为什么非要有这个字段：前端原先用 `!!snapshot.episode.index` 判断"会话是否已打开"
+	// （stores/player.ts 的 applySnapshot），而本地文件**没有集号**（v1 同理：
+	// open_local 会把选集条清空）——于是一加入本地播放，本地会话就被读成"没打开"：
+	// running=false → 进度节流落盘整条不触发（`history_local_play_verify` ⑤ 实测到：
+	// 等了 7 秒，localStorage 里那条历史记录一个字段都没变）。
+	// 也就是说 `!!index` 只兼容了我想象里的形状（第 28 轮那条教训的又一副面孔），
+	// 而"是不是本地会话"本来就该由契约自己说出来，不该由集号间接猜。
+	Local bool `json:"local,omitempty"`
 }
 
 // Service 播放器生命周期 + 弹幕管线编排。所有公开方法可并发调用，
@@ -674,6 +683,9 @@ func (s *Service) snapshotLocked() Snapshot {
 	}
 	if s.req != nil {
 		snap.Episode = EpisodeRef{DramaID: s.req.DramaID, Title: s.req.Title, Index: s.req.Index}
+	}
+	if s.plan != nil {
+		snap.Local = s.plan.Local
 	}
 	return snap
 }

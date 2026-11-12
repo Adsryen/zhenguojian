@@ -52,6 +52,14 @@ func TestOpenLocalSkipsResolver(t *testing.T) {
 	if snap.Episode.Title != filepath.Base(file) {
 		t.Fatalf("标题应回落到文件名，得 %q", snap.Episode.Title)
 	}
+	// ⑤会话必须**自己声明**这是本地会话：前端靠它判断"已打开"，
+	// 只靠 episode.index 非空会把本地会话读成没打开（进度落盘就整条不触发）。
+	if !snap.Local {
+		t.Fatal("本地会话的快照没带 Local=true")
+	}
+	if snap.Episode.Index != 0 {
+		t.Fatalf("本地文件不该有集号，得 %d", snap.Episode.Index)
+	}
 }
 
 func TestOpenLocalKeepsExplicitTitle(t *testing.T) {
@@ -59,6 +67,9 @@ func TestOpenLocalKeepsExplicitTitle(t *testing.T) {
 	if err := h.svc.OpenLocal(context.Background(), player.LocalRequest{
 		Path: filepath.Join(t.TempDir(), "media.mp4"), Title: "自定义名字"}); err != nil {
 		t.Fatalf("OpenLocal: %v", err)
+	}
+	if st := h.svc.State(); !st.Local {
+		t.Fatal("显式标题那条也得是本地会话")
 	}
 	if got := h.svc.State().Episode.Title; got != "自定义名字" {
 		t.Fatalf("显式 Title 不该被文件名覆盖，得 %q", got)
