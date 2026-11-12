@@ -35,12 +35,24 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"zhenguojian/client-v2/internal/danmaku"
 )
 
 // SidecarAssTailSeconds 用"最后一条弹幕 + N 秒"近似总时长时加的余量（见文件头第 3 条）。
 const SidecarAssTailSeconds = 60
+
+// SidecarAttempts 一集最多试几次。
+// 为什么需要重试（v1 不需要、v2 需要，这是两版结构差异逼出来的）：
+// v1 是**自己**把分集解密落盘后才在 library 里写 entry，路径由它自己保证存在；
+// v2 的 completed 状态来自核心轮询，"状态已是 completed"与"文件已经落地"之间
+// 可以差一两个轮询周期。没有重试的话，一次撞空就永久丢掉这一集的弹幕
+// ——因为状态跃迁只会发生一次，`noteCompletedTransition` 不会再来第二次。
+const SidecarAttempts = 3
+
+// SidecarRetryDelay 两次尝试之间的等待（字段可注入，测试里压到毫秒）。
+const SidecarRetryDelay = 20 * time.Second
 
 // SidecarOutcome 一条收集的结果分类，供测试与诊断读。
 type SidecarOutcome string
@@ -231,15 +243,51 @@ func (s *Service) queueSidecars(ctx context.Context, jobs []map[string]any) {
 			gate <- struct{}{}
 			defer func() { <-gate }()
 
-			rep := s.collectSidecarForJob(ctx, job)
+			id, _ := job["id"].(string)
+			rep := s.collectWithRetry(ctx, job, id)
 			s.recordSidecarReport(rep)
 
-			id, _ := job["id"].(string)
 			s.mu.Lock()
 			delete(s.sidecarBusy, id)
+			delete(s.sidecarTries, id)
 			s.mu.Unlock()
 		}()
 	}
+}
+
+// collectWithRetry 试到文件落地为止，最多 SidecarAttempts 次。
+// 单独抽出来是因为循环里要同时管三件事：次数、关窗取消、以及"别再上第二次锁"。
+func (s *Service) collectWithRetry(ctx context.Context, job map[string]any, id string) SidecarReport {
+	var rep SidecarReport
+	for attempt := 1; attempt <= SidecarAttempts; attempt++ {
+		rep = s.collectSidecarForJob(ctx, job)
+		if rep.Outcome != string(SidecarFailed) {
+			return rep
+		}
+		if attempt == SidecarAttempts {
+			return rep // 次数用尽：如实留最后一次错误，不粉饰成"跳过"
+		}
+		if ctx.Err() != nil {
+			rep.Err += "（关窗中断，未再重试）"
+			return rep
+		}
+		s.mu.Lock()
+		delay := s.sidecarRetryDelay
+		if s.sidecarTries == nil {
+			s.sidecarTries = map[string]int{}
+		}
+		s.sidecarTries[id] = attempt // 让外部看得见"这一集在第几次尝试上"
+		s.mu.Unlock()
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			rep.Err += "（关窗中断，未再重试）"
+			return rep
+		case <-timer.C:
+		}
+	}
+	return rep
 }
 
 // collectSidecarForJob 跑一集的采集。任何失败只记进 report：

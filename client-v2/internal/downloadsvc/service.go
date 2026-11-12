@@ -98,8 +98,11 @@ type Service struct {
 	danmakuDownload bool
 	flagsLoaded     bool
 	sidecarBusy     map[string]bool
-	sidecarGate     chan struct{}
+	sidecarTries    map[string]int
 	sidecarReports  []SidecarReport
+	// sidecarRetryDelay 两次弹幕尝试之间的等待；默认 SidecarRetryDelay，
+	// 测试压到毫秒级才有办法真跑完三轮（不压就得让 CI 白等 40 秒）。
+	sidecarRetryDelay time.Duration
 	prevStates      map[string]string
 	// 交付 A：merges 表快照持久化（merge_state.go）
 	mergesLoaded     bool
@@ -130,6 +133,7 @@ func New(opts Options) *Service {
 		mergeWake:    make(chan struct{}, 8),
 		samples:      map[string][]speedSample{},
 		mergeVerify:  true,
+		sidecarRetryDelay: SidecarRetryDelay,
 	}
 }
 

@@ -8,11 +8,13 @@ package downloadsvc
 // 全走 `s.call`，测试注入假核心；写文件写到 t.TempDir()。
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"zhenguojian/client-v2/internal/danmaku"
 )
@@ -31,7 +33,9 @@ func jobRow(id, state string) map[string]any {
 func TestNoteCompletedTransition(t *testing.T) {
 	jobs := []map[string]any{
 		jobRow("j1", "completed"),
-		jobRow("j2", "downloading"),
+		jobRow("j2", "completed"), // 上一轮 downloading → 这一轮才算跃迁
+		// （第一版这里我写成 "downloading"，于是"跃迁集合该只有 j2"永远拿到空集——
+		//  夹具自己写反了，CI 报的正是我自己的测试错，不是实现错。）
 		jobRow("j3", "completed"),
 		jobRow("", "completed"), // 没 id 的行不参与
 	}
@@ -304,8 +308,80 @@ func TestSidecarVideoPathMissingMedia(t *testing.T) {
 		return map[string]any{"directory": h.tmp}, nil
 	}
 	rep := h.svc.collectSidecarForJob(nil, jobRow("nope", "completed"))
-	if rep.Outcome != string(SidecarFailed) || !strings.Contains(rep.Err, "找不到") {
-		t.Fatalf("找不到成品文件时该如实说：%+v", rep)
+	if rep.Outcome != string(SidecarFailed) || rep.Err == "" {
+		t.Fatalf("找不到成品文件时该如实失败：%+v", rep)
+	}
+	// 句子归 `resolveEpisodeSource`（与合并同一个函数），这里只钉"如实失败、没留半套文件"，
+	// 不把别处的文案在这里再钉一遍——否则改一句原文案要动两个地方（又是"两处真相"）。
+	ass, _ := danmaku.SidecarPaths(filepath.Join(h.tmp, "nope", "media.mp4"))
+	if _, err := os.Stat(ass); err == nil {
+		t.Fatal("没拿到文件却写出了 .ass")
+	}
+}
+
+func TestQueueSidecarsRetriesUntilFileLands(t *testing.T) {
+	// 为什么必须有重试：v2 的 completed 来自核心轮询，
+	// "状态已是 completed"与"文件真的落地"之间可以差一两个周期；
+	// 而状态跃迁只发生一次，撞空一次就**永久**丢掉这一集的弹幕。
+	// v1 不需要重试——它是自己解密落盘之后才写 entry 的。
+	h := newHarness(t)
+	if err := h.svc.SetDanmakuDownload(true); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.sidecarRetryDelay = 5 * time.Millisecond // 默认 20s，测试不能真等
+
+	root := h.tmp
+	mediaDir := filepath.Join(root, "jr")
+	media := filepath.Join(mediaDir, "media.mp4")
+	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"directory": root}, nil
+	}
+	h.core.handlers["resolve"] = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"session": "s-retry", "danmakuId": "ep-retry"}, nil
+	}
+	h.core.handlers["danmakuAll"] = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"items": []any{
+			map[string]any{"id": "a", "timeMs": float64(2000), "text": "重试成功"},
+		}, "total": float64(1)}, nil
+	}
+
+	// 文件在第 3 次尝试前才落地（先没目录，再 0 字节，再有内容）
+	go func() {
+		_ = os.MkdirAll(mediaDir, 0o755)
+		_ = os.WriteFile(media, nil, 0o644)
+		time.Sleep(20 * time.Millisecond)
+		_ = os.WriteFile(media, []byte("media bytes"), 0o644)
+	}()
+
+	jobs := []map[string]any{jobRow("jr", "completed")}
+	prev := map[string]string{"jr": "downloading"}
+	fresh, next := noteCompletedTransition(prev, jobs)
+	if len(fresh) != 1 {
+		t.Fatalf("该有一条跃迁：%v", fresh)
+	}
+	_ = next
+	h.svc.queueSidecars(context.Background(), fresh)
+	h.svc.wg.Wait()
+
+	reps := h.svc.SidecarReports()
+	if len(reps) != 1 {
+		t.Fatalf("该只留一份最终结论：%+v", reps)
+	}
+	if reps[0].Outcome != string(SidecarRan) {
+		t.Fatalf("重试之后该成功，得 %+v", reps[0])
+	}
+	ass, doc := danmaku.SidecarPaths(media)
+	for _, f := range []string{ass, doc} {
+		if st, err := os.Stat(f); err != nil || st.Size() <= 0 {
+			t.Fatalf("重试成功却没写出 %s（err=%v）", filepath.Base(f), err)
+		}
+	}
+	// busy 与 tries 都得清干净，否则同一个 id 以后再也跑不起来
+	h.svc.mu.Lock()
+	busyLeft, triesLeft := len(h.svc.sidecarBusy), len(h.svc.sidecarTries)
+	h.svc.mu.Unlock()
+	if busyLeft != 0 || triesLeft != 0 {
+		t.Fatalf("收尾没清干净：busy=%d tries=%d", busyLeft, triesLeft)
 	}
 }
 
