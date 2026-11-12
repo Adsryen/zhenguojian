@@ -34,6 +34,7 @@ type fakeMpv struct {
 	alive    bool
 	loadErr  error
 	startErr error
+	lastSub string // 最近一次 sub-add 的 ASS 文件绝对路径
 }
 
 func newFakeMpv() *fakeMpv {
@@ -73,6 +74,13 @@ func (f *fakeMpv) callIndex(sub string) int {
 }
 
 func (f *fakeMpv) hasCall(sub string) bool { return f.callIndex(sub) >= 0 }
+
+// subPath 返回最近一次挂载的 ASS 路径（透明度断言要读文件内容）。
+func (f *fakeMpv) subPath() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastSub
+}
 
 // callCount 按前缀统计调用次数（sub-reload 之类没有专用 helper 的动作用它）。
 func callCount(f *fakeMpv, prefix string) int {
@@ -135,6 +143,9 @@ func (f *fakeMpv) AbsSeekSmooth(sec float64) error {
 func (f *fakeMpv) SetSpeed(rate float64) error { f.record(fmt.Sprintf("speed:%g", rate)); return nil }
 func (f *fakeMpv) SetVolume(v int) error       { f.record(fmt.Sprintf("volume:%d", v)); return nil }
 func (f *fakeMpv) SubAdd(path, title string) error {
+	f.mu.Lock()
+	f.lastSub = path // 外部测试包（package player_test）读不到 s.assPath，
+	f.mu.Unlock()    // 想验 ASS 内容只能从 mpv 调用面把路径接出来
 	f.record("sub-add:" + filepath.Base(path))
 	return nil
 }
@@ -729,7 +740,7 @@ func TestDanmakuOpacityRendersAndClamps(t *testing.T) {
 		t.Fatalf("快照 opacity 应为 0.4，得 %v", got)
 	}
 	// ③ ASS 里的 alpha 必须是 v1 口径 round((1-opacity)*255)：0.4 → 153 = 0x99
-	body, err := os.ReadFile(h.svc.assPath)
+	body, err := os.ReadFile(f0.subPath())
 	if err != nil {
 		t.Fatalf("读 ASS 失败: %v", err)
 	}
@@ -780,7 +791,7 @@ func TestDanmakuOpacityRendersAndClamps(t *testing.T) {
 		t.Fatalf("开弹幕: %v", err)
 	}
 	waitFor(t, time.Second, func() bool {
-		b, err := os.ReadFile(h.svc.assPath)
+		b, err := os.ReadFile(f0.subPath())
 		return err == nil && strings.Contains(string(b), "&HCC")
 	}, "开启后用新透明度重建 ASS")
 }
