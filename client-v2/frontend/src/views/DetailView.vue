@@ -42,6 +42,30 @@ let toastTimer: number | undefined
 const selectedIdx = ref(0)
 const currentEpisode = ref(0)
 /** 追剧态 = watchstore 行标志（stores/watch 乐观更新/回滚即时反映） */
+/* v1 的 reserved 判定（is_reserved）：v2 真值同在 watchstore 行上 */
+const reserved = computed(() => {
+  const id = drama.value?.id
+  return !!id && !!watchStore.follows.find((r) => r.id === id)?.reserved
+})
+
+/** 四态标签，规则照 v1 main.py:440-454：
+ *   reserved → 已预约；episodes<=0 → 预约上线；releaseStatus==finished → 预约下一季；其余 → 预约更新。
+ *
+ * ⚠ 取数必须用 `meta`（= 路由带来的 drama 与详情返回的 drama 合并，见上面 meta 的定义），
+ * 不能用 `drama`：`drama` 只是路由里的最小形状，`episodes` 恒为 0，
+ * 于是所有剧都会被判成「☆ 预约上线」——第一版就是这样错的，
+ * 是 `detail_reserve_verify` ① 的实测文本（一世之尊明明有 35 集）把它抓出来的。
+ * v1 那边 poster.drama 拿到的是列表页的完整 item，所以不会踩到这个坑。 */
+const reserveLabel = computed(() => {
+  if (reserved.value) return t('detail.reservedBtn')
+  const known = Number(meta.value?.episodes ?? 0)
+  if (known <= 0) return t('detail.reserveOnline')
+  if (String(meta.value?.releaseStatus ?? '').toLowerCase() === 'finished') {
+    return t('detail.reserveNext')
+  }
+  return t('detail.reserveUpdate')
+})
+
 const followed = computed(() => {
   const id = drama.value?.id
   return !!id && !!watchStore.follows.find((r) => r.id === id)?.followed
@@ -291,15 +315,36 @@ async function downloadAll() {
   }
 }
 
+/** 展示用标题：详情返回优先，回落路由值；都没有就说"这部"而不是留一对空尖括号。
+ * （`drama` 是路由最小形状，`?drama=<id>` 简写链接进来时 title 是空串 ——
+ *  于是提示语会出现「已追剧《》」，本轮 detail_reserve_verify ③b 实测抓到，追剧那条一起修。） */
+function displayName(): string {
+  return String(meta.value?.title || drama.value?.title || t('detail.noTitle'))
+}
+
 async function onFollow() {
   const d = drama.value
   if (!d) return
   // stores/watch：真值 Go watchstore ToggleFollow（无桥降级 localStorage 记录）
   try {
     const on = await watchStore.toggleFollow(d)
-    showToast(tf(on ? 'detail.followDone' : 'detail.unfollowDone', { t: d.title }))
+    showToast(tf(on ? 'detail.followDone' : 'detail.unfollowDone', { t: displayName() }))
   } catch (e: any) {
     showToast(e?.message ?? t('detail.followFail'))
+  }
+}
+
+async function onReserve() {
+  const d = drama.value
+  if (!d) return
+  // stores/watch reserve()：v1 的互斥语义（预约即取消追剧，watchstore.py:224-241）
+  // 由 reconcileReserve 保持；真值走 Go Reserve / CancelReservation，无桥降级本地。
+  try {
+    const on = await watchStore.reserve(d)
+    showToast(on ? tf('detail.reserveDone', { t: displayName() }) : t('detail.reserveCancelled'))
+  } catch (e: any) {
+    // 失败读 store 的统一出口（watch.err* 整句），不再各写一套
+    showToast(e?.message ?? t('detail.reserveFail'))
   }
 }
 
@@ -583,6 +628,15 @@ watch(
         </button>
         <button class="btn" :disabled="!chapters.length || downloading" @click="downloadAll">{{ tf('detail.downloadAll', { n: chapters.length }) }}</button>
         <button class="btn" :class="{ toggled: followed }" @click="onFollow">{{ followed ? t('detail.followed') : t('detail.follow') }}</button>
+        <!-- 预约：v1 详情页头部有、v2 之前整页没有入口（只有日历页能预约）。
+             位置照 v1 的相邻关系（追剧 → 预约），文案四态见 reserveLabel。 -->
+        <button
+          class="btn"
+          :class="{ toggled: reserved }"
+          data-testid="detail-reserve"
+          :title="t('detail.reserveTip')"
+          @click="onReserve"
+        >{{ reserveLabel }}</button>
         <button class="btn" :class="{ toggled: watched }" @click="onWatchedMark">{{ watched ? t('detail.watched') : t('detail.watchMark') }}</button>
         <button class="btn" :disabled="!meta.description" @click="copySummary">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>

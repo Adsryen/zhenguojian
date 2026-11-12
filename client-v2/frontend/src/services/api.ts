@@ -56,6 +56,9 @@ import {
   readWatched,
   toggleFollow,
   toggleReservation,
+  rememberReservation,
+  readReservationDramas,
+  forgetReservation,
   toggleWatched,
   WATCHED_KEY
 } from './local'
@@ -732,8 +735,12 @@ const mockApi: NativeApi = {
     return next
   },
   // mock：追剧/历史映射 local.ts（浏览器演示与壳内降级共用同一数据面）；日历用 fixtures
-  watchlist: async () =>
-    readFollows().map((f) => {
+  watchlist: async () => {
+    // 追剧行 + 「只预约没追剧」的行（v1 互斥后 follow 行不存在，但预约必须是列表里的一条）
+    const reservedOnly = Object.entries(readReservationDramas())
+      .filter(([id]) => !readFollows().some((f) => f.drama.id === id))
+      .map(([, d]) => ({ drama: d, ts: 0 }))
+    return [...readFollows(), ...reservedOnly].map((f) => {
       const reserved = !!readReservations()[f.drama.id]
       return {
         id: f.drama.id,
@@ -746,7 +753,8 @@ const mockApi: NativeApi = {
         followed: !reserved,
         reserved
       }
-    }),
+    })
+  },
   historyList: async () => {
     const rows: HistoryRow[] = []
     for (const [key, e] of Object.entries(readHistory())) {
@@ -764,11 +772,17 @@ const mockApi: NativeApi = {
   toggleFollow: async (drama) => ({ followed: toggleFollow(drama) }),
   reserve: async (drama) => {
     const on = toggleReservation(drama.id)
-    if (on && isFollowed(drama.id)) toggleFollow(drama) // v1 互斥：预约即取消追
+    if (on) {
+      rememberReservation(drama)          // 互斥之后没有 follow 行了，靠它把行补回来
+      if (isFollowed(drama.id)) toggleFollow(drama) // v1 互斥：预约即取消追
+    } else {
+      forgetReservation(drama.id)
+    }
     return { reserved: on }
   },
   cancelReservation: async (id) => {
     if (readReservations()[id]) toggleReservation(id)
+    forgetReservation(id)
     return { ok: true }
   },
   removeFollow: async (id) => {

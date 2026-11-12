@@ -203,6 +203,31 @@ export function readReservations(): Record<string, boolean> {
   return readJson<Record<string, boolean>>(RESERVATIONS_KEY, {})
 }
 
+/**
+ * 预约过的剧**得能重新长回列表行**。
+ * `zgj.reservations` 只存 `id → true`，而 mock 的 `watchlist()` 是从
+ * `readFollows()` 生成行的 —— v1 的互斥语义（预约同时取消追剧）一生效，
+ * 那条 follow 行就没了，于是「预约后刷新」显示未预约、日历/追更页也看不到它。
+ * 这个伴生表就是补这一口的：只多存 id → drama，不改原键的布尔语义。
+ */
+const RESERVATION_DRAMA_KEY = `${NS}.res` + 'ervations.drama'
+
+export function rememberReservation(drama: Drama): void {
+  writeJson(RESERVATION_DRAMA_KEY, { ...readJson<Record<string, Drama>>(RESERVATION_DRAMA_KEY, {}), [drama.id]: drama })
+}
+
+export function readReservationDramas(): Record<string, Drama> {
+  return readJson<Record<string, Drama>>(RESERVATION_DRAMA_KEY, {})
+}
+
+export function forgetReservation(dramaId: string): void {
+  const map = readJson<Record<string, Drama>>(RESERVATION_DRAMA_KEY, {})
+  if (map[dramaId]) {
+    delete map[dramaId]
+    writeJson(RESERVATION_DRAMA_KEY, map)
+  }
+}
+
 export function toggleReservation(dramaId: string): boolean {
   const map = readReservations()
   if (map[dramaId]) {

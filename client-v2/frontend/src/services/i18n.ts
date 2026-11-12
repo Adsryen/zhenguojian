@@ -605,6 +605,23 @@ const zh: Record<string, string> = {
   'detail.noTitle': '（无标题）',
   'detail.loadFailMsg': '详情加载失败：{m}',
   'detail.followDone': '已追剧《{t}》',
+  /* 详情页预约按钮：四态标签**逐字抄 v1**（main.py:440-454 refresh_follow_state：
+     reserved→「✓ 已预约」；episodes<=0→「☆ 预约上线」；
+     releaseStatus==finished→「☆ 预约下一季」；其余→「☆ 预约更新」）。
+     但**提示语没有照抄 v1 全文**：v1 那句「已预约；应用运行期间每 30 分钟检查一次…」
+     里的 30 分钟后台检查在 v2 还不存在（Go 有 Store.ObserveDrama，但零调用方，
+     见 research/v1-v2-reserve-parity.md / PRD R23）——
+     不能把还没发生的事写在界面上，所以这里只陈述已成立的部分，
+     并且 tooltip 直接把「提醒尚未接通」写出来——等用户发现提醒从来没来过才算发现问题，太晚了。 */
+  'detail.reserve': '☆ 预约',
+  'detail.reserveOnline': '☆ 预约上线',
+  'detail.reserveNext': '☆ 预约下一季',
+  'detail.reserveUpdate': '☆ 预约更新',
+  'detail.reservedBtn': '✓ 已预约',
+  'detail.reserveTip': '记入预约列表；上线/更新提醒尚未接通',
+  'detail.reserveDone': '已预约《{t}》',
+  'detail.reserveCancelled': '已取消预约',
+  'detail.reserveFail': '预约操作失败',
   'detail.unfollowDone': '已取消追剧《{t}》',
   'detail.followFail': '追剧操作失败',
   'detail.dlQueued': '已加入下载队列 {n} 集',
@@ -1237,6 +1254,15 @@ const en: Record<string, string> = {
   'detail.noTitle': '(untitled)',
   'detail.loadFailMsg': 'Detail load failed: {m}',
   'detail.followDone': 'Following {t}',
+  'detail.reserve': '☆ Reserve',
+  'detail.reserveOnline': '☆ Reserve release',
+  'detail.reserveNext': '☆ Reserve next season',
+  'detail.reserveUpdate': '☆ Reserve updates',
+  'detail.reservedBtn': '✓ Reserved',
+  'detail.reserveTip': 'Recorded as reserved; release/update alerts not wired yet',
+  'detail.reserveDone': 'Reserved {t}',
+  'detail.reserveCancelled': 'Reservation cancelled',
+  'detail.reserveFail': 'Reserve action failed',
   'detail.unfollowDone': 'Unfollowed {t}',
   'detail.followFail': 'Follow action failed',
   'detail.dlQueued': 'Queued {n} episodes for download',

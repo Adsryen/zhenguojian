@@ -26,7 +26,10 @@ import {
   splitHistoryKey,
   toggleFollow as toggleFollowLocal,
   toggleReservation as toggleReservationLocal,
-  toggleWatched as toggleWatchedLocal
+  toggleWatched as toggleWatchedLocal,
+  rememberReservation,
+  forgetReservation,
+  readReservationDramas
 } from '@/services/local'
 
 /** 桥不可用类错误（api.ts wailsApp/callGoRaw 抛出形状） */
@@ -47,7 +50,7 @@ function isBridgeDown(e: unknown): boolean {
 
 function localFollowRows(): WatchRow[] {
   const res = readReservations()
-  return readFollows().map((f) => {
+  const rows: WatchRow[] = readFollows().map((f) => {
     const reserved = !!res[f.drama.id]
     return {
       id: f.drama.id,
@@ -61,6 +64,17 @@ function localFollowRows(): WatchRow[] {
       reserved
     }
   })
+  // 「只预约、没追剧」的剧也必须成行（v1 互斥语义下正是这种行最多）。
+  // 不加这段，预约在本地层是**写进去了但永远读不回来**——日历/追更页与详情页都会说"没预约"。
+  const seen = new Set(rows.map((r) => r.id))
+  for (const [id, d] of Object.entries(readReservationDramas())) {
+    if (seen.has(id) || !res[id]) continue
+    rows.push({
+      id, drama: d, status: '预约中', known: d.episodes ?? 0, read: 0,
+      added: 0, season: 1, followed: false, reserved: true
+    })
+  }
+  return rows
 }
 
 function localHistoryRows(): HistoryRow[] {
@@ -86,12 +100,22 @@ function localToggleFollow(drama: Drama): boolean {
 /** 降级面写：本地预约（v1 互斥：预约即取消追，对齐 mockApi.reserve） */
 function localReserve(drama: Drama): boolean {
   const on = toggleReservationLocal(drama.id)
-  if (on && isFollowedLocal(drama.id)) toggleFollowLocal(drama)
+  if (on) {
+    // 本地预约表只存 `id → true`，而行要从 follow 表长出来；
+    // v1 互斥一生效（预约即取消追剧），这条就两头都不在，刷新后"预约"直接消失。
+    // 这个伴生表把 drama 留住，localFollowRows 才能把「只预约没追剧」的行补回列表。
+    //（detail_reserve_verify ④ 实测抓到：点完预约按钮变已预约，一刷新又回到未预约。）
+    rememberReservation(drama)
+    if (isFollowedLocal(drama.id)) toggleFollowLocal(drama)
+  } else {
+    forgetReservation(drama.id)
+  }
   return on
 }
 
 function localCancelReservation(id: string): void {
   if (readReservations()[id]) toggleReservationLocal(id)
+  forgetReservation(id)
 }
 
 function localRemoveFollow(id: string): void {
