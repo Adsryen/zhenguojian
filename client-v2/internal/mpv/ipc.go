@@ -17,11 +17,23 @@ type Conn interface {
 }
 
 // Response 是 mpv JSON IPC 的同步回复行。
+// requestID 键名兼容两代协议：旧版（<0.38）回复 "requestID"，
+// 新版回复 "request_id"（两者都解析，取非零者配对；真机曾因此错配
+// 导致所有命令「超时」——回复行被当作别的 requestID 跳过）。
 type Response struct {
-	Error     string          `json:"error"`
-	RequestID int             `json:"requestID"`
-	Async     bool            `json:"async"`
-	Data      json.RawMessage `json:"data"`
+	Error      string          `json:"error"`
+	RequestID  int             `json:"requestID"`
+	RequestID2 int             `json:"request_id"`
+	Async      bool            `json:"async"`
+	Data       json.RawMessage `json:"data"`
+}
+
+// id 返回回复携带的请求 id（兼容两种键名）。
+func (r Response) id() int {
+	if r.RequestID != 0 {
+		return r.RequestID
+	}
+	return r.RequestID2
 }
 
 // IPC 是一条连接上的序列化命令通道（毕业自 spike/mpvembed/ipc.go）。
@@ -47,7 +59,8 @@ func (i *IPC) SendCommand(command []any) (Response, error) {
 
 	i.nextID++
 	id := i.nextID
-	req := map[string]any{"command": command, "requestID": id}
+	// 双键名同发：老 mpv 认 requestID、新 mpv 认 request_id，多余键忽略。
+	req := map[string]any{"command": command, "requestID": id, "request_id": id}
 	b, err := json.Marshal(req)
 	if err != nil {
 		return Response{}, err
@@ -62,7 +75,7 @@ func (i *IPC) SendCommand(command []any) (Response, error) {
 			return Response{}, err
 		}
 		// 跳过异步事件、非 JSON 噪声、其它 requestID、pending 行
-		if resp.RequestID != id || resp.Async {
+		if resp.id() != id || resp.Async {
 			continue
 		}
 		if resp.Error != "" && resp.Error != "success" {

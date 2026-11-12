@@ -1,6 +1,7 @@
 package mpv
 
 import (
+	"bufio"
 	"encoding/json"
 	"net"
 	"strings"
@@ -22,7 +23,7 @@ func TestIPCPairingSkipsNoise(t *testing.T) {
 
 	go func() {
 		var line []byte
-		dec := json.NewDecoder(server)
+		dec := json.NewDecoder(bufio.NewReader(server))
 		for {
 			var req in
 			if err := dec.Decode(&req); err != nil {
@@ -67,7 +68,7 @@ func TestIPCErrorReply(t *testing.T) {
 	defer server.Close()
 
 	go func() {
-		dec := json.NewDecoder(server)
+		dec := json.NewDecoder(bufio.NewReader(server))
 		var req struct {
 			RequestID int `json:"requestID"`
 		}
@@ -113,5 +114,56 @@ func TestLavfOptions(t *testing.T) {
 	if !strings.Contains(local, "protocol_whitelist=[file,crypto,data]") ||
 		!strings.Contains(local, "decryption_key=abc123") {
 		t.Fatalf("local+key: %s", local)
+	}
+}
+
+// TestIPCRequestIDSnakeCompat：mpv 0.38+ 把 JSON IPC 回复键名改为 request_id。
+// 服务端只认/只回 snake 键时，SendCommand 仍须配对成功（真机 alpha.21 曾因
+// 驼峰错配报「mpv: 命令超时: set_property」）。
+func TestIPCRequestIDSnakeCompat(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+
+	type in struct {
+		Command  []any `json:"command"`
+		SnakeID  int   `json:"request_id"`
+		CamelID  int   `json:"requestID"`
+	}
+
+	go func() {
+		dec := json.NewDecoder(bufio.NewReader(server))
+		for {
+			var req in
+			if err := dec.Decode(&req); err != nil {
+				return
+			}
+			// 请求必须带 snake 键（新 mpv 靠它回显）；回复只用 snake 键。
+			if req.SnakeID == 0 || req.SnakeID != req.CamelID {
+				t.Errorf("请求缺双键: %+v", req)
+				return
+			}
+			server.Write([]byte(`{"error":"async","async":true,"request_id":` + itoa(req.SnakeID) + `}` + "\n"))
+			server.Write([]byte(`{"error":"success","request_id":` + itoa(req.SnakeID) + `,"data":true}` + "\n"))
+		}
+	}()
+
+	ipc := NewIPC(client)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, err := ipc.SendCommand([]any{"set_property", "pause", false})
+		if err != nil {
+			t.Errorf("SendCommand: %v", err)
+			return
+		}
+		if string(resp.Data) != "true" {
+			t.Errorf("data = %s, want true", resp.Data)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("snake request_id 回复未配对（命令超时回归）")
 	}
 }
