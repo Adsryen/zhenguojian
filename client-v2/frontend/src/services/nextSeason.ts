@@ -42,9 +42,18 @@ export async function lookupNextSeason(drama: Drama): Promise<NextSeasonHit | nu
   try {
     let entry = cache.get(cacheKey)
     if (!entry || Date.now() - entry.at > CACHE_MS) {
-      const res = await api.catalog({ source, query: baseTitle(title) || title, page: 1, lane: 'series:next' })
-      entry = { at: Date.now(), rows: groupSeasons(res.items ?? [], title) }
-      cache.set(cacheKey, entry)
+      // 测试后门（与 __zgjDiscoverInjectCatalog / __zgjCoverFault 同路数）：
+      // 注入「查到下一季」的行，让 R6 的回写链（api.setNextSeason → 追剧记录 nextDrama）
+      // 能在 mock 下被端到端断言，而不必篡改 mock 基础数据集（那会牵动一堆别的断言）。
+      // 只在数组非空时生效，产品路径完全不变；注入值同样走 groupSeasons，不绕过归并逻辑。
+      const injected = (window as any)?.__zgjNextSeasonRows as Drama[] | undefined
+      if (Array.isArray(injected) && injected.length) {
+        entry = { at: Date.now(), rows: groupSeasons(injected, title) }
+      } else {
+        const res = await api.catalog({ source, query: baseTitle(title) || title, page: 1, lane: 'series:next' })
+        entry = { at: Date.now(), rows: groupSeasons(res.items ?? [], title) }
+        cache.set(cacheKey, entry)
+      }
     }
     const found = entry.rows
       .filter((r) => Math.trunc(Number(r.season ?? 0)) > current)
