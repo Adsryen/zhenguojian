@@ -104,6 +104,12 @@ export async function runFollowCheck(opts: { delayMs?: number } = {}): Promise<C
   const cache = new Map<string, ReturnType<typeof groupSeasons>>()
 
   try {
+    // v1 是在检查开始时现读 `self._watch.follows()`（读的是主表本身，不是页面缓存），
+    // 结束时列表也已经是新数据；这里对应"开头强刷一次、结尾再刷一次"。
+    // 为什么结尾也要刷：watchstore 的 OnChanged **没有接到任何 Wails 事件**
+    // （全仓只有 `update:available` 一个事件监听），旗标在 Go 里推进后，
+    // 前端不主动重读就得等用户自己切页/刷新才看得见——那不是 v1 的行为。
+    await watch.load(true)
     const rows = pickRows(watch.follows)
     const before = new Map<string, string>()
     for (const row of rows) before.set(row.id, rowTuple(row))
@@ -154,6 +160,8 @@ export async function runFollowCheck(opts: { delayMs?: number } = {}): Promise<C
       if (rowDelay) await sleep(rowDelay)
     }
 
+    // 把 Go 侧刚推进的旗标读回界面（上面注释里的"没人推事件"就靠这一下补上）
+    await watch.load(true)
     if (updated > 0) watch.setCheckHint(tf('watch.checkedUpdated', { n: updated }), 8000)
     else if (failed > 0) watch.setCheckHint(tf('watch.checkedFailed', { n: failed }), 6000)
   } finally {
@@ -163,12 +171,21 @@ export async function runFollowCheck(opts: { delayMs?: number } = {}): Promise<C
 }
 
 let running = false
+let scheduled = false
 let timer: ReturnType<typeof setInterval> | null = null
 let firstShot: ReturnType<typeof setTimeout> | null = null
 
 /** 启动后台检查（v1：启动 60s 后先跑一次，然后按间隔循环）。重复调用不会叠定时器。 */
+/** 启动后台检查（v1 的定时器建在主窗口上：`main.py:714-726`，切页不打断）。
+ *
+ * ⚠ 给以后写验收脚本的人留一句：`FIRST_RUN_DELAY` 是 **60s**，
+ * 也就是任何**单个页面会话跑超过 60 秒**的脚本都会被这轮检查从中间打断
+ * （它会重读主表、可能改写 store 里的行）。目前全量回归里最长的一只是 33s，
+ * 所以还没撞上；真撞上时**别去调小这个 60s**——那是 v1 的数字，
+ * 该做的是把那个脚本拆成多个页面会话，或显式 `stopFollowCheck()`。 */
 export function startFollowCheck(): void {
   if (timer || firstShot) return
+  scheduled = true
   firstShot = setTimeout(() => {
     firstShot = null
     void runFollowCheck()
@@ -187,10 +204,18 @@ export function installFollowCheckTestSeam(): void {
   w.__zgjFollowCheck = runFollowCheck
   w.__zgjFollowCheckInterval = checkIntervalSec
   w.__zgjFollowCheckPick = pickRows
+  w.__zgjFollowCheckScheduled = isFollowCheckScheduled
+  w.__zgjFollowCheckStop = stopFollowCheck
   w.__zgjFollowCheckCaps = { ROW_CAP, SERIES_LOOKUP_CAP, PER_ROW_DELAY, PER_LOOKUP_DELAY, FIRST_RUN_DELAY }
 }
 
+/** 排期状态：给接线断言用（App.vue 到底挂上没有，不该靠"看起来挂了"）。 */
+export function isFollowCheckScheduled(): boolean {
+  return scheduled
+}
+
 export function stopFollowCheck(): void {
+  scheduled = false
   if (firstShot) {
     clearTimeout(firstShot)
     firstShot = null
