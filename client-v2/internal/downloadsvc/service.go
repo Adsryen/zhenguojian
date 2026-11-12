@@ -99,6 +99,11 @@ type Service struct {
 	flagsLoaded     bool
 	sidecarBusy     map[string]bool
 	sidecarTries    map[string]int
+	// sidecarGate 容量 1 的串行闸（v1 library.py 的 _danmaku_gate）。
+	// ⚠ 这个字段被我用 python 批量改结构体时**整行删掉过一次**，
+	// 而引用它的三行在另一个文件里，本机没有 Go 工具链看不见——CI 两个 job 同时报
+	// "s.sidecarGate undefined"才抓住。跨文件的字段/引用，改动要两边一起过一遍。
+	sidecarGate     chan struct{}
 	sidecarReports  []SidecarReport
 	// sidecarRetryDelay 两次弹幕尝试之间的等待；默认 SidecarRetryDelay，
 	// 测试压到毫秒级才有办法真跑完三轮（不压就得让 CI 白等 40 秒）。
@@ -134,6 +139,7 @@ func New(opts Options) *Service {
 		samples:      map[string][]speedSample{},
 		mergeVerify:  true,
 		sidecarRetryDelay: SidecarRetryDelay,
+		sidecarGate:       make(chan struct{}, 1),
 	}
 }
 
