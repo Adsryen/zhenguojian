@@ -230,6 +230,65 @@ func fileExists(p string) bool {
 	return err == nil
 }
 
+func TestDetectSidecar(t *testing.T) {
+	dir := t.TempDir()
+	video := writeFakeVideo(t, dir, "ep1.mp4")
+	ass, doc := SidecarPaths(video)
+
+	// 一个都没有 → 不 ok（v1：没有就返回 False，静默不挂）
+	if _, _, ok := DetectSidecar(video); ok {
+		t.Fatal("还没有旁挂文件却报 ok")
+	}
+
+	// 空的 .ass → 不 ok（挂上去等于给一条空轨，还会谎报"这一集有弹幕"）
+	if err := os.WriteFile(ass, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := DetectSidecar(video); ok {
+		t.Fatal("空 .ass 不该算有弹幕")
+	}
+	if err := os.WriteFile(ass, []byte("[Script Info]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// .danmaku.json 读不到 → 照样 ok、条数 0（v1 把 OSError/ValueError/TypeError 全吞掉）
+	gotAss, count, ok := DetectSidecar(video)
+	if !ok || gotAss != ass || count != 0 {
+		t.Fatalf("缺 json 时该 ok 且条数 0，得 ok=%v ass=%q count=%d", ok, gotAss, count)
+	}
+
+	// items 优先于 total：条数是"本地已有多少条"，不是核心报的总量
+	body, err := json.Marshal(SidecarDocument{
+		EpisodeID: "e", SeriesID: "s", Total: 999, FetchedAt: 1,
+		Items: []Item{{ID: "a", TimeMs: 1, Text: "一"}, {ID: "b", TimeMs: 2, Text: "二"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(doc, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, count, _ = DetectSidecar(video); count != 2 {
+		t.Fatalf("items 有 2 条却报 %d（total=999 不该优先）", count)
+	}
+
+	// items 空但 total 有 → 回落 total
+	if err := os.WriteFile(doc, []byte(`{"episodeId":"e","seriesId":"s","total":7,"fetchedAt":1,"items":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, count, _ = DetectSidecar(video); count != 7 {
+		t.Fatalf("items 空时应回落 total=7，得 %d", count)
+	}
+
+	// json 坏了 → 仍 ok、条数 0，不炸
+	if err := os.WriteFile(doc, []byte("{坏掉的 json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, count, ok = DetectSidecar(video); !ok || count != 0 {
+		t.Fatalf("坏 json 该 ok+0，得 ok=%v count=%d", ok, count)
+	}
+}
+
 func firstLines(s string, n int) string {
 	parts := strings.Split(s, "\n")
 	if len(parts) > n {

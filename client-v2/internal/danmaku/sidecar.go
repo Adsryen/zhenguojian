@@ -71,6 +71,36 @@ func SidecarPaths(videoPath string) (ass string, doc string) {
 	return base + SidecarSuffixAss, base + SidecarSuffixDoc
 }
 
+// DetectSidecar 找出某个成品文件对应的旁挂 .ass 与它的弹幕条数（v1 main.py:1880-1895
+// `_attach_sidecar_danmaku` 的"找文件 + 数条数"那两步）。
+//
+// 三条与 v1 一致的细节，都不是可有可无：
+//   · `.ass` 必须**存在且非空**才返回 ok —— 空文件挂上去 mpv 会当字幕轨处理但什么都没有，
+//     而且会让"这一集有弹幕"的显示变成假话；
+//   · `.danmaku.json` **读不到不算失败**（v1 用 try/except 把 OSError/ValueError/TypeError
+//     全吞掉，count 保持 0）：条数只是显示用的旁证，弹幕本体在 .ass 里；
+//   · 条数优先取 `items` 的长度，其次 `total`（v1 只数 items；核心写的 total 可能更大，
+//     但用户看到的"有多少条"一直是本地已有条数，所以 items 优先）。
+func DetectSidecar(videoPath string) (ass string, count int64, ok bool) {
+	assPath, docPath := SidecarPaths(videoPath)
+	st, err := os.Stat(assPath)
+	if err != nil || st.Size() <= 0 {
+		return assPath, 0, false
+	}
+	raw, err := os.ReadFile(docPath)
+	if err != nil {
+		return assPath, 0, true // v1：json 读不到照样挂 .ass
+	}
+	var doc SidecarDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return assPath, 0, true
+	}
+	if len(doc.Items) > 0 {
+		return assPath, int64(len(doc.Items)), true
+	}
+	return assPath, doc.Total, true
+}
+
 // SidecarReady 判定"这一集已经存过了"：两个文件都在、且 .ass 非空。
 // 照 v1 library.py:421-422（.ass 存在且 size>0 **并且** .danmaku.json 存在）——
 // 只查 .ass 的话，一次写坏一半就永远不会再补，弹幕数也就丢了。

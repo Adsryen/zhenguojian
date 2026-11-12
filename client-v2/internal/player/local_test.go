@@ -130,6 +130,73 @@ func TestOpenLocalDoesNotFetchOnlineDanmaku(t *testing.T) {
 	}
 }
 
+func TestOpenLocalAttachesSidecarDanmaku(t *testing.T) {
+	// v1 main.py:1880-1895 _attach_sidecar_danmaku：本地播放挂**同名 .ass**，
+	// 条数取自同名 .danmaku.json；没有就静默不挂。
+	// 这条测试的动机是"别只测有的一侧"：同一个用例里把有/无两种目录都跑一遍，
+	// 否则很容易写成只在有 sidecar 时成立、无 sidecar 时靠 mpv 没调用蒙过去。
+	dir := t.TempDir()
+	video := filepath.Join(dir, "某剧 S01 合并.mp4")
+	if err := os.WriteFile(video, []byte("x"), 0o644); err != nil {
+		t.Fatalf("写成品: %v", err)
+	}
+	ass := filepath.Join(dir, "某剧 S01 合并.ass")
+	if err := os.WriteFile(ass, []byte("[Script Info]\n[Events]\nDialogue: 0,0:00:01.00,Default,,0,0,0,,弹幕"), 0o644); err != nil {
+		t.Fatalf("写 ass: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "某剧 S01 合并.danmaku.json"),
+		[]byte(`{"episodeId":"e","seriesId":"s","total":3,"fetchedAt":1,"items":[{"id":"a","timeMs":1000,"text":"一"}]}`), 0o644); err != nil {
+		t.Fatalf("写 json: %v", err)
+	}
+
+	h := newHarness(t, nil)
+	if err := h.svc.OpenLocal(context.Background(), player.LocalRequest{Path: video}); err != nil {
+		t.Fatalf("OpenLocal: %v", err)
+	}
+	ps := h.l.all()
+	last := ps[len(ps)-1]
+	if !last.hasCall("sub-add:" + filepath.Base(ass)) {
+		t.Fatalf("同名 .ass 没被挂上，calls=%v", last.calls)
+	}
+	// 条数取 items 的长度（1 条），不是 total=3 —— 用户看到的是"本地已有多少条"
+	if got := h.svc.State().Danmaku.Count; got != 1 {
+		t.Fatalf("弹幕条数该是 items 长度 1，得 %d", got)
+	}
+
+	// 关弹幕要撤轨，开回来要重挂同名 .ass（不是去线上重抓）
+	if err := h.svc.SetDanmakuEnabled(false); err != nil {
+		t.Fatalf("关弹幕: %v", err)
+	}
+	if !last.hasCall("sub-remove") {
+		t.Fatalf("关弹幕没撤轨，calls=%v", last.calls)
+	}
+	before := subAddCount(last)
+	if err := h.svc.SetDanmakuEnabled(true); err != nil {
+		t.Fatalf("开弹幕: %v", err)
+	}
+	if subAddCount(last) <= before {
+		t.Fatalf("开弹幕没重新挂 sidecar（before=%d after=%d）", before, subAddCount(last))
+	}
+	if !last.hasCall("sub-add:" + filepath.Base(ass)) {
+		t.Fatalf("重挂的不是同名 .ass")
+	}
+
+	// 换一个**没有 sidecar** 的文件：不该挂任何字幕轨，也不报错
+	video2 := filepath.Join(dir, "另一集.mp4")
+	if err := os.WriteFile(video2, []byte("x"), 0o644); err != nil {
+		t.Fatalf("写第二个成品: %v", err)
+	}
+	if err := h.svc.OpenLocal(context.Background(), player.LocalRequest{Path: video2}); err != nil {
+		t.Fatalf("OpenLocal（无 sidecar）: %v", err)
+	}
+	if got := h.svc.State().Danmaku.Count; got != 0 {
+		t.Fatalf("无 sidecar 却报出 %d 条", got)
+	}
+	if h.svc.State().Episode.Index != 0 || !h.svc.State().Local {
+		t.Fatal("无 sidecar 那次也必须是本地会话")
+	}
+}
+
 // srcReqs 读假源的调用次数（同包可直接拿字段，不额外给测试类型加公开方法）。
 func srcReqs(src *fakeSource) int {
 	src.mu.Lock()

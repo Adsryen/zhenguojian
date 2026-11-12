@@ -242,6 +242,10 @@ type Service struct {
 	subAttached bool
 	lastVersion int64
 	assPath     string
+	// R22a③：本地播放时挂在同名 .ass 上的那条弹幕轨（v1 main.py:1880-1895）。
+	// 线上会话恒空——两条路径的"弹幕从哪来"完全不同，共用一个字段会互相冒充。
+	sidecarAss   string
+	sidecarCount int64
 
 	// 事件泵杂项
 	lastPosMs       int64 // 上一次 tick 位置（跳变检测）
@@ -388,6 +392,9 @@ func (s *Service) Open(ctx context.Context, req Request) error {
 	s.lastPosMs = 0
 	s.lastVersion = 0
 	s.assPath = ""
+	// 线上会话必须清掉上一条本地会话的 sidecar 状态：
+	// 显示口径已经按 plan.Local 走，但 sidecarAss 留着会让"开弹幕"那条分支误判。
+	s.sidecarAss, s.sidecarCount = "", 0
 	s.wantPaused = false // 新集默认在播（v1 play_episode 语义）
 
 	// 实例已死（断线后还没重建完就来 Open）：丢弃，下面 spawn 新的。
@@ -485,8 +492,37 @@ func (s *Service) OpenLocal(ctx context.Context, req LocalRequest) error {
 	if s.fetcher != nil {
 		s.fetcher.SetEpisode(danmaku.Episode{})
 	}
+	// 上一条本地会话的 sidecar 状态必须清零，否则这一集会显示上一集的弹幕条数
+	s.sidecarAss, s.sidecarCount = "", 0
 
-	return s.applySourceLocked()
+	if err := s.applySourceLocked(); err != nil {
+		return err
+	}
+	// v1 的顺序是"先起播，再挂同名 .ass"（open_local 末尾调 _attach_sidecar_danmaku）；
+	// 没有 sidecar 就静默不挂，不报错也不影响播放。
+	s.attachSidecarLocked(req.Path)
+	s.emitStatsLocked()
+	return nil
+}
+
+// attachSidecarLocked 给本地成品挂同名 .ass（v1 `_attach_sidecar_danmaku` 的对应物）。
+// 弹幕**条数**取同名 .danmaku.json 的 items 长度而不是核心 total：
+// 用户看到的数一直是"本地已经存下多少条"。
+func (s *Service) attachSidecarLocked(videoPath string) {
+	ass, count, ok := danmaku.DetectSidecar(videoPath)
+	if !ok {
+		s.sidecarAss, s.sidecarCount = "", 0
+		return
+	}
+	s.sidecarAss, s.sidecarCount = ass, count
+	if !s.enabled || s.p == nil {
+		return // 关着弹幕不挂载（与线上路径同一规则）
+	}
+	if err := s.p.SubAdd(ass, "弹幕"); err != nil {
+		s.log("player: 挂 sidecar 失败: %v", err)
+		return
+	}
+	s.subAttached = true
 }
 
 // Play 继续播放。
@@ -574,8 +610,18 @@ func (s *Service) SetDanmakuEnabled(on bool) error {
 		s.emitStatsLocked()
 		return nil
 	}
-	// 开：重渲染已保留数据；不足再由 ticker 继续补拉
-	if s.p != nil {
+	// 开：线上会话重渲染已保留数据（不足再由 ticker 补拉）；
+	// 本地会话只有一件事可做——把同名 .ass 再挂回去（refreshTrackLocked 对它什么也不做，
+	// 因为它整个建立在 fetcher 有窗口数据的前提上）。
+	if localSession(s.plan) && s.sidecarAss != "" {
+		if s.p != nil {
+			if err := s.p.SubAdd(s.sidecarAss, "弹幕"); err != nil {
+				s.log("player: 重挂 sidecar 失败: %v", err)
+			} else {
+				s.subAttached = true
+			}
+		}
+	} else if s.p != nil {
 		s.refreshTrackLocked()
 	}
 	s.emitStatsLocked()
@@ -676,7 +722,12 @@ func (s *Service) snapshotLocked() Snapshot {
 	} else if s.durMs > 0 {
 		snap.DurationMs = s.durMs
 	}
-	if s.fetcher != nil {
+	if localSession(s.plan) && s.sidecarAss != "" {
+		// 本地会话的条数来自同名 .danmaku.json（v1 attach_danmaku(ass, count) 的第二个参数）。
+		// ⚠ 不能用"s.fetcher == nil"当本地判据：OpenLocal 之后 fetcher 仍在，
+		// 只是没有剧集窗口，Stats() 恒 0 —— 那样 sidecar 就永远显示不出来。
+		snap.Danmaku.Count = int(s.sidecarCount)
+	} else if s.fetcher != nil {
 		_, count, _, _ := s.fetcher.Stats()
 		snap.Danmaku.Count = count
 		snap.Danmaku.Note = s.fetcher.Note()
@@ -688,6 +739,13 @@ func (s *Service) snapshotLocked() Snapshot {
 		snap.Local = s.plan.Local
 	}
 	return snap
+}
+
+// localSession 判"这是一次本地成品会话"。
+// 唯一真相是 plan.Local（OpenLocal 里落的），不去猜 plan.URL 是不是路径——
+// 那会把 Windows 盘符、UNC 之类形状又变成一处隐式规则。
+func localSession(plan *Plan) bool {
+	return plan != nil && plan.Local
 }
 
 func msOf(sec float64) int64 {
@@ -944,7 +1002,9 @@ func (s *Service) needStatsNoteLocked(count int) bool {
 
 func (s *Service) emitStatsLocked() {
 	count, note := 0, ""
-	if s.fetcher != nil {
+	if localSession(s.plan) && s.sidecarAss != "" {
+		count = int(s.sidecarCount) // 与 snapshotLocked 同一口径，两处别各写一份规则
+	} else if s.fetcher != nil {
 		_, count, _, _ = s.fetcher.Stats()
 		note = s.fetcher.Note()
 	}
