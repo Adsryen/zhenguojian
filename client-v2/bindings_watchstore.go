@@ -102,6 +102,53 @@ func (a *App) Reserve(dramaJSON string) (string, error) {
 	return marshalJSON(map[string]any{"reserved": s.Reserve(d)})
 }
 
+// ObserveDrama 是 R23 的 Go 半边：v1 的后台追剧检查
+// （main.py:776-860 _check_follows）逐条拿 `core.detail(drama)` 的最新数据喂给
+// watchstore.observe_drama（watchstore.py:348-426），由它决定
+// known/newEpisodes/newSeason/arrived 这些旗标怎么变。
+//
+// v2 侧 `Store.ObserveDrama` 本身早就移植了（store.go:1176，带单测），
+// 但**全仓零调用方**——没有定时器、没有绑定、前端也不触发，
+// 于是"预约/追剧"只是打了个标记，没人去发现它上线了。
+// 这里只补最小的一块：**观察一条剧并把变化后的行回吐**，
+// 节奏与遍历逻辑放在前端（见 services/followCheck.ts），理由是——
+// 季号解析/同系列归并的权威实现已在 TS 有一份（services/series.ts 的 v1 series.py 端口），
+// 若在 Go 再抄一份 `base_title/series_key/group/find_season/next_season`，
+// 就变成同一个规格两处实现；那类重复正是本任务一直在防的（第 27/35 轮同源问题）。
+//
+// 入参是**完整** Drama JSON（v1 传的就是完整 API dict；见 store.go 注释）。
+// 返回观察后的行（不存在该追剧记录时返回 {observed:false}，照 v1「follow is None → 不 emit」）。
+func (a *App) ObserveDrama(dramaJSON string) (string, error) {
+	s, err := getWatchStore()
+	if err != nil {
+		return "", err
+	}
+	d, err := decodeWatchDrama(dramaJSON)
+	if err != nil {
+		return "", err
+	}
+	// 不额外开 Store API：现有 FollowList()/ToRowJSON() 就是行快照的唯一口径，
+	// 新加一个 SnapshotRow 只会多一处可能漂移的真相。
+	rowOf := func(id string) map[string]any {
+		for _, e := range s.FollowList() {
+			if e.Drama.ID == id {
+				return e.ToRowJSON()
+			}
+		}
+		return nil
+	}
+	before := rowOf(d.ID)
+	s.ObserveDrama(d)
+	after := rowOf(d.ID)
+	return marshalJSON(map[string]any{
+		// v1：observe_drama 对没追的剧直接 return（连 emit 都不发）。
+		// 这里把"有没有这条追剧记录"如实报出去，前端据此不再瞎猜有没有生效。
+		"observed": before != nil && after != nil,
+		"changed":  !jsonObjectsEqual(before, after),
+		"row":      after,
+	})
+}
+
 func (a *App) CancelReservation(dramaID string) (string, error) {
 	s, err := getWatchStore()
 	if err != nil {
@@ -174,3 +221,21 @@ func (a *App) ClearHistory() (string, error) {
 
 // Calendar（追剧日历）已迁至 bindings_calendar.go：日历属独立功能域，
 // 且原实现把 gender 以 number 传核心（string 字段）会整请求失败，见该文件头注释。
+
+// jsonObjectsEqual 只用于"观察前后行有没有变"的判断：
+// 行本身就是要序列化给前端的 map，直接比 JSON 形态最省事，
+// 也避免为了比较去手写一串字段白名单（那种清单一旦加字段就漏）。
+func jsonObjectsEqual(a, b map[string]any) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	if a == nil {
+		return true
+	}
+	ja, e1 := marshalJSON(a)
+	jb, e2 := marshalJSON(b)
+	if e1 != nil || e2 != nil {
+		return false
+	}
+	return ja == jb
+}
