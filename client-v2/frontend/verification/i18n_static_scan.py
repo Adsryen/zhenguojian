@@ -159,6 +159,9 @@ TS_EXEMPT = {
         ("mock: 请先完成下载", DIAG_REASON),
         ("mock: zip 资产请手动解压", DIAG_REASON),
         ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
+        ("mock detail 故障注入", "VITE_MOCK 专用的故障注入标记：只作为 throw 的 message 存在，"
+                               "而 followCheck 的失败分支只统计条数、不把异常文案显示给用户（v1 也是"
+                               "「失败不打扰用户」）；界面能看到的只有 i18n 里的「追剧检查：N 部暂时取不到更新」。"),
     ],
     "services/coverSave.ts": [
         ("<safe_name(title)>", "v1 契约注释里的文件名模板（对齐 decrypt.safe_name），不是文案"),

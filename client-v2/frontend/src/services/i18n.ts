@@ -622,13 +622,16 @@ const zh: Record<string, string> = {
      里的 30 分钟后台检查在 v2 还不存在（Go 有 Store.ObserveDrama，但零调用方，
      见 research/v1-v2-reserve-parity.md / PRD R23）——
      不能把还没发生的事写在界面上，所以这里只陈述已成立的部分，
-     并且 tooltip 直接把「提醒尚未接通」写出来——等用户发现提醒从来没来过才算发现问题，太晚了。 */
+     所以第三十四轮当时 tooltip 直接把「提醒尚未接通」写出来——
+     等用户发现提醒从来没来过才算发现问题，太晚了。
+     第三十六轮后台检查接通（services/followCheck.ts），这句改成与真节奏一致的「每 30 分钟检查一次更新」；
+     ⚠ 改的时候记得同步 detail_reserve_verify ⑦b，它断言的就是这个 30 分钟。 */
   'detail.reserve': '☆ 预约',
   'detail.reserveOnline': '☆ 预约上线',
   'detail.reserveNext': '☆ 预约下一季',
   'detail.reserveUpdate': '☆ 预约更新',
   'detail.reservedBtn': '✓ 已预约',
-  'detail.reserveTip': '记入预约列表；上线/更新提醒尚未接通',
+  'detail.reserveTip': '记入预约列表；应用运行期间每 30 分钟检查一次更新',
   'detail.reserveDone': '已预约《{t}》',
   'detail.reserveCancelled': '已取消预约',
   'detail.reserveFail': '预约操作失败',
@@ -1273,7 +1276,7 @@ const en: Record<string, string> = {
   'detail.reserveNext': '☆ Reserve next season',
   'detail.reserveUpdate': '☆ Reserve updates',
   'detail.reservedBtn': '✓ Reserved',
-  'detail.reserveTip': 'Recorded as reserved; release/update alerts not wired yet',
+  'detail.reserveTip': 'Recorded as reserved; the app checks for updates every 30 minutes while running',
   'detail.reserveDone': 'Reserved {t}',
   'detail.reserveCancelled': 'Reservation cancelled',
   'detail.reserveFail': 'Reserve action failed',

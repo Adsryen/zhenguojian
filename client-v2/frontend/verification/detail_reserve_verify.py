@@ -30,7 +30,7 @@ releaseStatus == finished → 「☆ 预约下一季」
   ④ 刷新后仍「✓ 已预约」（真值持久化，不是内存态）
   ⑤ v1 互斥语义：已追剧时点预约 → 追剧按钮回到「＋ 追剧」
   ⑥ 取消：点「✓ 已预约」→ 回到「☆ 预约更新」+ toast「已取消预约」
-  ⑦ en 态标签为英文，且 tooltip 仍写着"尚未接通"（不许悄悄放回承诺）
+  ⑦ en 态标签为英文；tooltip 承诺的节奏与实现一致（30 分钟），且不写"未接通"
   ⑧ 「☆ 预约上线」分支**在 mock 里造不出来**：`mockDetail` 恒返回分集，
      `episodes` 不可能为 0。这一支只在真机/未上线剧上成立 —— 所以这里只如实记录，
      不为了凑数去伪造数据。
@@ -185,8 +185,13 @@ def main():
             label_en = btn(page)
             tip_en = page.locator(BTN).get_attribute("title") or ""
             check("⑦a en 态标签是英文", re.search(r"[一-鿿]", label_en) is None, label_en)
-            check("⑦b tooltip 明说提醒未接通（R23 之前不许把承诺放回 UI）",
-                  "not wired" in tip_en or "尚未接通" in tip_en, tip_en)
+            # 这条断言**跟着功能一起改**，不是因为碍事：
+            # 第三十四轮 R23 还没接通时它钉的是"不许承诺未实现的东西"，
+            # 本轮后台检查真接通了（`services/followCheck.ts`，13 条断言），
+            # 于是钉的东西换成"承诺必须与已实现的节奏一致"——
+            # 数字（30 分钟）也一起断，将来有人改小间隔却不改文案，这里会红。
+            check("⑦b tooltip 承诺的是真存在的节奏（30 分钟），不再写未接通",
+                  "30" in tip_en and "not wired" not in tip_en, tip_en)
 
             page.screenshot(path=os.path.join(OUT, "detail-reserve.png"))
 
