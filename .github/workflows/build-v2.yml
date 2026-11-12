@@ -38,6 +38,9 @@ jobs:
           # 另外：早先 `go test ./...` 在 ubuntu 上也因为 go:embed all:frontend/dist
           # 需要非空目录而 setup failed —— 那条现在不适用，因为不再构建根包。
           go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./internal/...
+          # 沙箱/查工具路径这几段不需要网络与 ffmpeg，所以逐条打出名字留证据：
+          # `ok 包名 0.00x s` 只能证明"没失败"，证明不了具体哪几条跑过。
+          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -v -run 'TestPrepare|TestLookupTool|TestMpvCandidates|TestRunSurvives|TestPipeline|TestStep|TestAllTerminal|TestMergeSettled|TestSkip|TestTrunc|TestJobList|TestShouldKeep' ./internal/selftest/
 
   windows:
     runs-on: windows-latest
