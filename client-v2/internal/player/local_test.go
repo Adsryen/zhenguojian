@@ -77,7 +77,9 @@ func TestOpenLocalRejectsEmptyPath(t *testing.T) {
 
 func TestOpenLocalDoesNotFetchOnlineDanmaku(t *testing.T) {
 	// ④ 本地播放不该去线上抓弹幕（Session 空 → 不给抓取器设剧集窗口）。
-	// 但"断言恒为 0"什么都证明不了（第 27 轮那条教训在这里同样成立），
+	// 但"断言恒为 0"什么都证明不了（第 27 轮那条教训在这里同样成立）——
+// 而且它**果然在 CI 上兑现了**：第一版对照本身跑不起来（漏了 setLoaded），
+// 是这条对照把假绿拦下来的。
 	// 所以同一把尺子先跑一次**线上 Open 当阳性对照**：那必须抓到东西。
 	h := newHarness(t, nil)
 
@@ -85,10 +87,16 @@ func TestOpenLocalDoesNotFetchOnlineDanmaku(t *testing.T) {
 	if err := h.svc.Open(context.Background(), online); err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	waitFor(t, 2*time.Second, func() bool { return srcReqs(h.src) > 0 }, "线上 Open 应触发抓取")
-	if srcReqs(h.src) == 0 {
-		t.Fatal("阳性对照失效：线上 Open 都没触发抓取，那后面的 0 不构成证据")
+	// 抓取窗口要**知道时长/位置**才会发起：第一版我漏了这一步，
+	// CI 直接在 88 行判"等待超时: 线上 Open 应触发抓取"——
+	// 也就是说对照跑不起来，后面的"0 次"根本不构成证据。
+	// 补上假实例的 loaded（同包其它用例也是这个顺序：Open → setLoaded → 看 tick）。
+	ps := h.l.all()
+	if len(ps) != 1 {
+		t.Fatalf("Open 后应有 1 个实例，得 %d", len(ps))
 	}
+	ps[0].setLoaded(5.0, 120.0)
+	waitFor(t, 2*time.Second, func() bool { return srcReqs(h.src) > 0 }, "线上 Open 应触发抓取")
 
 	file := filepath.Join(t.TempDir(), "media.mp4")
 	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
@@ -98,7 +106,11 @@ func TestOpenLocalDoesNotFetchOnlineDanmaku(t *testing.T) {
 	if err := h.svc.OpenLocal(context.Background(), player.LocalRequest{Path: file}); err != nil {
 		t.Fatalf("OpenLocal: %v", err)
 	}
-	time.Sleep(150 * time.Millisecond) // 好几个 tick 的宽度
+	// 本地这侧同样给 loaded：不然"没有抓取"可能只是因为"还没时长"，
+	// 那就不是在测 Session 为空这条规则了。
+	ps = h.l.all()
+	ps[len(ps)-1].setLoaded(3.0, 60.0)
+	time.Sleep(300 * time.Millisecond) // 好几个 tick 的宽度
 	if got := srcReqs(h.src); got != before {
 		t.Fatalf("本地播放后不该再有线上抓取调用：前 %d 后 %d", before, got)
 	}
