@@ -2,7 +2,9 @@ package main
 
 import (
 	"embed"
+	"os"
 
+	"zhenguojian/client-v2/internal/selftest"
 	"zhenguojian/client-v2/internal/updater"
 
 	"github.com/wailsapp/wails/v2"
@@ -20,6 +22,17 @@ var buildVersion string
 
 func main() {
 	updater.EmbeddedVersion = buildVersion
+
+	// v1「真果鉴.exe --selftest」的对等物：在**已打包的 exe 内部**跑真实管线，
+	// 逐行打印 OK/FAIL/SKIP、写 selftest-report.json，然后按 FAIL 与否决定退出码。
+	// 这里刻意不起 GUI、不开 mpv 窗口（v1 原话：屏显播放不进自检，人工验）。
+	// 未接通的步骤会显式打 PENDING —— 六步绿不等于与 v1 完全等同，
+	// 报告里的 pending 字段就是这句话的机器可读版本。
+	if hasArg(os.Args[1:], "--selftest") {
+		_, code := selftest.Run(os.Stdout, selftest.Steps(), buildVersion)
+		os.Exit(code)
+	}
+
 	app := NewApp()
 
 	err := wails.Run(&options.App{
@@ -43,4 +56,14 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
+}
+
+// hasArg 只认精确匹配的参数（v1 用 sys.argv 判定，行为一致）。
+func hasArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }
