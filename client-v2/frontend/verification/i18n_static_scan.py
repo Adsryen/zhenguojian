@@ -81,9 +81,6 @@ EXEMPT_REASONS = {
         ("console.info('browseFilters 兜底", "开发者日志，不进 UI"),
         ("throw new ApiError('无 genre/category 组'", "内部错误诊断，被同函数 catch 后只进 console.info"),
     ],
-    "views/CalendarView.vue": [
-        ("console", "开发者日志"),
-    ],
 }
 
 
@@ -114,7 +111,22 @@ TS_SKIP_FILES = {
 STATUS_REASON = ("watchstore 行状态枚举，逐字对齐 Go 核心（store.go:331/964）；"
                  "前端只做镜像且无视图渲染 row.status，改译属跨层契约变更")
 
+DIAG_REASON = ("诊断/故障串：给开发者与控制台读的，不是用户界面文案"
+               "（前缀 mock:/player:/[sim_fault] 是刻意的来源标记）")
+
 TS_EXEMPT = {
+    "services/covers.ts": [
+        ("封面诊断", "「复制诊断」进剪贴板的报告正文，格式与 v1 一致，给开发者读；"
+                     "用户可见的那句横幅文案走 i18n（covers.banner.partial/partialN）"),
+        ("缺ffmpeg", "同上：诊断报告里的分类标签"),
+        ("转码/网络", "同上：诊断报告里的分类标签"),
+        ("失败 ${d.failCount}", "同上：诊断报告计数行"),
+        ("最近：[", "同上：诊断报告里「最近一次失败」行，带 [kind] 机器标签"),
+    ],
+    "stores/searchAll.ts": [
+        ("[sim_fault]", "验证用故障注入的标记串（配合 __zgjSearchFault），带 [sim_fault] "
+                        "后缀正是给 cleanErrorMessage 剥掉用的，不给用户看"),
+    ],
     # watchstore 的行状态是 **Go 核心契约**，不是界面文案：
     # client-v2/internal/watchstore/store.go:331 声明 想看/在看/已看/预约中，
     # :964 直接 `row["status"] = "预约中"`；v1 python watchstore.py:224 同形。
@@ -124,31 +136,37 @@ TS_EXEMPT = {
     "stores/watch.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
 
     "services/series.ts": [
-        ("季", "多季标题解析/归并算法：处理的是中文剧名本身（v1 series.py 1:1 端口），不是界面文案"),
-        ("十", "同上：中文数字表"),
-        ("百", "同上：中文数字表"),
+        ("'季'", "多季标题解析/归并算法里的中文后缀常量（v1 series.py 1:1 端口），"
+                "处理的是剧名本身，不是界面文案。条款收窄成带引号字面量，"
+                "免得以后任何含「季」的新代码被这条静默豁免"),
+        ("'十'", "同上：中文数字表项（同样收窄为带引号字面量）"),
+        ("'百'", "同上"),
     ],
     "services/api.ts": [
         ("'在看'", STATUS_REASON),
         ("'预约中'", STATUS_REASON),
         ("滑块</text>", "mock 验证码 SVG 画布里的图形文字，VITE_MOCK 专用素材"),
         ("未检测到 Wails 原生桥", "启动诊断文案，进 console 与降级提示；本轮先登记，见 notes R9c"),
+        ("尚未打开播放会话", DIAG_REASON),
+        ("mock: 全部候选失败", DIAG_REASON),
+        ("mock: 请先完成下载", DIAG_REASON),
+        ("mock: zip 资产请手动解压", DIAG_REASON),
         ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
     ],
     "services/coverSave.ts": [
         ("<safe_name(title)>", "v1 契约注释里的文件名模板（对齐 decrypt.safe_name），不是文案"),
         ('"短剧"', "v1 safe_name 的 fallback 参数逐字对齐（main.py:1495），改了会偏离 v1 落盘名"),
         ("海报图片", "File System Access 类型描述，随 locale 的意义弱；本轮先登记"),
+        ("海报.jpg", "落盘文件名后缀，逐字对齐 v1 main.py:1496 `<safe_name(title)> 海报.jpg`，"
+                     "翻成英文会偏离 v1/核心的落盘名约定"),
     ],
 }
 
 # .ts 一侧欠账表（R9c 建立）。规则同 .vue：多一处红、少一处也必须回来调低。
 # 重新生成用 `--rebase`，它按当前实测打印可粘贴的字典。
-TS_BASELINE = {
-    "services/api.ts": 12,
-    "services/covers.ts": 4,
-    "services/coverSave.ts": 2,
-    "stores/searchAll.ts": 2,
+TS_BASELINE: dict = {
+    # 2026-11-12 R9c-2 收尾：api / calendar / covers / coverSave / searchAll 全部
+    # 「键化」或「带理由豁免」，无未处置欠账。新的 .ts 界面中文会直接红。
 }
 
 
@@ -252,6 +270,23 @@ def check_dict_pairs():
     return problems
 
 
+def exemption_hits():
+    """每条豁免实际覆盖多少行。0 命中说明条款过期或写错；命中数异常大要回去看是否过宽。"""
+    hits = {}
+    tables = (("EXEMPT_REASONS", EXEMPT_REASONS, ".vue"), ("TS_EXEMPT", TS_EXEMPT, ".ts"))
+    for tname, table, suffix in tables:
+        for relp, needles in table.items():
+            path = os.path.join(SRC, relp)
+            if not os.path.exists(path):
+                for needle, _ in needles:
+                    hits[(tname, relp, needle)] = -1      # 文件都不存在 = 条目失效
+                continue
+            text = open(path, encoding="utf-8").read()
+            for needle, _ in needles:
+                hits[(tname, relp, needle)] = text.count(needle)
+    return hits
+
+
 def rel(path):
     return os.path.relpath(path, SRC).replace(os.sep, "/")
 
@@ -330,6 +365,14 @@ def scan_file(path):
 def main():
     _assert_no_duplicate_keys()
 
+    hits = exemption_hits()
+    dead = [f"{t}:{p} 条款 {n!r} 命中 {c}" for (t, p, n), c in hits.items() if c <= 0]
+    if dead:
+        for d in dead:
+            print("FAIL 豁免条款失效：", d)
+        if not args.rebase:
+            return 1
+
     pairs = check_dict_pairs()
     for line in pairs:
         print("FAIL i18n 字典：", line)
@@ -383,12 +426,12 @@ def main():
     byfile_all = {}
     for r, _, _, _ in all_rows:
         byfile_all[r] = byfile_all.get(r, 0) + 1
-    # TS_BASELINE 是 .ts 一侧的欠账表（.vue 侧 BASELINE 已清空）
-    for r, n in TS_BASELINE.items():
-        byfile_all.setdefault(r, n)
+    # 注意：不能把基线值回填进 byfile_all —— 那样一个「已经还清（0 处）」的文件
+    # 会被自己填成 now==base 而报「持平」，棘轾就永远不催你下调。本轮实测踩过。
+    base_map = {**BASELINE, **TS_BASELINE}
     bad = []
     for r in sorted(set(byfile_all) | set(BASELINE) | set(TS_BASELINE)):
-        now, base = byfile_all.get(r, 0), {**BASELINE, **TS_BASELINE}.get(r, 0)
+        now, base = byfile_all.get(r, 0), base_map.get(r, 0)
         if now > base:
             bad.append(f"超出基线 {now - base} 处：{r}（{now} > {base}）—— 新写的中文必须走 i18n")
         elif now < base:

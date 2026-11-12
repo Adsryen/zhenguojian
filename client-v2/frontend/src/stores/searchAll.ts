@@ -10,6 +10,7 @@
      window.__zgjSearchFault = ['youzi', …]（或含 '*'）→ 对应源请求同步抛错，
      错误文案带 [sim_fault] 尾缀，用于验证失败行的 code 剥除 */
 import { api, MOCK_MODE } from '@/services/api'
+import { t } from '@/services/i18n'
 import type { Drama, SourceListItem } from '@/services/types'
 
 export const SEARCH_ALL_KEY = 'zgj.search.all'
@@ -64,7 +65,7 @@ export function makeGroups(targets: SourceListItem[]): SearchGroup[] {
 /** 失败原因展示文案：ApiError 在 callGoRaw 已剥 code，但字符串 throw 仍可能带，防御性再剥一次 */
 export function cleanErrorMessage(e: unknown): string {
   const msg = e instanceof Error ? e.message : String((e as { message?: unknown })?.message ?? e)
-  return (msg || '').replace(/\s*\[[a-zA-Z0-9_-]+\]\s*$/, '').trim() || '未知错误'
+  return (msg || '').replace(/\s*\[[a-zA-Z0-9_-]+\]\s*$/, '').trim() || t('searchAll.errUnknown')
 }
 
 /** 验证钩子：仅 mock 面注入源级故障 */

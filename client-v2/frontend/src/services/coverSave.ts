@@ -24,6 +24,7 @@
    ================================================================ */
 
 import { api, DEGRADED, MOCK_MODE } from './api'
+import { tf } from './i18n'
 import type { Drama } from './types'
 
 /** v1 media.py:136 `_COVER_ASSET`：从封面 URL 抽 32 位资源号。 */
@@ -80,7 +81,7 @@ async function toBlob(src: string): Promise<Blob> {
     return new Blob([decodeURIComponent(body)], { type: mime })
   }
   const res = await fetch(src)
-  if (!res.ok) throw new Error(`读取海报失败（HTTP ${res.status}）`)
+  if (!res.ok) throw new Error(tf('coverSave.errFetch', { code: res.status }))
   return await res.blob()
 }
 

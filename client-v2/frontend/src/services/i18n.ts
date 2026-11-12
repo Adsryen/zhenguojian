@@ -540,6 +540,14 @@ const zh: Record<string, string> = {
   'settings.commitUnknown': '未知（构建未注入版本信息）',
   'settings.commitNone': '未知',
   // ── R9c-2：stores/calendar.ts 的日历文案（zh 与收敛前逐字一致）──
+  // ── R9c-2：api/store 层的用户可见错误与提示（zh 与收敛前逐字一致）──
+  'api.errBadEpisode': '集号无效',
+  'api.errBadVideoParams': '播放参数解析失败',
+  'api.mockDanmakuNote': 'VITE_MOCK 示例弹幕',
+  'api.errLoginInput': '请输入用户名或邮箱',
+  'api.errCaptcha': '安全验证未通过，请重新拖动滑块',
+  'coverSave.errFetch': '读取海报失败（HTTP {code}）',
+  'searchAll.errUnknown': '未知错误',
   'calendar.wkSun': '周日',
   'calendar.wkMon': '周一',
   'calendar.wkTue': '周二',
@@ -1157,6 +1165,14 @@ const en: Record<string, string> = {
   'settings.commitUnknown': 'Unknown (build info not injected)',
   'settings.commitNone': 'Unknown',
   // ── R9c-2: calendar store text (zh byte-identical to pre-convergence) ──
+  // ── R9c-2: user-visible errors raised in the api/store layer (zh byte-identical) ──
+  'api.errBadEpisode': 'Invalid episode number',
+  'api.errBadVideoParams': 'Could not parse playback parameters',
+  'api.mockDanmakuNote': 'VITE_MOCK sample danmaku',
+  'api.errLoginInput': 'Enter a username or email',
+  'api.errCaptcha': 'Verification failed — drag the slider again',
+  'coverSave.errFetch': 'Failed to read poster (HTTP {code})',
+  'searchAll.errUnknown': 'Unknown error',
   'calendar.wkSun': 'Sun',
   'calendar.wkMon': 'Mon',
   'calendar.wkTue': 'Tue',

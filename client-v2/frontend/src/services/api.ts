@@ -2,6 +2,7 @@
    - 真实模式：window.go.main.App.<Method>(...) 返回 JSON 字符串（Go 侧 (string, error)）
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
 import { ApiError } from './types'
+import { t } from './i18n' /* R9c-2：mock 面错误串会直接进用户可见 toast，所以走字典 */
 import type {
   ArchiveScanResult,
   BrowseFiltersResult,
@@ -501,8 +502,8 @@ const mockApi: NativeApi = {
   playerOpen: async (drama: Drama, chapter: Chapter, index: number, quality?: string) => {
     void quality // mock 面画质无真实语义
     await delay(150)
-    if (index < 1) throw new ApiError('集号无效', 'bad_video')
-    if (!drama || !drama.id) throw new ApiError('播放参数解析失败', 'bad_video')
+    if (index < 1) throw new ApiError(t('api.errBadEpisode'), 'bad_video')
+    if (!drama || !drama.id) throw new ApiError(t('api.errBadVideoParams'), 'bad_video')
     const durSec = Number(chapter?.duration ?? 0) || 0
     mockSnap.playing = true
     mockSnap.posMs = 0
@@ -512,7 +513,7 @@ const mockApi: NativeApi = {
     mockSnap.danmaku = {
       enabled: mockSnap.danmaku.enabled,
       count: mockSnap.danmaku.enabled ? MOCK_DM_COUNT : 0,
-      note: 'VITE_MOCK 示例弹幕'
+      note: t('api.mockDanmakuNote')
     }
     mockPlayer.opened = true
     mockPlayer.eof = false
@@ -862,7 +863,7 @@ const mockApi: NativeApi = {
   soraniLogin: async (identifier, password, captchaId, track) => {
     await delay(220)
     if (typeof window !== 'undefined') window.__zgjSoraniLastLogin = { identifier, password, captchaId, track }
-    if (!identifier.trim() || !password) throw new ApiError('请输入用户名或邮箱', 'bad_input')
+    if (!identifier.trim() || !password) throw new ApiError(t('api.errLoginInput'), 'bad_input')
     const pts = track.trackList ?? []
     const dims = [track.bgImageWidth, track.bgImageHeight, track.templateImageWidth, track.templateImageHeight]
     const trackOk =
@@ -873,9 +874,9 @@ const mockApi: NativeApi = {
       pts[pts.length - 1].type === 'up' &&
       track.startTime > 0 &&
       track.stopTime >= track.startTime
-    if (!trackOk) throw new ApiError('安全验证未通过，请重新拖动滑块', 'sorani_captcha_fail')
+    if (!trackOk) throw new ApiError(t('api.errCaptcha'), 'sorani_captcha_fail')
     if (typeof window !== 'undefined' && window.__zgj?.mockLoginFail === '1')
-      throw new ApiError('安全验证未通过，请重新拖动滑块', 'sorani_captcha_fail')
+      throw new ApiError(t('api.errCaptcha'), 'sorani_captcha_fail')
     soraniMock.loggedIn = true
     soraniMock.name = identifier.trim()
     return { loggedIn: true, name: identifier.trim() }
