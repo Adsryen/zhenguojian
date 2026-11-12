@@ -20,6 +20,12 @@ i18n_sweep_verify.py — L 表收敛进 i18n.ts 的验收脚本
   3) 截图 i18n-sweep-player.png / i18n-sweep-downloads.png（zh 默认态）。
 
 dev:mock 端口 5185 自管理（--strictPort），结束 kill 并删 pid 文件。
+
+用法：
+  python3 verification/i18n_sweep_verify.py              # 默认含整页 en 审计（36 项）
+  python3 verification/i18n_sweep_verify.py --no-audit   # 只要逐页断言（35 项，快 ~10s）
+审计默认开是因为逐页 selector 那套把 en 覆盖面压到只有 2 个候选节点，
+"绿"得不可信；关掉它必须是显式的，而不是默认状态。
 """
 import asyncio
 import json
@@ -525,7 +531,10 @@ async def main():
                 miss = [s for s in spots if s not in body_txt]
                 check(f"en|{url} 英文代表文案出现", not miss, f"missing={miss}")
 
-            if "--audit" in sys.argv:
+            if "--no-audit" not in sys.argv:
+                # R16：整页审计从「加 --audit 才跑」改成默认跑。
+                # 上一轮量出来旧 en 门禁整轮只看了 2 个候选节点——那种"绿"要靠手工开关才会被复核，
+                # 等于把真话设成可选项。现在默认量整页，多花 ~10s 换结论可信。
                 unknown = await audit_full_page(page, BASE)
                 check("audit|en 整页无未定性中文节点", not unknown,
                       f"待判定 {len(unknown)} 条，例：{[u[0] for u in unknown[:3]]}")

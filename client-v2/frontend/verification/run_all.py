@@ -41,12 +41,33 @@ def listening_ports():
     return set(re.findall(r":(51\d{2})\b", out))
 
 
+def split_porcelain(lines):
+    """把 `git status --porcelain` 的行分成（该还原的截图, 必须保留的其他改动）。
+
+    纯函数、可自测：第十七轮的事故就是把还原范围写成了整个目录，
+    静默吞掉同目录里未提交的代码改动。这里把判据抽出来，配 `--selftest` 钉住：
+      · 只有「` M`＝工作区已改、未 staged」且以 .png 结尾 才允许还原；
+      · staged(`M `)、未跟踪(`??`)、删除(` D`/`D `)、改名(`R `) 一律归入"不许动"；
+      · 路径带引号（含空格）要脱引号，但仍属"其他改动"时不还原。
+    """
+    shots, others = [], []
+    for line in lines:
+        if not line.strip():
+            continue
+        # porcelain 格式是 XY<空格>path：` M` 才是「工作区已改、未 staged」，
+        # `M ` 是已 staged（用户明确要提交的东西，绝对不许被 checkout 覆盖）。
+        x, y, path = line[0], line[1], line[3:].strip().strip('"')
+        if x == " " and y == "M" and path.endswith(".png"):
+            shots.append(path)
+        else:
+            others.append(line)
+    return shots, others
+
+
 def dirty_shots():
-    """本轮被脚本重写的截图（只认 .png，别的文件一概不碰）。"""
     r = subprocess.run(["git", "status", "--porcelain", "--", HERE],
                        capture_output=True, text=True, cwd=ROOT)
-    return [l[3:].strip().strip('"') for l in r.stdout.splitlines()
-            if l[1:2] == "M" and l.rstrip().endswith(".png")]
+    return split_porcelain(r.stdout.splitlines())[0]
 
 
 def git_revert_shots(files):
@@ -64,10 +85,10 @@ def git_revert_shots(files):
     return r.returncode == 0
 
 
-def run_script(name, timeout, audit):
+def run_script(name, timeout, no_audit):
     args = [sys.executable, "-u", name]
-    if audit and name == "i18n_sweep_verify.py":
-        args.append("--audit")
+    if no_audit and name == "i18n_sweep_verify.py":
+        args.append("--no-audit")
     t0 = time.time()
     try:
         r = subprocess.run(args, capture_output=True, text=True, timeout=timeout,
@@ -87,13 +108,54 @@ def run_script(name, timeout, audit):
                 err=(err or "").strip()[-200:])
 
 
+def selftest():
+    """表驱动钉住「哪些脏文件允许被还原」这条判据 —— 还原范围写宽过一次，
+    把同目录未提交的代码改动整个吞掉（退出码 0、无提示），这就是那次的回归测试。"""
+    cases = [
+        ("tracked 改动的截图要还原",
+         [" M client-v2/frontend/verification/a.png"], ["client-v2/frontend/verification/a.png"], 0),
+        ("未提交的代码改动绝不还原",
+         [" M client-v2/frontend/verification/i18n_sweep_verify.py"], [], 1),
+        ("staged 的截图也不许被 checkout 覆盖",
+         ["M  client-v2/frontend/verification/b.png"], [], 1),
+        ("未跟踪新截图保留",
+         ["?? client-v2/frontend/verification/new.png"], [], 1),
+        ("删除的截图保留（那是有人在删文件）",
+         [" D client-v2/frontend/verification/c.png"], [], 1),
+        ("带引号路径的 .png 仍算截图",
+         [' M "client-v2/frontend/verification/with space.png"'],
+         ["client-v2/frontend/verification/with space.png"], 0),
+        ("混合：只有 png 进还原列表",
+         [" M client-v2/frontend/verification/d.png",
+          " M client-v2/frontend/verification/run_all.py",
+          "?? client-v2/frontend/verification/.dev_x.log"],
+         ["client-v2/frontend/verification/d.png"], 2),
+    ]
+    bad = 0
+    for name, lines, want_shots, want_others in cases:
+        shots, others = split_porcelain(lines)
+        ok = shots == want_shots and len(others) == want_others
+        print(f"{'PASS' if ok else 'FAIL'} {name}")
+        if not ok:
+            print(f"      shots={shots} 期望={want_shots} others={len(others)} 期望={want_others}")
+            bad += 1
+    print(f"\n===== run_all --selftest: {len(cases) - bad}/{len(cases)} PASS =====")
+    return 1 if bad else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="", help="只跑名字含该子串的脚本")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    ap.add_argument("--audit", action="store_true", help="i18n_sweep 追加整页 en 审计")
+    ap.add_argument("--no-audit", action="store_true",
+                    help="让 i18n_sweep 跳过整页 en 审计（默认是跑的，别顺手关掉）")
+    ap.add_argument("--selftest", action="store_true",
+                    help="只跑内置表驱动自测（还原判据），不启动任何验收脚本")
     ap.add_argument("--keep-shots", action="store_true", help="保留脚本重写的截图")
     args = ap.parse_args()
+
+    if args.selftest:
+        return selftest()
 
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
@@ -108,7 +170,7 @@ def main():
     leaks, bad = [], []
     for f in scripts:
         mine = declared_ports(os.path.join(HERE, f))
-        res = run_script(f, args.timeout, args.audit)
+        res = run_script(f, args.timeout, args.no_audit)
         leftover = sorted(listening_ports() & mine)
         if leftover:
             leaks.append((f, leftover))
@@ -124,10 +186,10 @@ def main():
     for f, ports in leaks:
         print(f"  泄漏：{f} 跑完仍占 {ports}")
     if not args.keep_shots:
-        shots = dirty_shots()
-        others = [l for l in subprocess.run(["git", "status", "--porcelain", "--", HERE],
-                                            capture_output=True, text=True, cwd=ROOT).stdout.splitlines()
-                  if l[1:2] == "M" and not l.rstrip().endswith(".png")]
+        lines = subprocess.run(["git", "status", "--porcelain", "--", HERE],
+                               capture_output=True, text=True, cwd=ROOT).stdout.splitlines()
+        shots, others = split_porcelain(lines)
+        others = [l for l in others if l.strip()]
         ok = git_revert_shots(shots)
         print(f"截图还原：{'OK' if ok else '失败'}（{len(shots)} 张）")
         if others:
