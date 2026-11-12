@@ -16,6 +16,10 @@ Go 侧只补了 `App.ObserveDrama` 绑定（`Store.ObserveDrama` 早有实现与
   所以这里断言的是"updated 恒为 0 且没有误报提示"，
   真实的更新检测只在 Go 单测 + 打包机真跑里成立。别把本脚本全绿读成"检测已验证"。
 
+第 ⑩ 条是对 `App.vue` 那个启动钩子的直接验证（不是靠"看起来挂了"）；
+脚本里顺手留了一句给后人：**单页会话超过 60s 的验收脚本会被这轮检查打断**，
+现在最长一只 33s 所以没撞上，撞上时该拆会话或显式 stop，而不是去改小 v1 的 60s。
+
 端口：自管理 mock vite @5207（`_devserver`）。
 """
 import json
@@ -180,6 +184,25 @@ def main():
             check("⑧ en 态提示语是英文且没有中文残留",
                   hint_en == "Follow check: 1 title(s) unreachable for now", f"hint={hint_en!r}")
             page.evaluate("() => { delete window.__zgjDetailFail; localStorage.removeItem('zgj.locale'); }")
+
+            # ── ⑨ 每轮开头/结尾都现读主表（v1 是现读 follows()，不是吃页面缓存） ──
+            seed_follows(page, 2, "fcfresh")
+            goto_reserve(page)
+            r1 = page.evaluate("async () => await window.__zgjFollowCheck({ delayMs: 0 })")
+            # 中途往本地主表塞第三条：如果下一轮还吃旧缓存，checked 会仍是 2
+            seed_follows(page, 3, "fcfresh")
+            r2 = page.evaluate("async () => await window.__zgjFollowCheck({ delayMs: 0 })")
+            check("⑨ 第二轮现读到 3 行（第一轮 2 行）——不是吃上一轮的页面缓存",
+                  r1.get("checked") == 2 and r2.get("checked") == 3,
+                  f"r1={json.dumps(r1, ensure_ascii=False)} r2={json.dumps(r2, ensure_ascii=False)}")
+
+            # ── ⑩ 启动钩子真的挂上了（App 级，不是某个页面里顺手调一下） ──
+            sched = page.evaluate("() => window.__zgjFollowCheckScheduled() === true")
+            check("⑩a 页面起来后后台检查已排期（App.vue onMounted 的接线在）", sched, f"scheduled={sched}")
+            page.evaluate("() => window.__zgjFollowCheckStop()")
+            check("⑩b 停止后排期清空（热重载/卸载不会叠第二个定时器）",
+                  page.evaluate("() => window.__zgjFollowCheckScheduled() === false"),
+                  "")
 
             page.screenshot(path=os.path.join(OUT, "follow-check-hint.png"))
             browser.close()
