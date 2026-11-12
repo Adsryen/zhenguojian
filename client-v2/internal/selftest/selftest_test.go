@@ -147,3 +147,100 @@ func utf8Valid(s string) bool {
 	}
 	return true
 }
+
+// ── 下面是 R7-2（download / decrypt / merge）新增的纯逻辑断言 ──
+// 这三步真正跑起来需要打包机 + 网络 + ffmpeg，本机与 CI 都做不到；
+// 所以能钉住的是它的**判断逻辑与安全前提**，而不是管线结果。
+
+func TestAllTerminalNeedsTwoAndAllDone(t *testing.T) {
+	if allTerminal(nil) || allTerminal([]map[string]any{{"state": "completed"}}) {
+		t.Fatalf("少于 2 条不能算终态（否则入队瞬间就被判「完成」）")
+	}
+	if allTerminal([]map[string]any{{"state": "completed"}, {"state": "running"}}) {
+		t.Fatalf("有 running 就不能算终态")
+	}
+	if !allTerminal([]map[string]any{{"state": "completed"}, {"state": "failed"}}) {
+		t.Fatalf("completed/failed/error 都是终态")
+	}
+}
+
+func TestMergeSettledCoversFailure(t *testing.T) {
+	if mergeSettled(nil) {
+		t.Fatalf("空列表不能算落定")
+	}
+	if mergeSettled([]map[string]any{{"state": "queued"}, {"state": "done"}}) {
+		t.Fatalf("还有 queued 就不能算落定")
+	}
+	// 全失败也算落定：要往下报错，不能干等到超时
+	if !mergeSettled([]map[string]any{{"state": "failed"}, {"state": "canceled"}}) {
+		t.Fatalf("失败/取消必须让轮询退出并去报错")
+	}
+}
+
+func TestJobListAcceptsBothShapes(t *testing.T) {
+	typed := []map[string]any{{"state": "completed"}}
+	fromAny := []any{map[string]any{"state": "completed"}}
+	if len(jobList(map[string]any{"jobs": typed})) != 1 {
+		t.Fatalf("[]map[string]any 形状要能吃下（payloadLocked 返回的就是它）")
+	}
+	if len(jobList(map[string]any{"jobs": fromAny})) != 1 {
+		t.Fatalf("[]any 形状也要能吃下（JSON 往返后是它）")
+	}
+	if len(jobList(map[string]any{})) != 0 {
+		t.Fatalf("缺字段不该 panic")
+	}
+}
+
+func TestPipelineRefusesWithoutSandbox(t *testing.T) {
+	// 安全前提：沙箱没建立就绝不入队——v1 是直接清真实库再下，v2 不给自检这个权力
+	if sandboxReady {
+		t.Skip("别的测试把沙箱打开了")
+	}
+	if _, err := newPipeline(); err == nil || !strings.Contains(err.Error(), "沙箱") {
+		t.Fatalf("无沙箱必须拒绝，得 %v", err)
+	}
+	steps := PipelineSteps(map[string]any{})
+	_, err := steps[0].Run()
+	if err == nil || !strings.Contains(err.Error(), "前置条件") {
+		t.Fatalf("缺前序状态应报前置条件不成立，得 %v", err)
+	}
+}
+
+func TestShouldKeepSandboxOnlyOnFail(t *testing.T) {
+	if ShouldKeepSandbox([]Result{{Name: "a", Outcome: OK}, {Name: "b", Outcome: SKIP}}) {
+		t.Fatalf("SKIP 不该保留现场")
+	}
+	if !ShouldKeepSandbox([]Result{{Name: "merge", Outcome: FAIL}}) {
+		t.Fatalf("FAIL 必须保留现场供排查")
+	}
+}
+
+// 步骤清单的守护：v1 是九步，v2 对等成 discover + 显式 SKIP 的 decrypt。
+// 有人增删步骤时必须改这里并说明理由，避免"报告悄悄少一步"。
+func TestStepInventoryMatchesV1Parity(t *testing.T) {
+	names := make([]string, 0)
+	for _, st := range Steps() {
+		names = append(names, st.Name)
+	}
+	want := []string{"resources", "library", "discover", "search", "detail",
+		"preload", "download", "decrypt", "merge"}
+	if len(names) != len(want) {
+		t.Fatalf("步骤数变了：%v", names)
+	}
+	for i, n := range want {
+		if names[i] != n {
+			t.Fatalf("第 %d 步应为 %s，得 %s（全部：%v）", i+1, n, names[i], names)
+		}
+	}
+	// decrypt 在 v2 没有独立子系统，必须是"不适用"型 SKIP，不能被当成欠账悄悄删掉
+	all := Steps()
+	var dec *Step
+	for i := range all {
+		if all[i].Name == "decrypt" {
+			dec = &all[i]
+		}
+	}
+	if dec == nil || dec.Run != nil || !strings.Contains(dec.Pending, "不适用") {
+		t.Fatalf("decrypt 应为注明『不适用』的 SKIP 步：%+v", dec)
+	}
+}

@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"os"
 
 	"zhenguojian/client-v2/internal/selftest"
@@ -29,7 +30,21 @@ func main() {
 	// 未接通的步骤会显式打 PENDING —— 六步绿不等于与 v1 完全等同，
 	// 报告里的 pending 字段就是这句话的机器可读版本。
 	if hasArg(os.Args[1:], "--selftest") {
-		_, code := selftest.Run(os.Stdout, selftest.Steps(), buildVersion)
+		// 沙箱必须在 Run 之前建：resources 步会 native.Init()，
+		// 而 DataDir 只在第一次 initialize 时生效——晚设就把下载/合并写进用户真库了。
+		cleanup, err := selftest.Prepare()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[selftest] 沙箱建立失败: %v\n", err)
+			os.Exit(2)
+		}
+		results, code := selftest.Run(os.Stdout, selftest.Steps(), buildVersion)
+		// 全绿就清干净；有 FAIL 则**保留沙箱并打印路径**——
+		// 自检失败时最没用的就是一个已被销毁的现场（v1 是直接写真实库，谈不上现场）。
+		if keep := selftest.ShouldKeepSandbox(results); keep {
+			fmt.Fprintf(os.Stdout, "[selftest] 沙箱保留供排查: %s\n", selftest.SandboxDir())
+			os.Exit(code)
+		}
+		cleanup()
 		os.Exit(code)
 	}
 

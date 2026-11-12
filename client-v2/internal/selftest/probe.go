@@ -72,8 +72,8 @@ func lookupTool(name string) (string, error) {
 // 需要单独一轮把 downloadsvc 的安全用法（临时库目录、只下 2 集、跑完清理）接起来。
 // Run() 会打印 PENDING 行，六步绿不会被读成"已与 v1 完全等同"。
 func Steps() []Step {
-	st := map[string]any{} // 跨步骤传值（v1 也叫 state：drama/detail/plan…）
-	return []Step{
+	st := map[string]any{} // 跨步骤传值（v1 也叫 state：drama/chapters/jobs…）
+	steps := []Step{
 		{Name: "resources", Run: func() (map[string]any, error) {
 			// v2 引擎是进程内 duanjuapp/native，没有 sidecar 可查——
 			// 照 v1 查四件套会永远 FAIL，所以这里查三件并把 sidecar 记成 in-process。
@@ -161,6 +161,7 @@ func Steps() []Step {
 				return detail, fmt.Errorf("至少要有 2 集，实际 %d", len(chapters))
 			}
 			st["detail"] = detail
+			st["chapters"] = chapters
 			first, _ := chapters[0].(map[string]any)
 			st["chapter"] = first
 			return map[string]any{"episodes": len(chapters),
@@ -185,11 +186,9 @@ func Steps() []Step {
 			}
 			return map[string]any{"local": local, "session": session != ""}, nil
 		}},
-		{Name: "download", Pending: "未接通：需要真实落盘 + 跑完清理（临时库目录、只取 2 集），" +
-			"直接下真剧会污染用户库，必须先把 downloadsvc 的安全用法接进来"},
-		{Name: "decrypt", Pending: "依赖 download 产物；本轮没有可解密的文件，故未实现"},
-		{Name: "merge", Pending: "依赖 download 产物 + ffmpeg 合成校验；同上"},
 	}
+	steps = append(steps, PipelineSteps(st)...)
+	return steps
 }
 
 // truncRunes 按**字符**截断而不是按字节。
