@@ -2,7 +2,7 @@
 /* DetailView —— /detail/:id?d=<compact Drama JSON>（兜底 ?source=&title=）
    版式照 v1 detail_layout.py：模糊封面铺头区 + 150x225 封面 + 标题/简介/热度/标签；
    选集照 v1 detail_episodes.py：GROUP_SIZE=30 分组 + 44px 网格 + 当前集高亮/未播变淡/VIP 角标。
-   操作：播放(→/player 带参，PlayerView 现为占位)、下载当集/全部(v2-I 双轨：真实桥走
+   操作：播放(→/player 带参，PlayerView 已实装)、下载当集/全部(v2-I 双轨：真实桥走
     App.DownloadStart 分块入队（磁盘守卫在核心侧，前端不重复），MOCK/DEGRADED 保留旧
     Resolve→plan→localStorage 'downloads.queue' 暂存)、追剧(stores/watch → Go watchstore)、
     看过(stores/watch → Go seen-library.json，范围 A 迁移；localStorage 仅降级/一次性迁移源)。
@@ -124,7 +124,7 @@ function goPlay() {
   const d = drama.value
   const ch = selectedChapter.value
   if (!d || !ch) return
-  // PlayRequested 语义：跳 /player 带 drama/chapter/episode/pos —— PlayerView 现为占位页，参数已就绪
+  // PlayRequested 语义：跳 /player 带 drama/chapter/episode/pos —— PlayerView 已实装，以下参数即其入参
   router.push(playerRoute(d, selectedEpisode.value, anchorPos.value, ch))
 }
 
@@ -184,7 +184,7 @@ async function downloadCurrent() {
       ])
       showToast(
         added
-          ? `第${selectedEpisode.value}集已加入本地暂存队列（共 ${queueLength()} 项）。下载队列 V2-3 接入，尚未开始真实下载`
+          ? `第${selectedEpisode.value}集已加入本地暂存队列（共 ${queueLength()} 项）。当前为示例/降级模式，尚未开始真实下载`
           : `第${selectedEpisode.value}集已在队列中（共 ${queueLength()} 项）`
       )
       return
@@ -203,7 +203,7 @@ async function downloadAll() {
   const d = drama.value
   if (!d || downloading.value || !chapters.value.length) return
   if (downloadViaLocal()) {
-    // 全部只登记占位（plan=null）：逐集 Resolve ×N 会锤引擎，地址留待降级面恢复真桥后统一处理
+    // 降级/示例态只登记占位（plan=null）：逐集 Resolve ×N 会锤引擎，地址留待恢复真桥后统一处理
     const now = Date.now()
     const items = chapters.value.map((ch, i) => ({
       dramaId: d.id,
@@ -216,7 +216,7 @@ async function downloadAll() {
     const added = enqueueDownloads(items)
     showToast(
       added
-        ? `已登记 ${added} 集到本地队列（共 ${queueLength()} 项）。播放地址与真实下载待 V2-3 下载队列接入，尚未开始下载`
+        ? `已登记 ${added} 集到本地队列（共 ${queueLength()} 项）。当前为示例/降级模式，尚未开始真实下载`
         : `本剧已全部在队列中（共 ${queueLength()} 项）`
     )
     return

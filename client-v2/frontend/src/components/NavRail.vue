@@ -23,7 +23,7 @@ const sections = computed(() => [
   {
     label: t('nav.section.mine'),
     items: [
-      // V2-2：追更预约并入 /reserve?tab=follow（旧 /follow 占位保留兜底）
+      // V2-2：追更预约并入 /reserve?tab=follow（旧 /follow 只做重定向兜底）
       { to: '/reserve?tab=follow', text: t('nav.follow'), icon: 'heart' },
       { to: '/history', text: t('nav.history'), icon: 'history' },
       { to: '/downloads', text: t('nav.downloads'), icon: 'download' }

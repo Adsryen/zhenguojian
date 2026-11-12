@@ -57,10 +57,10 @@ const routes: RouteRecordRaw[] = [
     meta: { title: '追剧日历' }
   },
   {
+    // V2-6-parity：旧 /follow 骨架页已删（NavRail 早在 V2-2 就指向 /reserve?tab=follow），
+    // 保留重定向只为兼容手敲/历史深链，避免 404 空白页。
     path: '/follow',
-    name: 'follow',
-    component: () => import('@/views/PlaceholderView.vue'),
-    meta: { title: '追更预约', phase: 'V2-2' }
+    redirect: { path: '/reserve', query: { tab: 'follow' } }
   },
   {
     path: '/history',
