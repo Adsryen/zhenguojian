@@ -190,7 +190,48 @@ def main():
                 check("⑧b en 态 tooltip 是英文（新键必须成对）", False, "同上")
             ctx2.close()
 
-            check("⑨ 全程无 JS 错误", not js_errors, "; ".join(js_errors[:2]))
+            # ── ⑩⑪ 双击「合并」页签里已完成的条目 → 本地播放那个成品 ──
+            # v1 出处：downloads.py:1139 itemDoubleClicked → _open_merge_entry 1495-1498
+            # → _play_merged_path 1631-1640。
+            # ⚠ 这条是我核 v1 代码才挖出来的真差异；我上一轮写进注释的
+            #   "v1 合并完成后自动播放"其实**不存在**（v1 的 docstring 与它自己的代码不符），
+            #   v1 真正做的是"双击播放"，而 v2 之前只把路径当文本显示。
+            page.goto(BASE + "/#/downloads")
+            page.wait_for_selector(".tabs", timeout=25000)
+            page.wait_for_timeout(1400)
+            tabs = page.locator(".tab")
+            tabs.nth(1).click()  # 「合并」页签
+            page.wait_for_selector("[data-testid=merge-row]", timeout=20000)
+            page.wait_for_timeout(1200)
+            rows_n = page.locator("[data-testid=merge-row]").count()
+            playable = page.locator("[data-testid=merge-row].playable")
+            check("⑩a 「合并」页签有行，且已完成的行标成可双击播放",
+                  rows_n >= 1 and playable.count() >= 1,
+                  f"rows={rows_n} playable={playable.count()}")
+            tip10 = playable.first.get_attribute("title") or ""
+            check("⑩b tooltip 用 v1 原话「双击这一行可以直接播放」（downloads.py:2095）",
+                  tip10 == "双击这一行可以直接播放", f"tip={tip10!r}")
+
+            out_path = playable.first.locator(".out-path").inner_text().strip()
+            expect_name = out_path.replace("\\", "/").split("/")[-1]
+            playable.first.dblclick()
+            page.wait_for_selector(".pl-title", timeout=25000)
+            page.wait_for_timeout(2200)
+            title11 = page.locator(".pl-title").inner_text().strip()
+            check("⑪a 双击后播放器标题是「本地播放 <文件名>」（与详情页那条本地播放同一分支）",
+                  title11 == f"本地播放 {expect_name}", f"title={title11!r} 期望={expect_name!r}")
+            check("⑪b 本地会话不渲染选集侧栏（合并成品没有分集概念）",
+                  page.locator(".pl-panel").count() == 0,
+                  f"panel={page.locator('.pl-panel').count()}")
+
+            # ⑫（原本的双击去抖断言）**删掉了**，理由写在 DownloadsView.onMergeRowDblclick 的注释里：
+            # v1 那 0.8s 去抖防的是 Qt 的"a double click reports itself twice"，
+            # web 的 dblclick 是一次事件，没有那个现象。
+            # 我为它写的断言在**摘掉去抖后照样通过**（实测），那就是恒真断言——
+            # 与其留一段永不触发的代码配一条永绿的检查，不如两段都删掉并说明为什么。
+            print("NOTE ⑫（双击去抖）不在这里验证：那是 Qt 现象，web 无对应；已连代码一起删掉")
+
+            check("⑬ 全程无 JS 错误", not js_errors, "; ".join(js_errors[:2]))
             page.screenshot(path=os.path.join(OUT, "merge-multi.png"))
             print("NOTE ⑦ 只验码名一致；「不足两部」的门槛行为由 Go 单测覆盖"
                   "（mock 里界面按钮与门槛条件互斥，没注入点能同时满足——不为此临时改产品代码）")

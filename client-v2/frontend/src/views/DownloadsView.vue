@@ -10,7 +10,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
-import type { Chapter, Drama, DownloadEntry, DownloadJobRow } from '@/services/types'
+import type { Chapter, Drama, DownloadEntry, DownloadJobRow, MergeEntryRow } from '@/services/types'
 import { chapterEpisode, playerRoute } from '@/services/dramaRef'
 import { t, tf } from '@/services/i18n'
 import { STAT_GROUPS, statMatch, useDownloadsStore, type StatKey } from '@/stores/downloads'
@@ -218,6 +218,31 @@ async function onMergeMulti() {
   } finally {
     mergingMulti.value = false
   }
+}
+
+/* v1 的双击播放（downloads.py:1139 itemDoubleClicked → _open_merge_entry 1495-1498
+   * → _play_merged_path 1631-1640），v2 之前完全没有这个入口——
+   * 「合并」页签只把成品路径当文本显示出来，看完得自己去开目录。
+   * 走的是本轮刚接通的本地播放那条路（App.PlayerOpenLocal：不 resolve、
+   * 选集侧栏不渲染、上下集禁用、标题「本地播放 <文件名>」）。
+   *
+   * ⚠ 文案：v1 在这里说的是「成品文件不存在：<文件名>」，
+   *   而历史/追剧那两处说的是「本地文件已不存在：<文件名>」——两句不同、同一件事。
+   *   v2 只留一句（`player.localMissing`，由 ApiError.code=local_missing 触发），
+   *   少一句是一处**有意的措辞归一**，不是漏做；这条差异记在
+   *   research/v1-v2-downloads-parity.md，别让下一个人以为还欠一条。
+   *
+   * ⚠ v1 那 0.8s 去抖**没有照搬**：它防的是 Qt 的现象
+   *   （v1 注释原话 "a double click reports itself twice"），
+   *   而 web 的 dblclick 是一次事件，没有"自报两次"这回事。
+   *   我曾把那段去抖抄过来并给它写断言，结果写出一条恒真断言
+   *   （摘掉去抖它也过）——那正说明被测的东西在本平台不存在。
+   *   留着一段永不触发、也无法验证的代码，比不抄更糟。 */
+function onMergeRowDblclick(m: MergeEntryRow) {
+  if (m.state !== 'done' || !m.output) return // v1：别的状态双击不做事
+  void router.push(playerRoute(
+    { id: m.dramaId, title: m.title, source: '', cover: '', episodes: 0 } as Drama,
+    0, 0, null, m.output))
 }
 
 async function onMergeSeason(drama: Drama) {
@@ -781,7 +806,15 @@ async function onEnqueue() {
       <div class="text-muted hint">{{ t('downloads.mergeEmptyHint') }}</div>
     </div>
     <div v-else class="card list">
-      <div v-for="(m, i) in store.merges" :key="m.id" class="row" :class="{ divided: i > 0 }">
+      <div
+        v-for="(m, i) in store.merges"
+        :key="m.id"
+        class="row"
+        :class="{ divided: i > 0, playable: m.state === 'done' && !!m.output }"
+        data-testid="merge-row"
+        :title="m.state === 'done' && m.output ? t('downloads.mergeDblTip') : ''"
+        @dblclick="onMergeRowDblclick(m)"
+      >
         <div class="r-main">
           <div class="r-line1">
             <span class="r-title">{{ m.title }}</span>
@@ -1199,6 +1232,11 @@ async function onEnqueue() {
   font-size: 12px;
   white-space: nowrap;
 }
+/* 双击可播的合并行给一点可点性提示（v1 靠 Qt 行选中态暗示，web 上没说就是猜） */
+.row.playable {
+  cursor: pointer;
+}
+
 .out-path {
   overflow: hidden;
   text-overflow: ellipsis;
