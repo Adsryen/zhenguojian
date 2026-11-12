@@ -24,6 +24,19 @@ const themeOptions: Array<{ value: ThemeMode; labelKey: string }> = [
   { value: 'light', labelKey: 'settings.theme.light' },
   { value: 'auto', labelKey: 'settings.theme.auto' }
 ]
+/** 打开成品库：走与下载页同一个原生入口（OpenDownloadPath），
+ *  失败文案也复用同一条键（downloads.toastOpenFail），
+ *  免得同一件事在两个页面给出两种说法。 */
+async function openLibraryDir() {
+  if (!libDir.value) return
+  try {
+    await api.openDownloadPath(libDir.value)
+  } catch (e) {
+    libToast.value = tf('downloads.toastOpenFail', { e: (e as Error)?.message ?? String(e) })
+    setTimeout(() => { libToast.value = '' }, 4000)
+  }
+}
+
 function pickTheme(mode: ThemeMode) {
   themeMode.value = mode
   applyTheme(mode) // 即时：写 html[data-theme] + 持久化 + auto 挂系统监听
@@ -329,6 +342,13 @@ onBeforeUnmount(stopUpdPoll)
 /* ---------------- 存储与关于（只读） ---------------- */
 const appVersionText = ref('…')
 const dataDir = ref('…')
+/* v1 设置「下载」节里有成品库路径（settings_panel.py:776），v2 之前只在下载页显示，
+   设置页看不到"我的成品到底落在哪"。补回来，数据源就用核心 `downloadDirectory`
+   —— 不另开一套口径，下载页与归档扫描用的都是它。 */
+const libDir = ref('')
+const libExists = ref(true)
+const libHint = ref('')
+const libToast = ref('')
 const coreOk = ref<boolean | null>(null)
 const commitText = ref('…')
 
@@ -387,6 +407,13 @@ onMounted(async () => {
     dataDir.value = await api.dataPath()
   } catch {
     dataDir.value = t('settings.storage.readFail')
+  }
+  try {
+    const d = await api.downloadDirectory()
+    libDir.value = d.directory || ''
+    libExists.value = !!d.exists
+  } catch {
+    libHint.value = t('settings.storage.libraryFail')
   }
   try {
     await api.ping()
@@ -781,6 +808,25 @@ onMounted(async () => {
         <span class="kv-k">{{ t('settings.storage.dataDir') }}</span>
         <span class="kv-v selectable">{{ dataDir }}</span>
       </div>
+      <!-- 成品库（下载）：v1 是只读路径框；v2 顺手把核心本来就返回的 exists 显示出来。
+           v1 的「修改…」按钮**没有照搬**——v1 改的是客户端 settings 里的 libraryRoot，
+           而 v2 的下载根由核心决定、客户端没有对应写入口。
+           要对齐得先决定核心是否支持换根目录（见任务 notes 的 R21），不做假按钮。 -->
+      <div class="kv" data-testid="set-library-row">
+        <span class="kv-k">{{ t('settings.storage.library') }}</span>
+        <span class="kv-v selectable" data-testid="set-library-dir">{{ libDir || libHint }}</span>
+        <span v-if="libDir && !libExists" class="badge badge-warn" data-testid="set-library-missing">
+          {{ t('settings.storage.libraryMissing') }}
+        </span>
+        <button
+          v-else-if="libDir"
+          class="btn ghost"
+          type="button"
+          data-testid="set-library-open"
+          @click="openLibraryDir"
+        >{{ t('settings.storage.openDir') }}</button>
+      </div>
+      <div v-if="libToast" class="sec-hint" role="status" data-testid="set-library-toast">{{ libToast }}</div>
       <div class="kv">
         <span class="kv-k">{{ t('settings.storage.commit') }}</span>
         <span class="kv-v selectable">{{ commitText }}</span>
