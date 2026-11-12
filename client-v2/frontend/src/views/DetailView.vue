@@ -77,7 +77,7 @@ function goToastLink() {
 
 const chapters = computed<Chapter[]>(() => detail.value?.chapters ?? [])
 const meta = computed<Drama>(() => ({ ...(drama.value ?? ({} as Drama)), ...(detail.value?.drama ?? {}) }))
-const warning = computed(() => detail.value?.warning || (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : ''))
+const warning = computed(() => detail.value?.warning || (MOCK_MODE ? t('banner.mock') : ''))
 
 const selectedChapter = computed<Chapter | null>(() => chapters.value[selectedIdx.value] ?? chapters.value[0] ?? null)
 const selectedEpisode = computed(() =>
@@ -308,9 +308,9 @@ async function onWatchedMark() {
   // stores/watch：真值 Go ToggleSeen（bindings_seen.go；无桥降级 localStorage 同名键）
   try {
     const on = await watchStore.toggleSeen(d.id)
-    showToast(on ? '已标记看过' : '已取消看过标记')
+    showToast(on ? t('detail.seenOn') : t('detail.seenOff'))
   } catch (e: any) {
-    showToast(e?.message ?? '看过标记失败')
+    showToast(e?.message ?? t('reserve.markSeenFail'))
   }
 }
 
@@ -405,7 +405,7 @@ const metaTags = computed(() => {
 
 const anchorText = computed(() => {
   const last = played.value.length ? Math.max(...played.value) : 0
-  return last ? `看到第 ${last} 集` : ''
+  return last ? tf('detail.watchedUpTo', { n: last }) : ''
 })
 
 watch(
@@ -427,7 +427,7 @@ onMounted(() => {
   if (drama.value) {
     loadDetail()
   } else {
-    error.value = '缺少剧目参数（路由应为 /detail/:id）'
+    error.value = t('detail.missingParam')
   }
 })
 

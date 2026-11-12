@@ -10,7 +10,7 @@ import { useAppStore } from '@/stores/app'
 import { api } from '@/services/api'
 import type { Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
-import { t } from '@/services/i18n'
+import { t, tf } from '@/services/i18n'
 import SourceSwitch from '@/components/SourceSwitch.vue'
 import PosterGrid from '@/components/PosterGrid.vue'
 import SearchGroups from '@/components/SearchGroups.vue'
@@ -301,7 +301,7 @@ onMounted(async () => {
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">搜索</h1>
+    <h1 class="page-title">{{ t('search.title') }}</h1>
     <SourceSwitch :model-value="store.currentSlug" :sources="store.orderedSources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
   </div>
 
@@ -312,7 +312,7 @@ onMounted(async () => {
       </svg>
       <input
         v-model="query"
-        placeholder="搜索剧名 / 标签，回车开始"
+        :placeholder="t('search.placeholder')"
         maxlength="64"
         data-testid="search-input"
         autocomplete="off"
@@ -343,9 +343,9 @@ onMounted(async () => {
       </div>
     </div>
     <button class="btn primary" :disabled="loading || !query.trim()" @click="doSearch()">
-      {{ loading ? '搜索中…' : '搜索' }}
+      {{ loading ? t('search.groupLoading') : t('search.button') }}
     </button>
-    <button v-if="searched" class="btn" @click="clearSearch">清除</button>
+    <button v-if="searched" class="btn" @click="clearSearch">{{ t('search.clear') }}</button>
     <label class="all-src" :title="t('search.allHint')">
       <input v-model="searchAll" type="checkbox" class="all-src-box" data-testid="search-all" />
       <span>{{ t('search.all') }}</span>
@@ -353,15 +353,15 @@ onMounted(async () => {
   </div>
 
   <div v-if="!searched && recents.length && !suggestOpen" class="recents" data-testid="recents">
-    <span class="rec-label">最近搜索</span>
+    <span class="rec-label">{{ t('search.recents') }}</span>
     <button v-for="r in recents" :key="r" class="chip" @click="doSearch(r)">{{ r }}</button>
-    <button class="link-btn" @click="clearRecents">清空</button>
+    <button class="link-btn" @click="clearRecents">{{ t('search.clearAll') }}</button>
   </div>
   <div v-else-if="!searched && !suggestOpen" class="state-block hint">
     <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round">
       <circle cx="11" cy="11" r="7" /><path d="m21 21-4.3-4.3" />
     </svg>
-    <div>{{ searchAll ? t('search.hintAll') : `输入关键词搜索当前源（${store.current?.displayName || store.current?.name || '未选源'}）` }}</div>
+    <div>{{ searchAll ? t('search.hintAll') : tf('search.hintSource', { name: store.current?.displayName || store.current?.name || t('search.noSourceName') }) }}</div>
   </div>
 
   <div v-if="searched && error" class="state-block">
@@ -377,7 +377,7 @@ onMounted(async () => {
     @select="(d) => router.push(detailRoute(d))"
   />
   <div v-else-if="searched && !loading && !items.length" class="state-block">
-    <div>没有找到与「{{ active }}」相关的剧</div>
+    <div>{{ tf('search.noResult', { q: active }) }}</div>
   </div>
   <PosterGrid
     v-else-if="searched"

@@ -235,6 +235,24 @@ async def main():
             ban_cnt = await page.locator(".banner").count()
             dz.append(("横幅", "VITE_MOCK", (await page.locator(".banner").first.inner_text()) if ban_cnt else "(无横幅)"))
             check("zh|discover 4 处逐字", all(w in g for _, w, g in dz), str(dz))
+
+            # ── v2-6-parity：SearchView chrome 逐字（static_scan 基线 8 → 0）──
+            await settle(page, "/#/search", ".search-bar")
+            sz = []
+            sz.append(("标题", "搜索", await page.locator(".page-head .page-title").inner_text()))
+            ph = await page.locator("[data-testid=search-input]").get_attribute("placeholder")
+            sz.append(("占位符", "搜索剧名 / 标签，回车开始", ph or ""))
+            sz.append(("搜索按钮", "搜索", (await page.locator(".btn.primary").first.inner_text()).strip()))
+            sz.append(("全部来源芯片", "全部来源", await page.locator(".all-src span").first.inner_text()))
+            sz.append(("未搜索提示", "输入关键词搜索当前源（", await page.locator(".state-block.hint").first.inner_text()))
+            check("zh|search 5 处逐字", all(w in g for _, w, g in sz), str(sz))
+            # 无结果文案（乱码关键词 → mock 过滤后为空）
+            await page.fill("[data-testid=search-input]", "绝对不存在的剧名zzz")
+            await page.keyboard.press("Enter")
+            await page.wait_for_selector(".state-block", timeout=10000)
+            await page.wait_for_timeout(1200)
+            nr = await page.locator(".state-block").first.inner_text()
+            check("zh|search 无结果文案逐字", "没有找到与「绝对不存在的剧名zzz」相关的剧" in nr, f"nr={nr[:70]}")
             await page.keyboard.press("Escape")
             await page.screenshot(path=SHOT_PLAYER, full_page=False)
 
@@ -298,6 +316,10 @@ async def main():
                 "/#/player?d=mock_drama_1&ep=1": (".pl-title", ["Episodes", "Quality", "Next episode", "Hotkey help", "Collapse episodes", "Autoplay on",
                                                  "Back", "Speed", "Volume", "Ep 1"],
                                                   [".pl-top", ".pl-title", ".pl-hint", ".pl-ended", ".pl-panel-cur", ".ep-btn", ".pl-toast", ".pl-label", ".dm", ".pl-badge"]),
+                # 提示句在 en 遍里可能被「最近搜索」块顶掉（zh 遍刚搜过东西，recents 已有值），
+                # 那句在 zh|search 里已逐字断言，这里不再重复要求
+                "/#/search": (".search-bar", ["Search", "All sources"],
+                             [".rec-label", ".chip", ".ss-name", ".banner", ".toast", "[data-testid=search-input]"]),
                 "/#/history": (".hist-list", ["History", "Clear history", "Today", "Ep 12", "watched"],
                                [".h-title", ".cover", ".bar", ".sample-chip"]),
                 "/#/": (".page-head", ["Browse", "All", "Refresh", "VITE_MOCK"],
@@ -322,6 +344,9 @@ async def main():
                     # v2-6-parity：标题/刷新/横幅已键化 → scope 扩到 .banner，
                     # .chips 仍留在扫描面外（体裁名来自 browseFilters 核心数据，属透传）
                     scope = ".page-head, .banner"
+                elif url == "/#/search":
+                    # .chip 是最近搜索词与源名（数据），不参与零 CJK 判定
+                    scope = ".page-head, .search-bar, .state-block"
                 elif url == "/#/history":
                     # 行首 .h-title 是 fixtures 剧名（数据），其余都是已键化 chrome
                     scope = ".page-head, .hist-list, .footnote"
@@ -356,6 +381,12 @@ async def main():
                 )
                 bad = unexpected(nodes)
                 check(f"en|{url} 无未豁免 CJK", not bad, f"bad={json.dumps(bad[:4], ensure_ascii=False)}")
+                if url == "/#/search":
+                    # placeholder 是属性，不在 #app innerText 里，spots 机制看不到 → 单独取属性断言
+                    ph_en = await page.locator("[data-testid=search-input]").get_attribute("placeholder")
+                    check("en|/#/search placeholder 已英化且无 CJK",
+                          ph_en == "Search titles / tags — press Enter" and not CJK_RE.search(ph_en or ""),
+                          f"ph={ph_en!r}")
                 if url == "/#/":
                     chip0 = (await page.locator(".chips .chip").first.inner_text()).strip()
                     ttl = (await page.locator(".page-head .page-title").inner_text()).strip()

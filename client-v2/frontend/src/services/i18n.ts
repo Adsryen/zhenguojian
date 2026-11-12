@@ -215,6 +215,15 @@ const zh: Record<string, string> = {
   'covers.banner.dismiss': '关闭提示',
 
   // ---- 搜索页「全部来源」扇出（SearchView / SearchGroups / searchAll） ----
+  'search.title': '搜索',
+  'search.button': '搜索',
+  'search.placeholder': '搜索剧名 / 标签，回车开始',
+  'search.clear': '清除',
+  'search.recents': '最近搜索',
+  'search.clearAll': '清空',
+  'search.hintSource': '输入关键词搜索当前源（{name}）',
+  'search.noSourceName': '未选源',
+  'search.noResult': '没有找到与「{q}」相关的剧',
   'search.all': '全部来源',
   'search.allHint': '对所有已启用且已接入的站源并行搜索',
   'search.hintAll': '勾选了「全部来源」：回车将并行搜索所有已启用且已接入的站源',
@@ -483,6 +492,12 @@ const zh: Record<string, string> = {
   'detail.posterNoSource': '没拿到这张海报的原图，请先在剧库里刷新一次',
   'detail.posterFail': '没能保存海报：{m}',
   // ── v2-6-parity：HistoryView（i18n_static_scan 基线 15 → 0）──
+  'detail.seenOn': '已标记看过',
+  'detail.seenOff': '已取消看过标记',
+  // 注意：与 reserve.watchedEp「看到第 {n}集」只差一个空格，v1 详情页锚点带空格，
+  // 日历行不带；混用会改坏两个界面的逐字文案（i18n_sweep/reserve_calendar 各自断言）。
+  'detail.watchedUpTo': '看到第 {n} 集',
+  'detail.missingParam': '缺少剧目参数（路由应为 /detail/:id）',
   'history.title': '历史',
   'history.clear': '清空历史',
   'history.loading': '读取观看历史…',
@@ -758,6 +773,15 @@ const en: Record<string, string> = {
   'covers.banner.dismiss': 'Dismiss',
 
   // ---- Search page "all sources" fan-out (SearchView / SearchGroups / searchAll) ----
+  'search.title': 'Search',
+  'search.button': 'Search',
+  'search.placeholder': 'Search titles / tags — press Enter',
+  'search.clear': 'Clear',
+  'search.recents': 'Recent searches',
+  'search.clearAll': 'Clear all',
+  'search.hintSource': 'Type a keyword to search the current source ({name})',
+  'search.noSourceName': 'no source selected',
+  'search.noResult': 'No dramas matching “{q}”',
   'search.all': 'All sources',
   'search.allHint': 'Search every enabled & wired source in parallel',
   'search.hintAll': '"All sources" is checked: Enter searches every enabled & wired source in parallel',
@@ -1022,6 +1046,10 @@ const en: Record<string, string> = {
   'detail.posterNoSource': 'Could not fetch the original poster — refresh the library first',
   'detail.posterFail': 'Could not save poster: {m}',
   // ── v2-6-parity: HistoryView (i18n_static_scan baseline 15 → 0) ──
+  'detail.seenOn': 'Marked as seen',
+  'detail.seenOff': 'Seen mark removed',
+  'detail.watchedUpTo': 'Watched up to ep {n}',
+  'detail.missingParam': 'Missing drama parameter (route should be /detail/:id)',
   'history.title': 'History',
   'history.clear': 'Clear history',
   'history.loading': 'Loading watch history…',

@@ -80,8 +80,6 @@ EXEMPT_REASONS = {
 #   · 某文件违规数 < 基线 → 红（还了债就必须回来把数字调低，防止基线悄悄失真）
 # 还完一个文件就从表里删掉它。改动这张表的唯一合法时机是「顺手少了几处硬编码」。
 BASELINE = {
-    "views/SearchView.vue": 8,
-    "views/DetailView.vue": 5,
     "views/SettingsView.vue": 5,
     "components/SourceSwitch.vue": 4,
     "components/SeasonMenu.vue": 3,
