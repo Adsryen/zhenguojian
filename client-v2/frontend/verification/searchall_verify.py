@@ -43,11 +43,15 @@ EXPECTED_GROUPS = ["hongguo", "huangguo_ai", "adult_lab", "youzi"]
 failures = []
 
 
+TOTAL = [0]
+
+
 def check(name, cond, detail=""):
     line = f"{'PASS' if cond else 'FAIL'} {name}"
     if detail:
         line += f" | {detail}"
     print(line)
+    TOTAL[0] += 1          # 汇总行以前写死「12 checks」，实际是 13 条
     if not cond:
         failures.append(name)
     return cond
@@ -270,7 +274,7 @@ def main():
     if failures:
         print(f"RESULT: {len(failures)} FAILED -> {failures}")
         sys.exit(1)
-    print("RESULT: ALL PASS (12 checks)")
+    print(f"RESULT: ALL PASS ({TOTAL[0]} checks)")
 
 
 if __name__ == "__main__":
