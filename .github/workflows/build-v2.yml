@@ -12,6 +12,25 @@ permissions:
   contents: write
 
 jobs:
+  # Go 单测跑在 ubuntu：这批测试假设 POSIX（0600 权限位、$HOME 数据目录、chmod 造写失败），
+  # 在 windows runner 上会因平台语义而非产品问题变红（windows job 里留了实测日志）。
+  test-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Go tests (v2overlay)
+        working-directory: client-v2
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p "$RUNNER_TEMP/ov"
+          python3 scripts/make-overlay.py "$RUNNER_TEMP/ov/overlay.json"
+          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./...
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -57,11 +76,15 @@ jobs:
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
           $LASTEXITCODE -eq 0 -or (throw "vet failed")
-          # Go 单测：这台 Windows runner 是**唯一**能跑它们的地方（开发机无 Go 工具链）。
-          # 之前 CI 只有 vet + build，仓里那批 player/clipcover/embed 单测其实从没被机器验过——
-          # 纯前端改动能靠 playwright 自证，Go 侧改动没有这一层就只能靠人肉 review。
-          go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./...
-          if ($LASTEXITCODE -ne 0) { throw "go test failed" }
+          # Go 单测**不在这个 job 跑**，见上面的 test-linux job。
+          # 在 windows runner 上 `go test ./...` 的实跑结果（本轮 CI 日志原文，四条 FAIL）：
+          #   internal/downloadsvc  TestMergesStatePersistAndRecover      快照模式应 0600（实得 -rw-rw-rw-）
+          #   internal/updater      TestSettingsSaveReloadAndMode         mode=-rw-rw-rw- want 0600
+          #   internal/watchstore   TestDefaultDataDirEnv                 unix default 拿到 C:\Users\runneradmin\...
+          #   internal/watchstore   TestWriteFailureKeepsOldFileAndDirty  期望的写失败没浮现
+          # 这不是产品缺陷，是测试假设 POSIX（权限位、$HOME 数据目录、用 chmod 造写失败），
+          # 而唯一 runner 是 Windows —— 这批断言从没在它们自己假设的平台上跑过。
+          # 挪到 ubuntu job 才是它们该待的地方；windows job 继续保证能编能链能发布。
           # 发布版本号编译进二进制（main.buildVersion）：版本判定与「应用版本」的第一权威，
           # 不依赖 exe 同级 build-info.json（单文件更新后旧文件会污染判定）。dispatch 跑=dev。
           $binVer = if ("$env:GITHUB_REF" -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "v0.0.0-dev" }
