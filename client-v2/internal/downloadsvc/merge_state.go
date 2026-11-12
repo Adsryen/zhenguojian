@@ -53,7 +53,11 @@ type persistedMerge struct {
 	Stage     string  `json:"stage,omitempty"`
 	Progress  float64 `json:"progress,omitempty"`
 	Detail    string  `json:"detail,omitempty"`
-	Output    string  `json:"output,omitempty"`
+	Output     string  `json:"output,omitempty"`
+	// OutputName 是排队时定下的目标文件名（只有按季合并批次会有）。
+	// 不存的话重启后名字就退回默认口径，成品会改叫 "剧名 全001-002集.mkv"
+	// ——而磁盘上那个 SxxExx 文件还在，两条就对不上了。
+	OutputName string  `json:"outputName,omitempty"`
 	Bytes     int64   `json:"bytes,omitempty"`
 	CreatedAt int64   `json:"createdAt,omitempty"` // unix ms
 }
@@ -113,7 +117,8 @@ func (s *Service) loadMergesLocked() {
 			Stage:    p.Stage,
 			Progress: p.Progress,
 			Detail:   p.Detail,
-			Output:   p.Output,
+			Output:     p.Output,
+			OutputName: p.OutputName,
 			Bytes:    p.Bytes,
 			restored: p.State == MergeQueued, // 重挂标记：jobs 只能执行时重建
 			createdAt: func() time.Time {
@@ -172,7 +177,8 @@ func (s *Service) buildMergesStateLocked() ([]byte, error) {
 			Stage:     m.Stage,
 			Progress:  m.Progress,
 			Detail:    m.Detail,
-			Output:    m.Output,
+			Output:     m.Output,
+			OutputName: m.OutputName,
 			Bytes:     m.Bytes,
 			CreatedAt: m.createdAt.UnixMilli(),
 		})

@@ -592,6 +592,12 @@ type MergeEntry struct {
 	Progress float64 `json:"progress"`
 	Detail   string  `json:"detail,omitempty"`
 	Output   string  `json:"output,omitempty"`
+	// OutputName 是排队时就定下的**目标文件名**（只有「按季合并选中」会设，
+	// 单剧合并留空走默认 "剧名 全001-002集.mkv"）。
+	// 为什么单开一个字段而不是直接写 Output：`Output` 在 v1/v2 里都表示
+	// "成品已落盘的绝对路径"，合并没完成之前它是空的；把排队时的名字塞进 Output
+	// 会让 UI 显示一个还不存在的路径（我上一轮就是这么写的，本轮复核才发现）。
+	OutputName string  `json:"outputName,omitempty"`
 	Bytes    int64   `json:"bytes,omitempty"`
 
 	jobs      []map[string]any

@@ -7,6 +7,11 @@ package downloadsvc
 // `MergeStartMulti` 那半段用假核心跑一遍排队、跳过与报错三条路径。
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -250,6 +255,176 @@ func TestMergeStartMultiEmptySelection(t *testing.T) {
 	if _, err := h.svc.MergeStartMulti([]map[string]any{}); err == nil ||
 		!strings.Contains(err.Error(), "[multi_none]") {
 		t.Fatalf("空数组该报 [multi_none]，得 %v", err)
+	}
+}
+
+// TestMergeStartMultiNamesFileOnDisk 是最该有的一条，也是上一轮缺的那条：
+// 上一轮我只测了 `buildMultiTargets` 算出的名字（纯函数），
+// 而**合并执行那一步从来不读那个名字**——它自己按 "剧名 全001-002集.mkv" 拼，
+// 所以 SxxExx 从没落到磁盘上，测试却还是全绿（我上一轮的提交信息里
+// 甚至写了"命名逐条照 v1"）。这条直接跑完整管线，看磁盘上那个文件叫什么。
+func TestMergeStartMultiNamesFileOnDisk(t *testing.T) {
+	h := newHarness(t)
+	// mergeFixture 造的是单剧两集（d1#001-002）；再补一部"第二季"，
+	// 让 buildMultiTargets 真能凑够两部（v1 的门槛就是 ≥2 部）。
+	ep1, ep2 := mergeFixture(t, h)
+	root := filepath.Dir(ep1)
+	secondJobs := []map[string]any{
+		testJob("k1", "completed", 1), testJob("k2", "completed", 2),
+	}
+	for _, j := range secondJobs {
+		// testJob 里剧目是写死的 d1/测试剧；这里改成第二部，
+		// 其余键（chapter.currentEpisode 等）保持与夹具一致，
+		// 不然 episodeOfJob 解析出来的集号会跟真实路径不一样。
+		j["drama"] = map[string]any{"id": "d2", "title": "测试剧 第二季", "source": "hongguo"}
+		j["folder"] = "d2/" + j["id"].(string)
+	}
+	h.core.handlers["downloads"] = func(map[string]any) (map[string]any, error) {
+		return jobsResult(
+			testJob("j1", "completed", 1), testJob("j2", "completed", 2),
+			secondJobs[0], secondJobs[1],
+		), nil
+	}
+	h.core.handlers["localPlayback"] = func(p map[string]any) (map[string]any, error) {
+		idx, _ := p["index"].(int)
+		if idx < 1 || idx > 2 {
+			return nil, fmt.Errorf("夹具只准备两集，index=%v", p["index"])
+		}
+		return map[string]any{"local": true, "url": []string{ep1, ep2}[idx-1]}, nil
+	}
+	h.exec.progress = true
+
+	ctx := context.Background()
+	h.svc.OnStartup(ctx)
+	defer h.svc.OnShutdown(ctx)
+
+	out, err := h.svc.MergeStartMulti([]map[string]any{
+		{"id": "d1", "title": "测试剧 第一季", "source": "hongguo"},
+		{"id": "d2", "title": "测试剧 第二季", "source": "hongguo"},
+	})
+	if err != nil {
+		t.Fatalf("MergeStartMulti: %v", err)
+	}
+	if out["queued"] != 2 {
+		t.Fatalf("该排两季：%v", out)
+	}
+	waitFor(t, func() bool {
+		m1, ok1 := h.mergeState("d1#001-002")
+		m2, ok2 := h.mergeState("d2#001-002")
+		return ok1 && ok2 && m1["state"] == MergeDone && m2["state"] == MergeDone
+	}, "两季都该跑完")
+
+	for id, want := range map[string]string{
+		"d1#001-002": "测试剧 S01E01.mkv",
+		"d2#001-002": "测试剧 S02E01.mkv",
+	} {
+		m, _ := h.mergeState(id)
+		got, _ := m["output"].(string)
+		// 断言两件事：**磁盘上的文件名**是 SxxExx，且 MergeList 回报的路径就是那个文件
+		if filepath.Base(got) != want {
+			t.Fatalf("%s 产物名 = %q，期望 %q", id, got, want)
+		}
+		if st, serr := os.Stat(got); serr != nil || st.Size() == 0 {
+			t.Fatalf("%s 磁盘上没有这个成品：%v", id, serr)
+		}
+		if filepath.Dir(got) != filepath.Join(root, "合并") {
+			t.Fatalf("%s 成品目录不对：%q", id, got)
+		}
+	}
+}
+
+// TestMergeOutputNameBasenameGuard 测 v1 media.py:1033-1038 那条安全守卫：
+// 名字是从剧名拼出来的，只取 basename——一个标题不能把成品写到 下载/合并/ 之外去。
+func TestMergeOutputNameBasenameGuard(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		bad  bool
+	}{
+		{"测试剧 S01E01.mkv", "测试剧 S01E01.mkv", false},
+		{"..\\..\\windows\\evil.mkv", "evil.mkv", false},   // Windows 反斜杠也要当分隔符切
+		{"/etc/passwd", "passwd", false},                      // 正斜杠同理
+		{"...", "", true},                                     // 洗完是空的 → 报错，不退回默认名
+		{"   ", "", true},
+	}
+	for _, c := range cases {
+		clean := filepath.Base(strings.ReplaceAll(c.in, "\\", "/"))
+		clean = strings.Trim(clean, " .")
+		if c.bad {
+			if clean != "" {
+				t.Errorf("%q 应该被洗成空（要走报错分支），实得 %q", c.in, clean)
+			}
+			continue
+		}
+		if clean != c.want {
+			t.Errorf("%q 洗出来是 %q，期望 %q", c.in, clean, c.want)
+		}
+	}
+}
+
+// TestMergeStartMultiClearsOutputOnlyOnDisk 钉住字段分工：
+// 排队时 Output 必须是空（那是"已落盘的路径"），只有 OutputName 有值。
+// 上一轮我就是把文件名塞进 Output，UI 的 done 分支会显示一个还不存在的路径。
+func TestMergeStartMultiFieldSplit(t *testing.T) {
+	h := newHarness(t)
+	root := h.tmp + "/dl"
+	ep := filepath.Join(root, "ep1.mp4")
+	ep2 := filepath.Join(root, "ep2.mp4")
+	for _, p := range []string{ep, ep2} {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("source"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mkJob := func(id, did, title string, idx float64) map[string]any {
+		return map[string]any{
+			"id": id, "state": "completed", "index": idx,
+			"drama":   map[string]any{"id": did, "title": title, "source": "hongguo"},
+			"chapter": map[string]any{"id": id + "c", "name": "第1集", "duration": float64(60), "currentEpisode": idx},
+			"folder":  did,
+		}
+	}
+	h.core.handlers["downloads"] = func(map[string]any) (map[string]any, error) {
+		return jobsResult(
+			mkJob("a1", "d1", "拆分剧 第一季", 1), mkJob("a2", "d1", "拆分剧 第一季", 2),
+			mkJob("b1", "d2", "拆分剧 第二季", 1), mkJob("b2", "d2", "拆分剧 第二季", 2),
+		), nil
+	}
+	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"directory": root}, nil
+	}
+	h.core.handlers["localPlayback"] = func(map[string]any) (map[string]any, error) {
+		return nil, errors.New("不给本地路径，走 folder/media.mp4 兜底")
+	}
+
+	// 不让它真跑完：只看排队后的字段分工
+	out, err := h.svc.MergeStartMulti([]map[string]any{
+		{"id": "d1", "title": "拆分剧 第一季", "source": "hongguo"},
+		{"id": "d2", "title": "拆分剧 第二季", "source": "hongguo"},
+	})
+	if err != nil {
+		t.Fatalf("MergeStartMulti: %v", err)
+	}
+	_ = out
+	h.svc.mu.Lock()
+	defer h.svc.mu.Unlock()
+	n := 0
+	for _, m := range h.svc.merges {
+		if m.State != MergeQueued {
+			continue
+		}
+		n++
+		if m.Output != "" {
+			t.Errorf("%s 排队阶段 Output 该是空（它表示已落盘路径），实得 %q", m.ID, m.Output)
+		}
+		if m.OutputName == "" {
+			t.Errorf("%s 排队阶段该有 OutputName", m.ID)
+		}
+	}
+	if n != 2 {
+		t.Fatalf("该排两条：%d", n)
 	}
 }
 

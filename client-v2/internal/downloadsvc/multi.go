@@ -270,7 +270,14 @@ func (s *Service) MergeStartMulti(dramas []map[string]any) (map[string]any, erro
 			Count:     len(entries),
 			State:     MergeQueued,
 			Stage:     "排队中",
-			Output:    t.OutputName, // v1 的 SxxExx 命名在这里落地（单剧那批走 merge.go 的"全N集"口径）
+			// 命名落到 **OutputName**（目标文件名），不是 Output（已落盘的绝对路径）。
+			// ⚠ 我上一轮这里写的就是 `Output:`，那有两个错：
+			//   ① 合并还没跑，路径并不存在，UI 的 done 分支会把它当真实路径显示；
+			//   ② 更关键的是 `runMerge` 的保存那一步从来不看 Output，
+			//      它自己按 "剧名 全001-002集.mkv" 拼名字——
+			//      所以那个 SxxExx 命名**只在排队时算出来过，从没落到磁盘上**。
+			//   本轮复核发现并改正：现在由 runMerge 读 OutputName（含 v1 的 basename 守卫）。
+			OutputName: t.OutputName,
 			jobs:      entries,
 			createdAt: s.now(),
 		}

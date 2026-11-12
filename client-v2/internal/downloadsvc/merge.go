@@ -193,6 +193,19 @@ func (s *Service) runMerge(ctx context.Context, entry *MergeEntry) (map[string]a
 	// ── 6. 保存成品（97–100%）──
 	s.setStage(ctx, entry, "保存成品", 0.97)
 	name := fmt.Sprintf("%s 全%03d-%03d集.mkv", safeMergeTitle(entry.Title), first, last)
+	// 「按季合并选中」会预先定好目标文件名（v1 的 `剧名 S01E01.mkv` 口径）。
+	// v1 那儿的守卫照抄（media.py:1033-1038）：**只取 basename**，
+	// 因为这个名字是从剧名拼出来的——一个标题不该能把成品写到 下载/合并/ 之外去。
+	// 洗完全空的名称按 v1 报错，而不是悄悄退回默认名（退回去就等于用户以为
+	// 命名生效了，其实没有）。
+	if strings.TrimSpace(entry.OutputName) != "" {
+		clean := filepath.Base(strings.ReplaceAll(entry.OutputName, "\\", "/"))
+		clean = strings.Trim(clean, " .")
+		if clean == "" {
+			return nil, errors.New("成品文件名无效")
+		}
+		name = clean
+	}
 	if unverified {
 		name = strings.TrimSuffix(name, ".mkv") + "（未完整校验）.mkv"
 	}
