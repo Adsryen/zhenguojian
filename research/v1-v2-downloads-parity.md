@@ -100,6 +100,19 @@ mock 面刻意**不复刻季序与命名**（那是第二个真相，Go 的规�
 （内置示例态恰好两部可合并，与"勾 ≥2 才出按钮"互斥），
 这条边界写在脚本 docstring 与运行时 NOTE 里，没有为了凑一条绿去给产品临时加注入缝。
 
-⚠ 一条 v1 有、我没做的差异写在 multi.go 文件头：v1 多季批次"完成后不自动播放"。
-v2 的自动播放由前端按最后一条完成决定，现在不需要旗标；
-将来若前端改成"整批完成播第一个"，这条差异要回来补。
+## 第四十五轮：更正我自己写进上一节的一条假差异
+
+我上一轮写「v1 多季批次完成后不自动播放，这条差异没实现」——
+那是**照抄 v1 docstring 的一句话、没去核它的代码**。
+v1 `start_merge_multi` 的 docstring 确实有那句
+"never auto-plays when it finishes (reserved for single-season merges)"，
+但 `grep -rnE "auto_play|autoplay|自动播放"` 在整个 v1 客户端只命中一句无关注释
+（main.py:2545「不跨季自动播放」），**没有任何"合并完成后自动播放"的实现**：
+`_merge_one_done`（2565-2577）与 `_finish_merge_batch`（2586-2605）都只写文本。
+所以那条差异不存在，v2 不用补旗标。
+
+v1 真有、v2 当时缺的是另一件事：**双击合并队列里已完成的条目 → 播放那个成品**
+（`downloads.py:1139` itemDoubleClicked → `_open_merge_entry` 1495-1498 →
+`_play_merged_path` 1631-1640，带 0.8s 去抖，文件不在提示
+「成品文件不存在：<文件名>」）。这条现在接上了：v2 走上一轮补好的 `PlayerOpenLocal`，
+`multi.go` 与代码注释里也已把这条更正记进去。
