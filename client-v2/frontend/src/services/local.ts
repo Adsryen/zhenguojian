@@ -112,7 +112,9 @@ export function dayBucket(ts: number): 0 | 1 | 2 {
   return 2
 }
 
-export const HISTORY_BUCKETS = ['今天', '昨天', '更早'] as const
+/* v2-6-parity：分桶名是界面文案，改存 i18n 键（渲染处 t() 取）。数组顺序仍与
+   dayBucket 的 0/1/2 一一对应，别改顺序。 */
+export const HISTORY_BUCKETS = ['history.bucketToday', 'history.bucketYesterday', 'history.bucketEarlier'] as const
 
 /* ---------------------------------------------------------------- 追剧 */
 

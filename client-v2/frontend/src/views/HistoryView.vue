@@ -8,6 +8,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
+import { t, tf } from '@/services/i18n'
 import type { HistoryRow } from '@/services/types'
 import { playerRoute } from '@/services/dramaRef'
 import {
@@ -67,7 +68,7 @@ function seedIfMockEmpty() {
 
 const buckets = computed(() =>
   HISTORY_BUCKETS.map((label, i) => ({
-    label,
+    label: t(label),
     items: rows.value.filter((r) => dayBucket(r.updated) === i)
   })).filter((b) => b.items.length)
 )
@@ -80,9 +81,9 @@ async function removeRow(r: HistoryRow) {
   const title = r.drama.title
   try {
     await watch.removeHistory(r.drama.id)
-    showToast(`已删除《${title}》记录`)
+    showToast(tf('history.deleted', { t: title }))
   } catch (e: any) {
-    showToast(e?.message ?? '删除记录失败')
+    showToast(e?.message ?? t('history.deleteFail'))
   }
 }
 
@@ -90,9 +91,9 @@ async function onClear() {
   try {
     await watch.clearHistory()
     seeded.value = false
-    showToast('已清空观看历史')
+    showToast(t('history.cleared'))
   } catch (e: any) {
-    showToast(e?.message ?? '清空历史失败')
+    showToast(e?.message ?? t('history.clearFail'))
   }
 }
 
@@ -122,20 +123,20 @@ function posText(r: HistoryRow): string {
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">历史</h1>
-    <span v-if="seeded" class="chip static sample-chip">VITE_MOCK 示例数据</span>
+    <h1 class="page-title">{{ t('history.title') }}</h1>
+    <span v-if="seeded" class="chip static sample-chip">{{ t('downloads.mockChip') }}</span>
     <div class="spacer" />
-    <button v-if="rows.length" class="btn danger" @click="onClear">清空历史</button>
+    <button v-if="rows.length" class="btn danger" @click="onClear">{{ t('history.clear') }}</button>
   </div>
 
   <div v-if="watch.loading && !rows.length" class="state-block">
-    <div class="text-muted hint">读取观看历史…</div>
+    <div class="text-muted hint">{{ t('history.loading') }}</div>
   </div>
   <div v-else-if="!rows.length" class="state-block">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3.5 2" /></svg>
-    <div>还没有追剧记录。</div>
-    <div class="text-muted hint">去「找剧」挑一部，回到这里就能接着上次的位置继续看。</div>
-    <button class="btn primary" @click="goDiscover">去找剧</button>
+    <div>{{ t('history.empty') }}</div>
+    <div class="text-muted hint">{{ t('history.emptyHint') }}</div>
+    <button class="btn primary" @click="goDiscover">{{ t('history.goDiscover') }}</button>
   </div>
 
   <div v-else class="hist-list">
@@ -151,21 +152,20 @@ function posText(r: HistoryRow): string {
           <button class="hrow-main" @click="goResume(r)">
             <span class="h-title">{{ r.drama.title }}</span>
             <span class="h-sub">
-              第 {{ r.episode }} 集
-              <template v-if="r.duration > 0"> · 看到 {{ pctOf(r) }}%（{{ durText(r) }}）</template>
+              {{ tf('history.episodeN', { n: r.episode }) }}
+              <template v-if="r.duration > 0"> · {{ tf('history.progressLine', { p: pctOf(r), d: durText(r) }) }}</template>
             </span>
             <span v-if="pctOf(r) > 0" class="bar"><i :style="{ width: pctOf(r) + '%' }" /></span>
           </button>
           <span class="h-time text-muted">{{ posText(r) }}</span>
-          <button class="h-del" title="删除该条记录" @click.stop="removeRow(r)">
+          <button class="h-del" :title="t('history.delTitle')" @click.stop="removeRow(r)">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3" /></svg>
           </button>
         </div>
       </div>
     </section>
     <p class="footnote text-muted">
-      历史真值存在 Go watchstore（本机数据目录 watch-library.json）；无桥时降级读本机 localStorage。
-      点击行 → /player 续播（集号与进度位置取自历史行）。
+      {{ t('history.footnote') }}
     </p>
   </div>
 

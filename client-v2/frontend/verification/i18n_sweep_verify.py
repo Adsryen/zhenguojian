@@ -11,6 +11,9 @@ i18n_sweep_verify.py — L 表收敛进 i18n.ts 的验收脚本
      stores/calendar.ts 透传文案、DiscoverView 非 hero chrome、SourceSwitch）——
      属任务范围外，已在返报「未尽项」列明；数据节点（title 属性含 alt 除外）与
      日期数字不计。
+     v2-6-parity 盲区声明：本脚本与 i18n_static_scan.py 都只管 .vue 模板/字面量，
+     .ts 里的展示串（stores/services 造的 label）不在覆盖内——第一个实例就是
+     services/local.ts:115 HISTORY_BUCKETS（本轮已顺手改成存 i18n 键）。
      v2-6-parity：PlayerView 模板内联 chrome（返回/播放器/示例数据/弹幕 N 条/已播完/
      正在打开播放会话/本集已播完/重新播放/播放·暂停/倍速/音量/弹幕开关·开合/关闭/第 N 集）
      已进 i18n，对应豁免已从 GLOBAL_ALLOW 撤除；.pl-group 不再整组豁免，title 一起扫。
@@ -235,6 +238,21 @@ async def main():
             await page.keyboard.press("Escape")
             await page.screenshot(path=SHOT_PLAYER, full_page=False)
 
+            # ── v2-6-parity：HistoryView 逐字（原先整页没走 i18n，static_scan 16 处已还清）──
+            await settle(page, "/#/history", ".page-title")
+            hz = []
+            hz.append(("标题", "历史", await page.locator(".page-head .page-title").inner_text()))
+            hz.append(("清空按钮", "清空历史", (await page.locator(".btn.danger").first.inner_text()).strip()))
+            hz.append(("分桶标签", "今天", (await page.locator(".bucket-label").first.inner_text()).strip()))
+            # 首行落在哪个集取决于 fixtures 时序，不断言具体集号；断言格式与键文案
+            sub = await page.locator(".h-sub").first.inner_text()
+            hz.append(("集号格式", "第", sub))
+            hz.append(("集号单位", "集", sub))
+            hz.append(("进度文案", "看到", sub))
+            hz.append(("进度百分比", "%", sub))
+            hz.append(("脚注", "watch-library.json", await page.locator(".footnote").first.inner_text()))
+            check("zh|history 7 处逐字（v2-6-parity 还清 16 处硬编码）", all(w in g for _, w, g in hz), str(hz))
+
             await settle(page, "/#/reserve?tab=follow", ".page-title")
             rv = await page.locator("#app").inner_text()
             # 「已上线/待上线」属 /calendar 数据面（下方 calendar 组断言），本页 follow 态无此串
@@ -280,6 +298,8 @@ async def main():
                 "/#/player?d=mock_drama_1&ep=1": (".pl-title", ["Episodes", "Quality", "Next episode", "Hotkey help", "Collapse episodes", "Autoplay on",
                                                  "Back", "Speed", "Volume", "Ep 1"],
                                                   [".pl-top", ".pl-title", ".pl-hint", ".pl-ended", ".pl-panel-cur", ".ep-btn", ".pl-toast", ".pl-label", ".dm", ".pl-badge"]),
+                "/#/history": (".hist-list", ["History", "Clear history", "Today", "Ep 12", "watched"],
+                               [".h-title", ".cover", ".bar", ".sample-chip"]),
                 "/#/": (".page-head", ["Browse", "All", "Refresh", "VITE_MOCK"],
                         [".hero-title", ".hero-desc", ".hero-tag", ".pg-title", ".pg-badge", ".ss-name", ".rv-ep", ".toast"]),
                 "/#/calendar": (".cal-page", ["Follow Calendar", "All", "Male", "Online", "Today", "Refresh"],
@@ -302,6 +322,9 @@ async def main():
                     # v2-6-parity：标题/刷新/横幅已键化 → scope 扩到 .banner，
                     # .chips 仍留在扫描面外（体裁名来自 browseFilters 核心数据，属透传）
                     scope = ".page-head, .banner"
+                elif url == "/#/history":
+                    # 行首 .h-title 是 fixtures 剧名（数据），其余都是已键化 chrome
+                    scope = ".page-head, .hist-list, .footnote"
                 elif url.startswith("/#/player"):
                     # v2-6-parity：chrome 已键化，不再整组豁免 .pl-group（title/弹幕按钮一起扫）
                     scope = ".pl-bar, .pl-panel"
