@@ -316,6 +316,9 @@ const zh: Record<string, string> = {
   'downloads.queueEmpty': '下载队列为空。',
   'downloads.queueEmptyHint': '点右上角「添加下载」搜索剧集并选择分集。',
   'downloads.play': '播放',
+  // 行内「重试」以前借用 search.retry：文案一样，但**键名撒谎**
+  // （下载队列的按钮挂在下拉菜单的键上，改名 search 那边就会误伤这里）。
+  'downloads.retry': '重试',
   'downloads.pause': '暂停',
   'downloads.resume': '续传',
   'downloads.archive': '归档',
@@ -953,6 +956,7 @@ const en: Record<string, string> = {
   'downloads.queueEmpty': 'Download queue is empty.',
   'downloads.queueEmptyHint': 'Use "Add download" (top right) to search a drama and pick episodes.',
   'downloads.play': 'Play',
+  'downloads.retry': 'Retry',
   'downloads.pause': 'Pause',
   'downloads.resume': 'Resume',
   'downloads.archive': 'Archive',

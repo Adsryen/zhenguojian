@@ -666,7 +666,7 @@ async function onEnqueue() {
             :disabled="!!store.busyId"
             @click="store.retry(job)"
           >
-            {{ t('search.retry') }}
+            {{ t('downloads.retry') }}
           </button>
           <button
             v-if="job.state === 'completed'"
