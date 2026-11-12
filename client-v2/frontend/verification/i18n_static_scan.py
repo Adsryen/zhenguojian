@@ -122,13 +122,15 @@ TS_EXEMPT = {
     # 且**没有任何视图渲染 row.status**（ReserveView 显示的是加入时间与看到集数）。
     # 把它翻成英文属于跨层契约变更，本机没有 Go 工具链，不能改。
     "stores/watch.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
-    "services/api.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
+
     "services/series.ts": [
         ("季", "多季标题解析/归并算法：处理的是中文剧名本身（v1 series.py 1:1 端口），不是界面文案"),
         ("十", "同上：中文数字表"),
         ("百", "同上：中文数字表"),
     ],
     "services/api.ts": [
+        ("'在看'", STATUS_REASON),
+        ("'预约中'", STATUS_REASON),
         ("滑块</text>", "mock 验证码 SVG 画布里的图形文字，VITE_MOCK 专用素材"),
         ("未检测到 Wails 原生桥", "启动诊断文案，进 console 与降级提示；本轮先登记，见 notes R9c"),
         ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
@@ -143,8 +145,7 @@ TS_EXEMPT = {
 # .ts 一侧欠账表（R9c 建立）。规则同 .vue：多一处红、少一处也必须回来调低。
 # 重新生成用 `--rebase`，它按当前实测打印可粘贴的字典。
 TS_BASELINE = {
-    "services/api.ts": 13,
-    "stores/calendar.ts": 12,
+    "services/api.ts": 12,
     "services/covers.ts": 4,
     "services/coverSave.ts": 2,
     "stores/searchAll.ts": 2,
@@ -202,6 +203,53 @@ def scan_ts():
             rows.extend(a)
             devlog.extend(b)
     return rows, devlog
+
+
+def _assert_no_duplicate_keys():
+    """字典字面量里的重复键会被 Python 静默「后写覆盖前写」——
+    上一轮我就这么把两条已登记的豁免悄悄吞掉了。这里用 ast 自查，撞了就红。"""
+    import ast as _ast
+    tree = _ast.parse(open(__file__, encoding="utf-8").read())
+    bad = []
+    for node in tree.body:
+        if isinstance(node, _ast.Assign) and isinstance(node.value, _ast.Dict):
+            names = [k.value for k in node.value.keys if isinstance(k, _ast.Constant)]
+            dup = sorted({n for n in names if names.count(n) > 1})
+            if dup:
+                bad.append(f"{node.targets[0].id}: {dup}")
+    if bad:
+        raise SystemExit("FAIL 扫描器自身字典有重复键（豁免会被静默丢弃）：\n  " + "\n  ".join(bad))
+
+
+def check_dict_pairs():
+    """i18n.ts 的 zh/en 必须成对，且任一侧不许有重复键。
+
+    本轮就差点把 `calendar.today` 当成新键再加一遍（值相同，TS1117 才在 typecheck 里炸），
+    而"只加了 zh 忘了 en"更安静：t() 缺键会逐字回退中文，en 态就漏出一条中文，
+    静态棘轾和页面断言都不一定会立刻发现。所以这里补一道与 typecheck 无关的快速检查。
+    """
+    import collections
+    path = os.path.join(SRC, "services", "i18n.ts")
+    text = open(path, encoding="utf-8").read()
+    try:
+        zh_blk = text[text.index("const zh:") : text.index("const en:")]
+        en_blk = text[text.index("const en:") : text.index("const dicts")]
+    except ValueError:
+        return ["i18n.ts 结构变了（找不到 const zh / en / dicts 分界），pairs 检查失效"]
+    key_re = re.compile(r"^\s*'([^']+)':", re.M)
+    zh_keys, en_keys = key_re.findall(zh_blk), key_re.findall(en_blk)
+    problems = []
+    for name, keys in (("zh", zh_keys), ("en", en_keys)):
+        dup = sorted({k for k, c in collections.Counter(keys).items() if c > 1})
+        if dup:
+            problems.append(f"{name} 侧有重复键 {dup}（后写覆盖前写，改了没效果）")
+    only_zh = sorted(set(zh_keys) - set(en_keys))
+    only_en = sorted(set(en_keys) - set(zh_keys))
+    if only_zh:
+        problems.append(f"只有 zh 没有 en 的键 {len(only_zh)} 个：{only_zh[:12]}")
+    if only_en:
+        problems.append(f"只有 en 没有 zh 的键 {len(only_en)} 个：{only_en[:12]}")
+    return problems
 
 
 def rel(path):
@@ -280,6 +328,14 @@ def scan_file(path):
 
 
 def main():
+    _assert_no_duplicate_keys()
+
+    pairs = check_dict_pairs()
+    for line in pairs:
+        print("FAIL i18n 字典：", line)
+    if pairs and not args.rebase:
+        return 1
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--list", action="store_true", help="逐条打印违规")
     ap.add_argument("--rebase", action="store_true",
@@ -322,7 +378,7 @@ def main():
     print(f"扫描 {total_vue} 个 .vue（豁免文件 {len(EXEMPT_FILES)} 个、逐条豁免 "
           f"{sum(len(v) for v in EXEMPT_REASONS.values())} + .ts 豁免 "
           f"{sum(len(v) for v in TS_EXEMPT.values())} 条，基线文件 {len(BASELINE) + len(TS_BASELINE)} 个）："
-          f"界面中文 {len(all_rows)} 处 / 基线 {sum(BASELINE.values())} 处；"
+          f"界面中文 {len(all_rows)} 处 / 基线 {sum(BASELINE.values()) + sum(TS_BASELINE.values())} 处；"
           f"开发者日志中文 {len(dev_logs)} 处（不判红）")
     byfile_all = {}
     for r, _, _, _ in all_rows:

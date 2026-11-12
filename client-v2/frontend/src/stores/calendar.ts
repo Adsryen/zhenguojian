@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { t, tf } from '@/services/i18n'
 import { api } from '@/services/api'
 import type { CalendarEntry, CalendarItem, CalendarPayload, Drama } from '@/services/types'
 
@@ -38,7 +39,9 @@ export function todayYmd(): string {
   return ymd(new Date())
 }
 
-const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+/* 下标 = Date.getDay()（0=周日），存 i18n 键、渲染处 t() 取；顺序即星期，别排成周一开头 */
+const WEEKDAYS = ['calendar.wkSun', 'calendar.wkMon', 'calendar.wkTue', 'calendar.wkWed',
+              'calendar.wkThu', 'calendar.wkFri', 'calendar.wkSat']
 
 /** YYYYMMDD → YYYY-MM-DD（Drama.onlineDate 展示格式） */
 function dayDash(s: string): string {
@@ -47,8 +50,8 @@ function dayDash(s: string): string {
 
 export function calDateLabel(s: string): string {
   if (!/^\d{8}$/.test(s)) return ''
-  if (s === todayYmd()) return '今天'
-  return WEEKDAYS[parseYmd(s).getDay()]
+  if (s === todayYmd()) return t('calendar.today')
+  return t(WEEKDAYS[parseYmd(s).getDay()])
 }
 
 /** 双形状归一：core 平铺 CalendarEntry → row；legacy 嵌套 CalendarItem（mockCalendarDays）→ row */
@@ -62,9 +65,9 @@ function normalizeItem(raw: CalendarItem | CalendarEntry): CalendarRow | null {
       online: !!nested.online,
       subscribed: false,
       hint: String(nested.hint ?? ''),
-      note: d.heat ? `${d.heat}热度` : '',
+      note: d.heat ? tf('calendar.heatNote', { h: d.heat }) : '',
       badge: '',
-      publishText: d.episodes ? `共${d.episodes}集` : ''
+      publishText: d.episodes ? tf('calendar.epCount', { n: d.episodes }) : ''
     }
   }
   const it = raw as CalendarEntry
@@ -75,7 +78,7 @@ function normalizeItem(raw: CalendarItem | CalendarEntry): CalendarRow | null {
     id,
     source: 'hongguo',
     sourceId: seriesId,
-    title: it.title || '未知剧集',
+    title: it.title || t('calendar.unknownTitle'),
     cover: it.cover || '',
     description: it.description || '',
     episodes: it.episodeCnt,
@@ -119,11 +122,11 @@ export const useCalendarStore = defineStore('calendar', {
     pendingRows: (s) => s.rows.filter((r) => !r.online),
     /** v1 状态条文案（加载/错误/空日/没有更多） */
     statusText(s): string {
-      if (s.loading && !s.rows.length) return '加载上新日历…'
-      if (s.error) return `加载失败：${s.error}（点此重试）`
-      if (!s.rows.length) return '这一天没有上新'
-      if (s.loading) return '加载中…'
-      if (!s.hasMore) return '没有更多了'
+      if (s.loading && !s.rows.length) return t('calendar.statusFirstLoad')
+      if (s.error) return tf('calendar.statusFailed', { m: s.error })
+      if (!s.rows.length) return t('calendar.statusEmptyDay')
+      if (s.loading) return t('calendar.statusLoading')
+      if (!s.hasMore) return t('calendar.statusNoMore')
       return ''
     }
   },
@@ -236,7 +239,7 @@ export const useCalendarStore = defineStore('calendar', {
         // 本地标志随之对齐；绑定返回值即真值）
         if (res.followed) this.reserved = { ...this.reserved, [row.id]: false }
       } catch (e: any) {
-        this.actionError = `追剧操作失败：${e?.message ?? e}`
+        this.actionError = tf('watch.errFollow', { m: e?.message ?? e })
       }
     },
 
@@ -253,7 +256,7 @@ export const useCalendarStore = defineStore('calendar', {
           if (on) this.followed = { ...this.followed, [row.id]: false }
         }
       } catch (e: any) {
-        this.actionError = `预约操作失败：${e?.message ?? e}`
+        this.actionError = tf('watch.errReserve', { m: e?.message ?? e })
       }
     }
   }
