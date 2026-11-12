@@ -181,8 +181,11 @@ func (a *App) PlayerOpenLocal(path string, resumeSeconds float64) (string, error
 	}
 	st, err := os.Stat(abs)
 	if err != nil || st.IsDir() {
-		// v1 的同一条用户可见语义（watch.py:641「本地文件已不存在：<文件名>」）
-		return "", fmt.Errorf("本地文件已不存在：%s", filepath.Base(abs))
+		// 句子照 v1（watch.py:641「本地文件已不存在：<文件名>」），尾巴 `[local_missing]`
+		// 是本仓既有的错误码约定（api.ts callGoRaw 用 `/\[([a-z_]+)\]\s*$/` 剥成
+		// ApiError.code）。带码的原因很具体：**英文界面不能显示这句中文**——
+		// 界面按 code 用 i18n 组句子，这句只进日志。
+		return "", fmt.Errorf("本地文件已不存在：%s [local_missing]", filepath.Base(abs))
 	}
 	if err := a.playerSvc.OpenLocal(a.ctx, player.LocalRequest{
 		Path:     abs,
@@ -210,10 +213,10 @@ func checkLocalPlayable(root, abs string) error {
 	r, a := normalizeForContainment(root, abs, isCaseInsensitiveOS())
 	rel, err := filepath.Rel(r, a)
 	if err != nil {
-		return fmt.Errorf("只允许播放下载目录下的成品文件（无法归一化路径：%s）", filepath.Base(abs))
+		return fmt.Errorf("只允许播放下载目录下的成品文件（无法归一化路径：%s） [outside_root]", filepath.Base(abs))
 	}
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("只允许播放下载目录下的成品文件（拒绝越界路径：%s）", filepath.Base(abs))
+		return fmt.Errorf("只允许播放下载目录下的成品文件（拒绝越界路径：%s） [outside_root]", filepath.Base(abs))
 	}
 	return nil
 }
