@@ -117,6 +117,40 @@ CI 首跑红三条，判到根上都是**我的测试写错**：
 "localPath 带不出来"都是同一成因：只补了其中一份。
 该收成一处（由 `services/local.ts` 出唯一映射），那是一次独立重构。
 
+### 第四十一轮：③ 的写入这半段落地（CI run `43311876496` ✓）
+
+先确认一件事：v2 的**核心不写**这两个旁挂文件
+（`grep -rn "danmaku.json" guoapp-src` 为空），所以要补的是客户端，
+对端是 v1 `library.py:413-475`（`_queue_danmaku`/`_collect_danmaku`）
++ `danmaku.py:78-101`（document / write_file）。
+
+新增 `internal/danmaku/sidecar.go`：`SidecarPaths / SidecarReady / WriteTextAtomic /
+SidecarDocument / CollectSidecar`，resolve 与整集抓取两步**做成注入字段**——
+本机没有 Go 工具链、CI 也连不上核心，
+只有把"抓完之后怎么写"隔离出来才测得到；接线层（下一笔）负责真调核心。
+
+四条照 v1 而不是照"我觉得更好"，每条都有测试钉着：
+- `SidecarReady` 要求两个文件都在且 `.ass` 非空（只查 .ass 则写坏一半永不重补）；
+- **无弹幕不写空文件**（写了 Ready 变真，这一集从此补不上——最阴的坏状态）；
+- 跳过判定在 resolve **之前**，测试断言"已存过时 Resolve 一次都没被调用"；
+- `.danmaku.json` 字节形状对齐 v1：`indent=1`、不转义 HTML、
+  空 items 是 `[]` 不是 `null`（Go 的 nil slice 会写成 null）、末尾不补换行。
+
+两处刻意沿用 v1 且写明后果：json 写失败**不回滚** .ass
+（半套不会让 Ready 变真，下次整对重写，代价只是中间那段时间本地播放没弹幕）。
+
+### 本轮最值得记的一次 CI 报错：我的测试文件让生产代码编译不过
+
+`sidecar_test.go` 里我为了省事写了 `func min(a, b int) int`，
+而 Go 1.21 起 `min/max` 是**内建函数**——同包内同名声明会把内建遮蔽，
+于是 `ass.go:56` 的 `min(0.05, o.Opacity)` 与 `fetcher.go:271` 的浮点 min() 全部编译失败。
+报错出现在**别人的文件**里，第一眼会以为 danmaku 包本来就坏了。
+本机没有 Go 工具链，这类只有 CI 抓得到。已改成 `head()/fileExists()` 并把教训写进注释。
+顺带修 `SidecarPaths(video)[0]`（多返回值不能下标取）。
+
 ### 剩余
 
-③ 本地弹幕 sidecar `.ass`（v1 main.py:1880）还没做 —— `OpenLocal` 现在只是"不去线上抓"。
+③ 还剩接线两半：下载完成后调用 `CollectSidecar`（含客户端开关「下载时保存弹幕」，
+v1 `downloads.py:1095-1099` + `tools.danmaku_download_enabled`，默认关）
+与本地播放时 `attach_danmaku(ass, count)`（v1 `main.py:1880-1895`，
+它还要读同名 `.danmaku.json` 拿条数）。`OpenLocal` 目前只是"不去线上抓"。
