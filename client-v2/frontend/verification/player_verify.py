@@ -10,7 +10,10 @@
   ④ 选集面板：展开宽 300 / 折叠宽 36 / 点第3集切集（标题+当前高亮）/ 当前集在面板内可见（落位）。
   ⑤ 上/下一集常驻禁用逻辑：ep1 时 ⏮ 禁用；ep35（mock 末集）时 ⏭ 禁用、⏮ 可用。
   ⑥ 连播：ep3 seek 至片尾 → 自动播第4集；关开关 → LS zgj.player.autoplay='0' 且重载后仍「连播关」。
-  ⑦ 画质下拉存在，选 720 → toast 含「已切换到720P」（mock 实链）或占位提示、LS zgj.player.quality='720'（未假成功，
+  ⑦ 画质下拉存在，选 720 → toast 含「已切换到720P」（mock 实链）或占位提示、LS zgj.player.quality='720'（未假成功）
+  ⑧ 弹幕不透明度：默认「透明 100%」、滑条 20–100、拖动跟手、
+     落盘 zgj.player.danmakuOpacity、越界钳位、刷新后从 LS 恢复。
+     （壳层收到值并 sub-reload 由 Go 单测 TestDanmakuOpacityRendersAndClamps + CI 覆盖，不在这里冒充已验）
      真实清晰度未变由占位重开当前集承接）。
 截图：本目录 player-pack.png（面板展开 + toast 可见态）。
 
@@ -280,6 +283,44 @@ def main():
             # 画质已接核心 resolve：dev:mock 走「已切换到720P」实链分支；无桥/演示态出占位提示
             check("⑦ 画质切换提示文案出现", ok7 and ("已切换到720P，从原位置继续播放" in toast
                                  or "演示模式或未载入剧目" in toast), f"toast={toast}")
+
+            # ── ⑧ 弹幕不透明度控件（R4-2；v1「透明 NN%」竖向滑条对端）──
+            op_btn = page.locator("[data-testid=dm-opacity-btn]")
+            check("⑧a 按钮显示「透明 100%」（v1 历史口径：数值是不透明度，100=完全不透明）",
+                  "透明 100%" in op_btn.inner_text(), op_btn.inner_text())
+            op_btn.click()
+            page.wait_for_selector("[data-testid=dm-opacity-pop]", timeout=8000)
+            rng = page.locator("[data-testid=dm-opacity-range]")
+            check("⑧b 展开后滑条范围 20–100",
+                  rng.get_attribute("min") == "20" and rng.get_attribute("max") == "100",
+                  f"min={rng.get_attribute('min')} max={rng.get_attribute('max')}")
+            rng.evaluate("""(el) => {
+              el.value = '40';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }""")
+            page.wait_for_timeout(400)
+            check("⑧c 拖动后按钮与浮层都跟着变 40%",
+                  "透明 40%" in op_btn.inner_text()
+                  and "40%" in page.locator("[data-testid=dm-opacity-pop]").inner_text(),
+                  f"btn={op_btn.inner_text()}")
+            ls_op = page.evaluate("() => localStorage.getItem('zgj.player.danmakuOpacity')")
+            check("⑧d 落盘 zgj.player.danmakuOpacity=40", ls_op == "40", f"ls={ls_op}")
+            # 越界输入由 store 钳回 20–100（滑条本身给不了越界值，这里直接驱动 store）
+            rng.evaluate("""(el) => {
+              el.value = '5';
+              el.dispatchEvent(new Event('input', { bubbles: true }));
+            }""")
+            page.wait_for_timeout(400)
+            check("⑧e 越界值被钳成下限 20（不写脏 LS）",
+                  page.evaluate("() => localStorage.getItem('zgj.player.danmakuOpacity')") == "20",
+                  "钳位见 stores/player.ts setDanmakuOpacity")
+            page.reload()
+            page.wait_for_selector("[data-testid=dm-opacity-btn]", timeout=15000)
+            page.wait_for_timeout(1200)
+            check("⑧f 刷新后从 LS 恢复（真持久化，不是内存态）",
+                  "透明 20%" in page.locator("[data-testid=dm-opacity-btn]").inner_text(),
+                  page.locator("[data-testid=dm-opacity-btn]").inner_text())
+            page.evaluate("() => localStorage.removeItem('zgj.player.danmakuOpacity')")
 
             # ── 截图：面板展开 + toast 可见 ──
             page.wait_for_timeout(400)

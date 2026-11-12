@@ -38,6 +38,8 @@ export const DM_DEMO_KEY = 'zgj.danmaku.demo'
 /** V2-F：连播开关（默认开）与画质偏好（v1 QUALITY_INDEX_SLUGS：auto/1080p/720p/540p → 档位序索引） */
 export const AUTOPLAY_KEY = 'zgj.player.autoplay'
 export const QUALITY_KEY = 'zgj.player.quality'
+/** 弹幕不透明度百分比 20–100（v1 app-settings 的 danmakuOpacity：同量纲、同默认 100） */
+export const DM_OPACITY_KEY = 'zgj.player.danmakuOpacity'
 export const QUALITY_CHOICES = ['auto', '1080', '720', '540'] as const
 const qualityLabel = (q: string): string =>
   q === 'auto' ? t('player.qualityAuto') : (QUALITY_MAP[q] ?? q)
@@ -86,6 +88,18 @@ type EventsBus = {
   EventsOff?: (n: string) => void
 }
 
+/** 读持久化的不透明度百分比：非法或未设 → 100（与 v1 tools.danmaku_opacity 同规则） */
+function readOpacity(): number {
+  try {
+    const raw = localStorage.getItem(DM_OPACITY_KEY)
+    if (raw == null) return 100
+    const n = Number(raw)
+    return Number.isFinite(n) ? Math.min(100, Math.max(20, Math.round(n))) : 100
+  } catch {
+    return 100
+  }
+}
+
 const PLAYER_EVENTS = ['player:tick', 'player:ended', 'player:error', 'danmaku:stats'] as const
 
 export interface PlayerStoreState {
@@ -117,6 +131,8 @@ export interface PlayerStoreState {
   autoplay: boolean
   /** V2-F：画质档位 'auto'|'1080'|'720'|'540'（zgj.player.quality） */
   quality: string
+  /** R4-2：弹幕不透明度百分比 20–100（zgj.player.danmakuOpacity，默认 100＝完全不透明） */
+  danmakuOpacity: number
   /** 当前集 chapter 原样对象（画质切换重 resolve 用，免再拉详情） */
   currentChapter: Chapter | null
   /** V2-F：临时提示（画质待接线/全屏不可用等），8s 自动消失 */
@@ -145,6 +161,7 @@ export const usePlayerStore = defineStore('player', {
     volume: clampVolume(localStorage.getItem(VOLUME_KEY) ?? 100),
     eof: false,
     danmakuOn: true,
+    danmakuOpacity: readOpacity(),
     demoMode: false,
     danmakuCount: null,
     danmakuNote: '',
@@ -581,8 +598,30 @@ export const usePlayerStore = defineStore('player', {
       if (this.demoMode) return
       try {
         await api.setDanmaku(on)
+        // 壳层的不透明度是进程内状态（v1 每次播放从 app-settings.json 读；
+        // v2 存 localStorage），所以开启时回灌一次，避免「设置看着在、其实是默认值」。
+        if (on) await api.setDanmakuOpacity(this.danmakuOpacity)
       } catch (e) {
         this.error = (e as ApiError)?.message ?? t('player.danmakuFailed')
+      }
+    },
+
+    /** R4-2：设弹幕不透明度（百分比 20–100，越大越实；v1「透明 NN%」滑条同量纲）。
+     *  立刻落盘 + 下发壳层；壳层会用已抓数据重渲染 ASS 并 sub-reload（v1 语义）。
+     *  演示模式（无桥）与弹幕关闭时只记值不下发——开着弹幕再切自然会补上。 */
+    async setDanmakuOpacity(percent: number) {
+      const n = Math.min(100, Math.max(20, Math.round(Number(percent) || 100)))
+      this.danmakuOpacity = n
+      try {
+        localStorage.setItem(DM_OPACITY_KEY, String(n))
+      } catch {
+        /* 存不进去不致命，本会话内仍然生效 */
+      }
+      if (this.demoMode || !this.danmakuOn) return
+      try {
+        await api.setDanmakuOpacity(n)
+      } catch (e) {
+        this.error = (e as ApiError)?.message ?? t('player.danmakuOpacityFailed')
       }
     },
 

@@ -157,6 +157,9 @@ export interface PlayerDanmakuState {
   enabled: boolean
   count: number
   note: string
+  /** 壳层回报的当前不透明度，**0.05–1.0 小数**（internal/player.DanmakuState.Opacity；
+   *  未设过时壳层按 1.0 报）。前端 localStorage 存的是 20–100 百分比，两者换算在这一层收口。 */
+  opacity?: number
 }
 
 /** Snapshot 的当前集标识（internal/player.EpisodeRef） */
@@ -288,6 +291,9 @@ export interface NativeApi {
   closeVideo(): Promise<void>
   playerState(): Promise<PlayerSnapshot>
   setDanmaku(on: boolean): Promise<void>
+  /** 弹幕不透明度，百分比 20–100（v1 tools.danmaku_opacity 同一量纲）；
+      真桥侧由壳层换算成 0.2–1.0 再交给 App.PlayerDanmakuOpacity。 */
+  setDanmakuOpacity(percent: number): Promise<void>
   danmakuAll(session: string): Promise<DanmakuWindowResult>
   // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
   watchlist(): Promise<WatchRow[]>

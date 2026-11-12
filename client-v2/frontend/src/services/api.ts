@@ -280,6 +280,11 @@ const realApi: NativeApi = {
   closeVideo: async () => { await callGo('PlayerClosePlayer') },
   playerState: () => callGo<PlayerSnapshot>('PlayerState'),
   setDanmaku: async (on: boolean) => { await callGo('PlayerDanmaku', on) },
+  // 百分比 → 0.2–1.0：v1 设置里存的是「不透明度百分比」（tools.danmaku_opacity 20-100，
+  // 没设过按 100），Go 侧 SetDanmakuOpacity 吃 0.05–1.0，换算只在这一处发生。
+  setDanmakuOpacity: async (percent: number) => {
+    await callGo('PlayerDanmakuOpacity', clampOpacityPercent(percent) / 100)
+  },
   danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session),
   watchlist: () => callGo<WatchRow[]>('Watchlist'),
   historyList: () => callGo<HistoryRow[]>('HistoryList'),
@@ -374,6 +379,13 @@ const realApi: NativeApi = {
    内部状态即 player.Snapshot 形状（posMs/durationMs 毫秒制）；
    stores/player.ts 轮询 playerState() 消费。eof 为 mock 扩展位：
    真实后端播完靠 player:ended 事件，mock 面无事件总线，由快照带 eof 兜底。 */
+/** v1 tools.danmaku_opacity：20–100 的百分比，非法值回落 100（不透明）。 */
+export function clampOpacityPercent(v: number): number {
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 100
+  return Math.min(100, Math.max(20, Math.round(n)))
+}
+
 const MOCK_DM_COUNT = 80 // mockDanmakuAll 铺满 180s 的条目数
 const mockSnap: PlayerSnapshot = {
   playing: false,
@@ -558,6 +570,9 @@ const mockApi: NativeApi = {
   },
   setDanmaku: async (on: boolean) => {
     mockSnap.danmaku = { ...mockSnap.danmaku, enabled: on, count: on ? MOCK_DM_COUNT : mockSnap.danmaku.count }
+  },
+  setDanmakuOpacity: async (percent: number) => {
+    mockSnap.danmaku = { ...mockSnap.danmaku, opacity: clampOpacityPercent(percent) }
   },
   danmakuAll: async (session: string) => {
     await delay(200)

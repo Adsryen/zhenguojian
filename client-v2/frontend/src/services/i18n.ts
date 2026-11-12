@@ -477,6 +477,10 @@ const zh: Record<string, string> = {
   'player.seekFailed': '跳转失败',
   'player.speedFailed': '倍速失败',
   'player.danmakuFailed': '弹幕开关失败',
+  'player.danmakuOpacityTitle': '弹幕透明度',
+  'player.danmakuOpacityHint': '点开后上下拖动：往上更实、往下更透（20–100，数值是不透明度）',
+  'player.danmOpacity': '透明 {n}%',
+  'player.danmakuOpacityFailed': '弹幕不透明度设置失败',
   // 分支真意：演示模式或还没载入剧目时才走这里（setQuality 里 `demoMode || !drama`）。
   // 核心画质接线早已完成（见 ⑦ 的另一分支「已切换到{q}，从原位置继续播放」），
   // 所以旧文案「画质切换待核心接线」是一句已经过期的谎话，键名一起改成 qualityDeferred。
@@ -1105,6 +1109,10 @@ const en: Record<string, string> = {
   'player.seekFailed': 'Seek failed',
   'player.speedFailed': 'Speed change failed',
   'player.danmakuFailed': 'Danmaku toggle failed',
+  'player.danmakuOpacityTitle': 'Danmaku transparency',
+  'player.danmakuOpacityHint': 'Open, then drag: up = more solid, down = more see-through (20–100; the number is opacity)',
+  'player.danmOpacity': 'Transparency {n}%',
+  'player.danmakuOpacityFailed': 'Failed to set danmaku opacity',
   'player.qualityDeferred': 'Demo mode or no drama loaded: quality saved, current episode not reopened',
   'player.qualitySwitched': 'Switched to {q}, resuming from the same position',
   // ── R9c-2: watch store failure messages (zh byte-identical to old errText output) ──

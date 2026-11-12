@@ -66,6 +66,8 @@ const dragPos = ref(0)
 /* V2-F：全屏态 / 帮助浮层 / 选集面板 */
 const isFullscreen = ref(false)
 const helpOpen = ref(false)
+/* R4-2：弹幕透明度小浮层（v1 是「点开后上下拖动」的竖向滑条，这里同路数） */
+const opacityOpen = ref(false)
 const panelOpen = ref(true)
 const chapters = ref<Chapter[]>([])
 const chaptersLoading = ref(false)
@@ -300,6 +302,15 @@ function dramaTitleFromQuery(): string {
   }
 }
 
+/** R4-2：滑条拖动 → store.setDanmakuOpacity（落盘 + 下发壳层；
+ *  壳层用已抓数据重渲染 ASS 并 sub-reload，见 internal/player 的 SetDanmakuOpacity）。
+ *  滑条值 = 不透明度百分比 20–100（v1 tools.danmaku_opacity 同量纲，100 = 完全不透明），
+ *  所以「往上更实、往下更透」，标签沿 v1 写「透明 NN%」——那是 v1 的历史口径，不是笔误。 */
+function onOpacityInput(e: Event) {
+  const el = e.target as HTMLInputElement
+  void store.setDanmakuOpacity(Number(el.value))
+}
+
 async function closePlayer() {
   await store.shutdown()
   if (window.history.length > 1) router.back()
@@ -468,6 +479,30 @@ onBeforeUnmount(() => {
           >
             {{ store.danmakuOn ? t('player.danmakuOn') : t('player.danmakuOff') }}
           </button>
+          <span class="pl-dmop">
+            <button
+              class="pl-btn ghost dmop"
+              :class="{ off: !store.danmakuOn }"
+              type="button"
+              data-testid="dm-opacity-btn"
+              :title="t('player.danmakuOpacityHint')"
+              @click="opacityOpen = !opacityOpen"
+            >{{ tf('player.danmOpacity', { n: store.danmakuOpacity }) }}</button>
+            <span v-if="opacityOpen" class="dmop-pop" data-testid="dm-opacity-pop">
+              <input
+                class="dmop-range"
+                type="range"
+                min="20"
+                max="100"
+                step="5"
+                :value="store.danmakuOpacity"
+                :aria-label="t('player.danmakuOpacityTitle')"
+                data-testid="dm-opacity-range"
+                @input="onOpacityInput"
+              />
+              <span class="dmop-val">{{ store.danmakuOpacity }}%</span>
+            </span>
+          </span>
           <button
             class="pl-btn ghost fs"
             type="button"
@@ -547,6 +582,39 @@ onBeforeUnmount(() => {
   display: flex;
   gap: 8px;
 }
+.pl-dmop {
+  position: relative;
+  display: inline-flex;
+}
+
+/* 竖向小浮层：对应 v1 点开式滑条；往上数值大＝更实 */
+.dmop-pop {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  z-index: 70;
+}
+
+.dmop-range {
+  width: 18px;
+  height: 96px;
+  accent-color: var(--accent);
+}
+
+.dmop-val {
+  font-size: 11px;
+  color: var(--muted);
+}
+
 .pl-badge {
   font-size: 12px;
   padding: 2px 8px;
