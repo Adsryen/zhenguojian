@@ -14,7 +14,9 @@
 截图：settings-update.png（V1 元素图）、update-banner.png（V2 全页含横幅）。
 
 用法：python3 verification/update_verify.py
-（自动复用已在跑的 5189；否则自行 `npm run dev:mock -- --port 5189 --strictPort` 并在结束关闭。）
+自管理 dev:mock：**独占端口 5194**，启停走 `_devserver`。
+（旧写法「自动复用已在跑的 5189」+ 只 terminate() 不杀进程组，
+ 既会把 creator_verify 的服务器当成自己的，又会在退出后泄漏 5189 让下一轮出假红灯。）
 """
 import asyncio
 import json
@@ -22,6 +24,8 @@ import os
 import re
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 
@@ -30,7 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT_ALT = os.path.normpath(os.path.join(HERE, "..", "..", "client-v2", "frontend"))
 ROOT = os.path.dirname(HERE)
 FRONTEND = ROOT if os.path.basename(ROOT) == "frontend" else _ROOT_ALT
-PORT = 5189
+PORT = 5194
 BASE = f"http://127.0.0.1:{PORT}"
 EXEC = os.path.expanduser(
     "~/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
@@ -73,21 +77,7 @@ async def fill_width(page):
 async def main():
     from playwright.async_api import async_playwright
 
-    spawned = None
-    if not port_open("127.0.0.1", PORT):
-        spawned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=open(os.path.join(HERE, ".dev_update_mock.log"), "w"),
-            stderr=subprocess.STDOUT,
-        )
-        for _ in range(80):
-            if port_open("127.0.0.1", PORT):
-                break
-            time.sleep(0.5)
-        else:
-            print("dev server 未能启动，见 verification/.dev_update_mock.log")
-            sys.exit(2)
+    spawned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="update")
 
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(executable_path=EXEC, args=["--no-sandbox"])
@@ -207,12 +197,7 @@ async def main():
 
         await browser.close()
 
-    if spawned:
-        spawned.terminate()
-        try:
-            spawned.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            spawned.kill()
+    _devserver.stop_dev(spawned, PORT, name="update")
 
     failed = [r for r in RESULTS if r[0] == "FAIL"]
     print(f"\n== {len(RESULTS) - len(failed)}/{len(RESULTS)} PASS ==")

@@ -24,6 +24,8 @@ import json
 import os
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 from urllib.parse import quote
@@ -67,21 +69,6 @@ def wait_port(deadline=40.0):
     return False
 
 
-def kill_group(proc):
-    import signal
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except Exception:
-        pass
-    try:
-        proc.wait(10)
-    except Exception:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:
-            pass
-
-
 def creator_url(creator):
     u = quote(json.dumps(creator, ensure_ascii=False), safe="")
     return f"{BASE}/#/creator?u={u}&name={quote(creator['name'])}"
@@ -118,20 +105,7 @@ def goto_creator(page, creator, settle_ms=1600):
 
 
 def main():
-    spawned = None
-    if not port_open():
-        spawned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=open(os.path.join(HERE, ".dev_creator.log"), "w"),
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-        if not wait_port():
-            print("FAIL dev server 未能拉起（看 .dev_creator.log）")
-            if spawned:
-                kill_group(spawned)
-            sys.exit(1)
+    spawned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="creator")
     pageerrors = []
     with sync_playwright() as pw:
         browser = pw.chromium.launch(executable_path=EXE, headless=True)
@@ -255,8 +229,7 @@ def main():
             check("C9 无 pageerror", len(pageerrors) == 0, f"errors={pageerrors[:2]}")
         finally:
             browser.close()
-            if spawned:
-                kill_group(spawned)
+            _devserver.stop_dev(spawned, PORT, name="creator")
 
     print("\n== 结果:", "ALL PASS" if not failures else f"FAIL {len(failures)}: {failures}")
     sys.exit(0 if not failures else 1)

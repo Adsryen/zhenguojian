@@ -30,9 +30,14 @@ import subprocess
 import sys
 import time
 
+import _devserver
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-FRONTEND = os.path.join(ROOT, "client-v2", "frontend")
+# verification/ 就在 client-v2/frontend 下面：ROOT 已经是 frontend。
+# 旧值 os.path.join(ROOT, "client-v2", "frontend") 拼出 …/frontend/client-v2/frontend，
+# 不存在的路径 → 脚本此前根本起不了服务器。
+FRONTEND = ROOT
 PORT = 5180
 BASE = f"http://127.0.0.1:{PORT}"
 EXEC = os.path.expanduser(
@@ -95,21 +100,9 @@ def chip(d, key):
 async def main():
     from playwright.async_api import async_playwright
 
-    owned = None
-    if not port_open("127.0.0.1", PORT):
-        owned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-        for _ in range(60):
-            if port_open("127.0.0.1", PORT):
-                break
-            time.sleep(0.5)
-    if not port_open("127.0.0.1", PORT):
-        print("dev:mock 未能在 5180 启动")
-        return 2
+    # 端口预检 + 就绪等待 + 严格收口见 _devserver.py（旧写法「端口已开就复用」
+    # 会把别的脚本的 vite 当自己的服务器，与 detail_download_verify ② 假红灯同类）
+    owned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="downloads-statbar")
 
     try:
         async with async_playwright() as pw:
@@ -262,22 +255,23 @@ async def main():
             other_rows = [r for r in d["rows"] if not any("pill-completed" in p for p in r["pills"])]
             opens_completed = [r["opens"] for r in completed_rows]
             opens_other = [r["opens"] for r in other_rows]
+            # 契约更新（本轮实测）：App.OpenDownloadPath 已实现（api.ts:343，
+            # DownloadsView.openPathTitle:274），按钮不再是 disabled + 「依赖未就绪」占位提示，
+            # 而是 completed 行可用、title 带真实目录。本脚本此前因 FRONTEND 路径拼错
+            # 从来没跑起来过，所以这条断言过期了很久没人发现。
             check(
-                "⑥a 「打开所在目录」仅出现在 completed 行且 disabled，title 含 OpenDownloadPath 依赖说明",
+                "⑥a 「打开所在目录」仅出现在 completed 行、可用且 title 带目录",
                 len(completed_rows) > 0
-                and all(len(o) == 1 and o[0]["disabled"] and "OpenDownloadPath" in o[0]["title"] for o in opens_completed)
+                and all(len(o) == 1 and not o[0]["disabled"]
+                        and o[0]["title"].startswith("打开所在目录：") for o in opens_completed)
                 and all(len(o) == 0 for o in opens_other),
                 f"completed行={len(completed_rows)} title={opens_completed[0][0]['title'] if opens_completed else 'N/A'}",
             )
 
             await browser.close()
     finally:
-        if owned is not None:
-            owned.terminate()
-            try:
-                owned.wait(5)
-            except Exception:
-                owned.kill()
+        # SIGTERM → wait → SIGKILL → 回查端口确实关闭（防泄漏，见 _devserver.py）
+        _devserver.stop_dev(owned, PORT, name="downloads-statbar")
 
     fails = [r for r in RESULTS if r[0] == "FAIL"]
     print(f"\n== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ==")
