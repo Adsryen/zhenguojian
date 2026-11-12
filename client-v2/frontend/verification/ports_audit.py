@@ -86,13 +86,100 @@ def audit_dir(directory=HERE):
     return per, owner, conflicts
 
 
+# ───────────────────────── spec 端口表对账 ─────────────────────────
+#
+# 为什么也做成机器活：这张表是**唯一**能回答"这个号谁在用"的地方，却靠手工维护。
+# 第二十九轮我补 5201/5202 那行之前，表里已经少了 `next_season_verify`
+# （第二十二轮就加了的脚本）——漏加没有任何信号，除非恰好有人去数表行。
+# 文档漂移不会自己报警，这条把它变成对账。
+
+SPEC_RELPATH = os.path.join("..", "..", "..", ".trellis", "spec", "backend", "verification-harness.md")
+
+
+def parse_spec_table(text):
+    """从 markdown 端口表抽出 ({端口: [脚本,…]}, {脚本: [端口,…]})。
+
+    只认 `| 5181 / 5182 | \`detail_download_verify\` | … |` 这种数据行；
+    表头/分隔行/说明段都没有端口号，天然被过滤掉。
+    """
+    by_port = collections.defaultdict(list)
+    by_script = collections.defaultdict(list)
+    for line in text.splitlines():
+        if not line.strip().startswith("|"):
+            continue
+        cols = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cols) < 2:
+            continue
+        ports = re.findall(_PORT_RANGE, cols[0])
+        if not ports:
+            continue
+        m = re.search(r"`([A-Za-z0-9_]+)`", cols[1])
+        if not m:
+            continue
+        script = m.group(1)
+        for pt in ports:
+            by_port[pt].append(script)
+            by_script[script].append(pt)
+    return dict(by_port), dict(by_script)
+
+
+def spec_path(directory=HERE):
+    return os.path.normpath(os.path.join(directory, SPEC_RELPATH))
+
+
+def check_spec(directory=HERE):
+    """表 vs 实际端口对账。
+
+    spec 文件不在就 SKIP 而不是 FAIL：`.trellis/` 被 gitignore，
+    CI 的干净 checkout 里根本没有它——那种情况下失败只会变成噪音。
+    """
+    path = spec_path(directory)
+    if not os.path.isfile(path):
+        print("SKIP spec 对账：找不到 %s（.trellis 被 gitignore，没有也正常）" % path)
+        return 0
+    per, owner, conflicts = audit_dir(directory)
+    if conflicts:
+        print("FAIL 先解决端口冲突再谈对账：%s" % conflicts)
+        return 1
+    table_ports, table_scripts = parse_spec_table(open(path, encoding="utf-8").read())
+
+    missing = []   # 实际在用、表里没有 → 文档落后
+    stale = []     # 表里写了、实际没有 → 文档超前或写错
+    for pt, files in sorted(owner.items()):
+        for f in files:
+            name = f[:-3] if f.endswith(".py") else f
+            if name not in table_scripts or pt not in table_scripts[name]:
+                missing.append((pt, name))
+    for pt, names in sorted(table_ports.items()):
+        for name in names:
+            fname = name + (".py" if name.endswith(("_verify", "_probe")) else "")
+            ports = per.get(fname)
+            if ports is None:
+                stale.append((pt, name, "脚本不在了"))
+            elif pt not in ports:
+                stale.append((pt, name, "该脚本没再用这个号"))
+
+    if not missing and not stale:
+        print("PASS spec 对账：表 %d 个号与实际 %d 个号完全一致" % (len(table_ports), len(owner)))
+        return 0
+    for pt, name in missing:
+        print("MISSING 表里缺行：%s @%s → 补进 %s" % (name, pt, path))
+    for pt, name, why in stale:
+        print("STALE   表里过期：%s @%s（%s）" % (name, pt, why))
+    return 1
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--check-spec", action="store_true",
+                    help="只做 spec 端口表对账（不一致就非零）")
     args = ap.parse_args()
     if args.selftest:
         return selftest()
+    if args.check_spec:
+        return check_spec()
 
     per, owner, conflicts = audit_dir()
     n_scripts = len(per)
@@ -109,7 +196,9 @@ def main():
         return 1
     if not args.quiet:
         print("PASS 无端口冲突")
-    return 0
+    # 冲突是硬伤，文档漂移是软伤：一次跑完一起决定退出码，
+    # 免得修完冲突还得再跑一遍才发现表落后（第二十九轮我自己就这么来回过）。
+    return check_spec()
 
 
 def selftest():
@@ -179,7 +268,56 @@ def selftest():
     else:
         print("PASS 实仓无端口冲突")
 
-    total = len(cases) + 3
+    # ── 表解析用例：形状一律取自真实 spec（第 28 轮的教训：别测想象中的形状）──
+    tbl_cases = [
+        ("普通行", "| 5179 | `player_verify` | mock | `_devserver` |", {"5179": ["player_verify"]}),
+        ("一行两个号", "| 5181 / 5182 | `detail_download_verify` | mock / 非 mock | `_devserver` |",
+         {"5181": ["detail_download_verify"], "5182": ["detail_download_verify"]}),
+        ("名字后面还有说明文字", "| 5201 / 5202 | `i18n_exemption_probe`（非 _verify，但真起两台 vite） | mock | x |",
+         {"5201": ["i18n_exemption_probe"], "5202": ["i18n_exemption_probe"]}),
+        ("带轮次后缀的行", "| 5198 / 5199 | `preload_openpath_verify` | mock | `_devserver`（第十轮新） |",
+         {"5198": ["preload_openpath_verify"], "5199": ["preload_openpath_verify"]}),
+        ("表头与分隔行不算数据", "| 端口 | 脚本 | 态 | 启停 |\n|---|---|---|---|\n", {}),
+        ("说明段里的端口号不算数据行", "把 5182 换到 5188 就好了\n", {}),
+    ]
+    for name, text, want_ports in tbl_cases:
+        got_ports, _ = parse_spec_table(text)
+        ok = got_ports == want_ports
+        print(f"{'PASS' if ok else 'FAIL'} 表解析：{name}")
+        if not ok:
+            print(f"      got={got_ports} want={want_ports}")
+            bad += 1
+
+    # 漂移必须被抓出来（这条是这套对账存在的全部理由）
+    import tempfile
+    # 布局必须照真实仓的关系来：spec 在脚本目录的**上一级**再进 .trellis/spec/，
+    # 所以这里建 root/{pkg, spec} 两个兄弟目录，directory 传 root/pkg。
+    # 第一版我把 spec 建在 td 里面，normpath 直接跑到 /tmp/spec 去了，
+    # 于是 check_spec 走的是"spec 不存在→SKIP 返回 0"分支，
+    # 我差点把"漂移检测失效"当成"断言写错"来改——又是测量装置骗我（第三次）。
+    root = tempfile.mkdtemp()
+    pkg = os.path.join(root, "pkg")
+    os.makedirs(os.path.join(root, "spec"))
+    os.makedirs(pkg)
+    open(os.path.join(pkg, "a_verify.py"), "w", encoding="utf-8").write("PORT = 5111\n")
+    open(os.path.join(pkg, "b_verify.py"), "w", encoding="utf-8").write("PORT = 5112\n")
+    spath = os.path.join(root, "spec", "verification-harness.md")
+    open(spath, "w", encoding="utf-8").write(
+        "| 端口 | 脚本 | 态 | 启停 |\n|---|---|---|---|\n"
+        "| 5111 | `a_verify` | mock | x |\n"
+        "| 5199 | `gone_verify` | mock | x |\n")   # 缺 b@5112，且多一行已不存在的脚本
+    orig_rel = SPEC_RELPATH
+    globals()["SPEC_RELPATH"] = os.path.join("..", "spec", "verification-harness.md")
+    try:
+        rc = check_spec(pkg)
+    finally:
+        globals()["SPEC_RELPATH"] = orig_rel
+    # 这里不捕获 stdout，只看返回值：漂移必须非零
+    print(f"{'PASS' if rc == 1 else 'FAIL'} 漂移检测：表缺行 + 表有过期行 → 必须非零（得 {rc}）")
+    if rc != 1:
+        bad += 1
+
+    total = len(cases) + 3 + len(tbl_cases) + 1
     print(f"\n===== ports_audit --selftest: {total - bad}/{total} PASS =====")
     return 1 if bad else 0
 

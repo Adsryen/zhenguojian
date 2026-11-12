@@ -202,6 +202,10 @@ def main():
               "跑 `python3 ports_audit.py --selftest` 确认抽取判据没退化。")
         return 1
     print(f"端口预检 OK：{len(_owner)} 个号被 {len(_per)} 个脚本独占，无争用")
+    # spec 表对账**只提示不拦路**：文档落后不是测试完整性问题，
+    # 用它卡住全量回归会让人开始绕过门禁（比没门禁更糟）。
+    # 要硬拦就单独跑 `ports_audit.py --check-spec`（我提交文档前自己跑）。
+    _ = ports_audit.check_spec(HERE)
 
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
