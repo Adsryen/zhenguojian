@@ -8,7 +8,7 @@
    桥不存在（VITE_MOCK/浏览器直开）只用 web API，不报错。
    挂载方式：App.vue 里 setupContextMenu() 一处调用，不改任何 view 组件。
    ================================================================ */
-import { t } from './i18n'
+import { t, tf } from './i18n'
 
 type CtxAction = () => void
 
@@ -149,12 +149,39 @@ function selectAllPageAction(): CtxAction {
 
 /* ---------- 菜单构建 ---------- */
 
+/* 「复制全部X」适用块：`data-ctx-copy-all=<kind>` 标在可整段复制的文本块上。
+   * 现在只有详情页简介用它；kind 走显式白名单，不做 `t('ctx.what.'+kind)` 拼接——
+   * 键名拼出来的字符串静态门禁查不到，写错也不报错。 */
+const COPY_ALL_KINDS: Record<string, string> = { summary: 'ctx.what.summary' }
+
+/** 取块内**可复制正文**：展开/收起这类附属控件的 label 不该进剪贴板。 */
+function copyAllText(block: Element): string {
+  const clone = block.cloneNode(true) as HTMLElement
+  clone.querySelectorAll('[data-ctx-strip]').forEach((n) => n.remove())
+  return (clone.textContent ?? '').trim()
+}
+
+/** 输入框内选区（v1 的 Qt 默认菜单里 QLineEdit 有复制/撤销；这边原来只给了剪切粘贴全选）。
+    * 撤销不做——见 research/v1-v2-contextmenu-parity.md：execCommand('undo')
+    * 对 Vue 受控输入不会同步 model，留着比没有更误导。 */
+function inputSelection(ctx: EditableCtx): string {
+  const { node } = ctx
+  const start = node.selectionStart ?? 0
+  const end = node.selectionEnd ?? 0
+  return end > start ? node.value.slice(start, end) : ''
+}
+
 function buildItems(e: MouseEvent): MenuItem[] {
   const inputCtx = editableContext(e.target)
   if (inputCtx) {
     const items: MenuItem[] = [
       { label: t('ctx.cut'), hint: 'Ctrl+X', run: cutAction(inputCtx) }
     ]
+    const sel = inputSelection(inputCtx)
+    if (sel) {
+      items.splice(1, 0, { label: t('ctx.copy'), hint: 'Ctrl+C',
+                           run: () => void clipboardWrite(sel) })
+    }
     if (!inputCtx.isPassword) {
       items.push({ label: t('ctx.paste'), hint: 'Ctrl+V', run: pasteAction(inputCtx) })
     }
@@ -162,6 +189,22 @@ function buildItems(e: MouseEvent): MenuItem[] {
     return items
   }
   const selected = window.getSelection()?.toString() ?? ''
+  const copyAllBlock = e.target instanceof Element ? e.target.closest('[data-ctx-copy-all]') : null
+  const copyAllKey = copyAllBlock ? COPY_ALL_KINDS[copyAllBlock.getAttribute('data-ctx-copy-all') ?? ''] : undefined
+  if (copyAllBlock && copyAllKey) {
+    // v1 的三项：复制（只有有选区时才给）/ 复制全部简介 / 全选。
+    // v1 是"禁用"，这里改成"不给"——菜单里点不动的行只会让人以为坏了。
+    const items: MenuItem[] = []
+    if (selected.trim().length > 0) {
+      items.push({ label: t('ctx.copy'), hint: 'Ctrl+C', run: copySelectionAction(selected) })
+    }
+    items.push({
+      label: tf('ctx.copyAll', { what: t(copyAllKey) }),
+      run: () => void clipboardWrite(copyAllText(copyAllBlock))
+    })
+    items.push({ label: t('ctx.selectAll'), hint: 'Ctrl+A', run: selectAllPageAction() })
+    return items
+  }
   if (selected.trim().length > 0) {
     return [
       { label: t('ctx.copy'), hint: 'Ctrl+C', run: copySelectionAction(selected) },

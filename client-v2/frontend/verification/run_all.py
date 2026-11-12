@@ -85,6 +85,18 @@ def git_revert_shots(files):
     return r.returncode == 0
 
 
+def declared_checks(script_path):
+    """脚本里 `check(` 的调用点数（不含 def 那行）。
+
+    为什么要在报表里带上它：第二十二轮我写 `contextmenu_verify` 时有条断言包在
+    `if img.count() > 0:` 里，那一页恰好没图就**整条静默跳过**，
+    而脚本照样打 `RESULT: ALL PASS`。声明数与打印数一比才看得见"少测了几条"——
+    和第 27 轮"手写名单管名字不管覆盖"是同一个病根。
+    """
+    text = open(script_path, encoding="utf-8").read()
+    return sum(1 for line in text.splitlines() if re.match(r"\s*check\(", line))
+
+
 def parse_run(out, code, secs, name):
     """把一次脚本运行拆成可报表的字段。**纯函数**，`--selftest` 钉住它。
 
@@ -179,6 +191,11 @@ def main():
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     ap.add_argument("--no-audit", action="store_true",
                     help="让 i18n_sweep 跳过整页 en 审计（默认是跑的，别顺手关掉）")
+    ap.add_argument("--audit-checks", action="store_true",
+                    help="顺带对账每个脚本的声明 check 数与实际打印行数。"
+                         "**只当人工判读的线索**：循环里的 check 会打印多次、"
+                         "失败分支里的 check 平时不打印，都对不上（本轮实测 6 个脚本里"
+                         "只有 1 个是真被条件跳过）。所以默认关掉，免得狼来了。")
     ap.add_argument("--selftest", action="store_true",
                     help="只跑内置表驱动自测（还原判据），不启动任何验收脚本")
     ap.add_argument("--keep-shots", action="store_true", help="保留脚本重写的截图")
@@ -217,10 +234,11 @@ def main():
     print(f"{'脚本':<36}{'exit':>5}{'PASS':>6}{'FAIL':>6}{'秒':>5}  残留端口  最后一行")
     print("-" * 118)
 
-    leaks, bad = [], []
+    leaks, bad, silent = [], [], []
     for f in scripts:
         mine = declared_ports(os.path.join(HERE, f))
         res = run_script(f, args.timeout, args.no_audit)
+        res["declared"] = declared_checks(os.path.join(HERE, f))
         leftover = sorted(listening_ports() & mine)
         if leftover:
             leaks.append((f, leftover))
@@ -228,6 +246,13 @@ def main():
             bad.append(res)
         print(f"{res['name']:<36}{res['code']:>5}{res['passed']:>6}{res['failed']:>6}"
               f"{res['secs']:>5}  {(','.join(leftover) or '-'):<10} {res['summary']}")
+        # 打印数 = PASS+FAIL 行；比声明少就是**有断言没跑到**（条件分支跳过）。
+        printed = res["passed"] + res["failed"]
+        if args.audit_checks and res["code"] == 0 and printed < res["declared"]:
+            print(f"    ⚠ 静默跳过 {res['declared'] - printed} 条："
+                  f"声明 {res['declared']} 打印 {printed}"
+                  "（候选：可能被条件跳过，也可能是循环/失败分支里的 check 造成口径差）")
+            silent.append((res["name"], res["declared"], printed))
         if res["fail_lines"]:
             for l in res["fail_lines"][:6]:
                 print(f"    ↳ {l[:150]}")
@@ -237,7 +262,12 @@ def main():
             print(f"    ⚠ stderr: {res['err'][:160]}")
 
     total = len(scripts)
-    print(f"\nexit0 {total - len(bad)}/{total}；失败 {len(bad)}；端口泄漏 {len(leaks)} 处")
+    if silent:
+        print(f"\静默跳过候选（{len(silent)} 个脚本声明数 > 打印数，需人工判读）：")
+        for name, dec, pri in silent:
+            print(f"  {name}: 声明 {dec} 打印 {pri}")
+    print(f"\nexit0 {total - len(bad)}/{total}；失败 {len(bad)}；端口泄漏 {len(leaks)} 处"
+          + (f"；静默跳过候选 {len(silent)} 个" if silent else ""))
     for f, ports in leaks:
         print(f"  泄漏：{f} 跑完仍占 {ports}")
     if not args.keep_shots:

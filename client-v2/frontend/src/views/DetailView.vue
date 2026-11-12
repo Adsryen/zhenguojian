@@ -567,8 +567,12 @@ watch(
           <div v-if="metaTags.length" class="chips tag-row">
             <span v-for="t in metaTags" :key="t" class="chip static">{{ t }}</span>
           </div>
-          <p v-if="meta.description" class="desc" :class="{ expanded: descExpanded }" @click="descExpanded = !descExpanded">
-            {{ meta.description }}<span v-if="!descExpanded && meta.description.length > 120" class="more">{{ t('detail.expand') }}</span>
+          <!-- data-ctx-copy-all="summary"：右键这块文本时菜单给「复制全部简介」
+               （v1 widgets.py:705-716 的第三项，v2 之前只有按钮没有菜单项）。
+               折叠态下 DOM 里仍是整段文本，复制拿到的是全文，与 v1 toPlainText 一致。 -->
+          <p v-if="meta.description" class="desc" data-ctx-copy-all="summary"
+             :class="{ expanded: descExpanded }" @click="descExpanded = !descExpanded">
+            {{ meta.description }}<span v-if="!descExpanded && meta.description.length > 120" class="more" data-ctx-strip>{{ t('detail.expand') }}</span>
           </p>
           <p v-if="anchorText" class="anchor text-muted">{{ anchorText }}</p>
         </div>

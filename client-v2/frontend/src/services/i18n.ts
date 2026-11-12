@@ -209,6 +209,11 @@ const zh: Record<string, string> = {
   'ctx.cut': '剪切',
   'ctx.paste': '粘贴',
   'ctx.selectAll': '全选',
+  /* v1 简介控件的右键菜单三项：复制（无选区时禁用）/ 复制全部简介 / 全选
+     （widgets.py:705-716）。v2 之前对简介只有详情页那个「复制简介」按钮，
+     菜单里少了「复制全部简介」这一项——本轮按 target 补回来。 */
+  'ctx.copyAll': '复制全部{what}',
+  'ctx.what.summary': '简介',
 
   // ---- 封面失败警示条（covers 诊断 → DiscoverView banner） ----
   'covers.banner.missingFfmpeg':
@@ -869,6 +874,8 @@ const en: Record<string, string> = {
   'ctx.cut': 'Cut',
   'ctx.paste': 'Paste',
   'ctx.selectAll': 'Select All',
+  'ctx.copyAll': 'Copy all {what}',
+  'ctx.what.summary': 'summary',
 
   // ---- Cover failure banner (covers diagnostics → DiscoverView banner) ----
   'covers.banner.missingFfmpeg':
