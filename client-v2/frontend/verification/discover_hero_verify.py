@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""discover_hero_verify —— 发现页（找剧）v1 质感对齐三项的 mock 端到端验收。
+"""discover_hero_verify —— 发现页（找剧）mock 端到端验收（hero 大卡已按用户反馈移除）。
 
-对齐的 v1 语义：
-  - hero 大卡：browse_panel.py:388-394（首个分类 items[0] 上墙剔除、其余进网格）
-                + poster_wall.py:307-427 _WallHero（高 260、常态不描边、hover accent、点击进详情）
+覆盖语义：
+  - 无 hero：墙面从 items[0] 直接开始（v1 _WallHero 对应物已下线，用户嫌占位过大）
   - 下拉刷新：browse_panel.py:151（wall.set_refresh_enabled + refreshRequested → panel._refresh）
   - 集数徽标：poster_wall.py:52-69 _badge_text（集数优先）+ browse_panel.py:149 双徽标（VIP + 集数）
 
 断言：
-  A1 hero 渲染（260 高）+ hero=catalog items[0] + 网格不含 hero 同题
-  A2 hero 点击 → 详情路由
+  A1 hero 节点不存在 + items[0] 直接进网格 + 墙顶贴齐（无 hero 占位）
+  A2 首卡点击 → 详情路由
   A3 顶部下拉超阈值 → 触发既有强刷新（window.__zgjDiscover.refreshes 计数 +1）+ 指示文案切换
   A4 网格卡片集数徽标与 fixture 一致（期望值在页面内 import 同一份 fixtures 重算，非同段代码复制）
   A5 注入空数据 / 单条数据不崩（无 pageerror、状态正确）
@@ -147,33 +146,18 @@ async def main():
             for d in expected:
                 exp_by_title.setdefault(d["title"], d["badge"])
 
-            # ---------------- A1 hero 渲染 + 网格去重 ----------------
+            # ---------------- A1 无 hero + 全量进网格 ----------------
             hero = page.locator('[data-testid="poster-hero"]')
-            hero_visible = await hero.count() == 1 and await hero.first.is_visible()
-            box = await hero.first.bounding_box() if hero_visible else None
-            hero_title = ""
-            if hero_visible:
-                hero_title = (await hero.locator(".hero-title").first.inner_text()).strip()
-            hero_title_h = await hero.locator(".hero-title").first.bounding_box() if hero_visible else None
+            hero_nodes = await hero.count()
             cards = await page.evaluate(CARDS_JS)
             grid_titles = [c["title"] for c in cards]
-            check(
-                "A1 hero 大卡渲染（固定 260 高，v1 HERO_H）",
-                hero_visible and box and 258 <= box["height"] <= 262,
-                f"h={box and round(box['height'], 1)} title={hero_title!r}",
-            )
-            check("A1 hero = catalog items[0]", hero_title == first_title, f"hero={hero_title!r} items[0]={first_title!r}")
-            check(
-                "A1 网格剔除 hero 同题（v1 items[0] 上墙剔除 + 同标题重复位去重）",
-                hero_title != "" and grid_titles.count(hero_title) == 0,
-                f"网格 {len(grid_titles)} 张里 {hero_title!r} 出现 {grid_titles.count(hero_title)} 次",
-            )
-            check("A1 网格非空（hero 之外仍有内容）", len(cards) > 0, f"cards={len(cards)}")
-            check(
-                "A1 hero 版式：封面槽 160 宽 + 标题在右",
-                bool(hero_title_h) and hero_title_h["x"] > box["x"] + 150,
-                f"titleX=+{hero_title_h and round(hero_title_h['x'] - box['x'], 1)}px",
-            )
+            check("A1 hero 大卡已移除（页面无 hero 节点）", hero_nodes == 0, f"hero_nodes={hero_nodes}")
+            check("A1 items[0] 直接进网格（不再上墙剔除）", first_title != "" and grid_titles and grid_titles[0] == first_title, f"grid[0]={grid_titles[:1]} items[0]={first_title!r}")
+            check("A1 网格非空", len(cards) > 0, f"cards={len(cards)}")
+            vptop = await page.evaluate(
+                "() => { const vp = document.querySelector('.pg-viewport');"
+                "  return vp ? vp.offsetTop : -1; }")
+            check("A1 墙顶贴齐（contentTop 无 hero 占位，≤8px）", 0 <= vptop <= 8, f"offsetTop={vptop}")
 
             # ---------------- A4 集数徽标 ----------------
             mismatch = [
@@ -244,42 +228,40 @@ async def main():
             await page.wait_for_timeout(900)
             cards_after = await page.evaluate(CARDS_JS)
             check(
-                "A3 刷新后回弹并原位复现 hero/网格（未闪成空墙）",
-                await hero.count() == 1 and len(cards_after) > 0,
-                f"cards={len(cards_after)}",
+                "A3 刷新后回弹并原位复现网格（未闪成空墙）",
+                len(cards_after) > 0 and cards_after[0]["title"] == first_title,
+                f"cards={len(cards_after)} first={cards_after[:1] and cards_after[0]['title']!r}",
             )
 
             # ---------------- A5 空 / 单条 ----------------
             await page.evaluate("() => { window.__zgjDiscoverInjectCatalog = 'empty' }")
             await force_refresh(page)
             empty_nodes = await page.locator(".pg-empty").count()
-            hero_nodes = await page.locator('[data-testid="poster-hero"]').count()
             await page.screenshot(path=SHOT_EMPTY)
             check(
-                "A5 空数据不崩（空态在位、hero 不出、无 pageerror）",
-                empty_nodes == 1 and hero_nodes == 0 and not errors,
-                f"empty={empty_nodes} hero={hero_nodes} errors={len(errors)}",
+                "A5 空数据不崩（空态在位、无 pageerror）",
+                empty_nodes == 1 and not errors,
+                f"empty={empty_nodes} errors={len(errors)}",
             )
 
             await page.evaluate("() => { window.__zgjDiscoverInjectCatalog = 'single' }")
             await force_refresh(page)
             single = await page.evaluate(CARDS_JS)
-            hero_nodes = await page.locator('[data-testid="poster-hero"]').count()
             check(
-                "A5 单条数据不崩（1 张普通卡、hero 让位、徽标照常）",
-                len(single) == 1 and hero_nodes == 0 and bool(single[0]["badge"]),
-                f"cards={len(single)} hero={hero_nodes} 例={single[:1]}",
+                "A5 单条数据不崩（1 张普通卡、徽标照常）",
+                len(single) == 1 and bool(single[0]["badge"]),
+                f"cards={len(single)} 例={single[:1]}",
             )
 
             await page.evaluate("() => { delete window.__zgjDiscoverInjectCatalog }")
             await force_refresh(page)
 
-            # ---------------- A2 hero 点击进详情 ----------------
+            # ---------------- A2 首卡点击进详情 ----------------
             await page.screenshot(path=SHOT)
-            await hero.first.click()
+            await page.locator(".pg-viewport .poster").first.click()
             await page.wait_for_timeout(900)
             url = page.url
-            check("A2 hero 点击 → 详情路由", "detail" in url, url)
+            check("A2 首卡点击 → 详情路由", "detail" in url, url)
 
             await browser.close()
     finally:
