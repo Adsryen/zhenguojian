@@ -57,7 +57,10 @@ jobs:
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
           $LASTEXITCODE -eq 0 -or (throw "vet failed")
-          go build -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui" -o build/bin/client-v2.exe .
+          # 发布版本号编译进二进制（main.buildVersion）：版本判定与「应用版本」的第一权威，
+          # 不依赖 exe 同级 build-info.json（单文件更新后旧文件会污染判定）。dispatch 跑=dev。
+          $binVer = if ("$env:GITHUB_REF" -like "refs/tags/*") { $env:GITHUB_REF_NAME } else { "v0.0.0-dev" }
+          go build -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -trimpath -ldflags "-s -w -H=windowsgui -X main.buildVersion=$binVer" -o build/bin/client-v2.exe .
           if (-not (Test-Path build/bin/client-v2.exe)) { throw "client-v2.exe 未产出" }
 
       - name: Build info

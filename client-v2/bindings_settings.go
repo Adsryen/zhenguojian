@@ -33,23 +33,36 @@ func (a *App) SaveResourceSettings(settingsJSON string) (string, error) {
 	return marshalJSON(data)
 }
 
-// GetBuildInfo 打包指纹：优先 exe 同级 build-info.json（发布流程写入），
-// 其次构建期 VCS 注入，都缺失时返回 unknown。
+// GetBuildInfo 打包指纹与版本：构建期注入的 buildVersion 永远置顶（防同级残留
+// 旧 build-info.json 把版本号/指纹拉回旧值），其余字段取 exe 同级 build-info.json
+// （发布流程写入），再退构建期 VCS 戳，都缺失时返回 unknown。
 func (a *App) GetBuildInfo() string {
+	out := map[string]any{}
 	if exe, err := os.Executable(); err == nil {
 		if body, err := os.ReadFile(filepath.Join(filepath.Dir(exe), "build-info.json")); err == nil {
-			var out map[string]any
-			if json.Unmarshal(body, &out) == nil && len(out) > 0 {
-				if s, err := marshalJSON(out); err == nil {
-					return s
+			var file map[string]any
+			if json.Unmarshal(body, &file) == nil {
+				for k, v := range file {
+					out[k] = v
 				}
 			}
 		}
 	}
-	if bi := readBuildVCS(); bi != nil {
-		if s, err := marshalJSON(bi); err == nil {
-			return s
+	if len(out) == 0 {
+		if bi := readBuildVCS(); bi != nil {
+			for k, v := range bi {
+				out[k] = v
+			}
 		}
+	}
+	if buildVersion != "" {
+		out["version"] = buildVersion
+	}
+	if len(out) == 0 {
+		return `{"revision":"unknown"}`
+	}
+	if s, err := marshalJSON(out); err == nil {
+		return s
 	}
 	return `{"revision":"unknown"}`
 }
