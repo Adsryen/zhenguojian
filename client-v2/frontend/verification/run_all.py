@@ -26,6 +26,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND = os.path.dirname(HERE)
+ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))  # git 的 cwd，porcelain 路径是相对它输出的
 DEFAULT_TIMEOUT = 340
 
 
@@ -40,10 +41,26 @@ def listening_ports():
     return set(re.findall(r":(51\d{2})\b", out))
 
 
-def git_revert_shots():
-    """把本轮脚本重写的截图还原：截图应当跟随**改动了它的代码**一起提交，
-    而不是被一次纯回归刷成 20 个二进制噪声 diff。"""
-    r = subprocess.run(["git", "checkout", "--", HERE], capture_output=True, text=True, cwd=FRONTEND)
+def dirty_shots():
+    """本轮被脚本重写的截图（只认 .png，别的文件一概不碰）。"""
+    r = subprocess.run(["git", "status", "--porcelain", "--", HERE],
+                       capture_output=True, text=True, cwd=ROOT)
+    return [l[3:].strip().strip('"') for l in r.stdout.splitlines()
+            if l[1:2] == "M" and l.rstrip().endswith(".png")]
+
+
+def git_revert_shots(files):
+    """只还原**截图**：截图应当跟随改动它的那次代码提交，而不是被一次纯回归刷成
+    20 个二进制噪声 diff。
+
+    ⚠ 这里以前写的是 `git checkout -- <verification 目录>`——那会连同该目录里
+    **未提交的代码改动一起丢掉**。第十六轮之后我第一次跑全量就把自己刚改好、
+    还没提交的白名单收紧和计数修正整个吞掉，且退出码 0、一句提示都没有。
+    工具默认行为绝不能吞未提交工作：现在只按 .png 精确还原，
+    非截图的脏文件一律保留并显式报出来。"""
+    if not files:
+        return True
+    r = subprocess.run(["git", "checkout", "--", *files], capture_output=True, text=True, cwd=ROOT)
     return r.returncode == 0
 
 
@@ -107,7 +124,14 @@ def main():
     for f, ports in leaks:
         print(f"  泄漏：{f} 跑完仍占 {ports}")
     if not args.keep_shots:
-        print("截图还原：", "OK" if git_revert_shots() else "失败（git 不可用？），改用 --keep-shots 手动处理")
+        shots = dirty_shots()
+        others = [l for l in subprocess.run(["git", "status", "--porcelain", "--", HERE],
+                                            capture_output=True, text=True, cwd=ROOT).stdout.splitlines()
+                  if l[1:2] == "M" and not l.rstrip().endswith(".png")]
+        ok = git_revert_shots(shots)
+        print(f"截图还原：{'OK' if ok else '失败'}（{len(shots)} 张）")
+        if others:
+            print(f"  ⚠ 该目录还有 {len(others)} 个非截图改动被保留（不会被还原）：{others[:5]}")
     return 1 if (bad or leaks) else 0
 
 
