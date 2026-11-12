@@ -163,6 +163,9 @@ TS_EXEMPT = {
         # 从 i18n 取句子，这两句中文永远只进 console/日志，不进 DOM。
         ("本地文件已不存在", "mock 与 Go `PlayerOpenLocal` 同形的日志串；界面文案走 player.localMissing（按 code 取）"),
         ("只允许播放下载目录下的成品文件", "同上，对应 Go 的 [outside_root]；界面走 player.localOutside"),
+        # 同一族：mock 的失败注入缝。句子只进 ApiError.message（日志/诊断），
+        # 界面按 catch 分支显示 i18n 的 downloads.saveDanmakuFail。
+        ("mock 保存弹幕开关失败", "VITE_MOCK 失败注入的日志串；用户看到的是 downloads.saveDanmakuFail 那句"),
         ("mock detail 故障注入", "VITE_MOCK 专用的故障注入标记：只作为 throw 的 message 存在，"
                                "而 followCheck 的失败分支只统计条数、不把异常文案显示给用户（v1 也是"
                                "「失败不打扰用户」）；界面能看到的只有 i18n 里的「追剧检查：N 部暂时取不到更新」。"),

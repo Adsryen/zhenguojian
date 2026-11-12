@@ -54,6 +54,9 @@ export interface DownloadsStoreState {
   merges: MergeEntryRow[]
   status: string
   mergeVerify: boolean
+  /** R22a③「下载时保存弹幕」：真值在 Go（downloads.state.json），这里只是镜像。
+   *  默认关，与 v1 一致。 */
+  danmakuDownload: boolean
   settings: DownloadSettingsSnapshot | null
   /** 核心下载根目录（bindings DownloadDirectory），归档页自证扫描位置 */
   downloadDir: DownloadDirectoryInfo | null
@@ -72,6 +75,7 @@ export const useDownloadsStore = defineStore('downloads', {
     merges: [],
     status: '',
     mergeVerify: true,
+    danmakuDownload: false,
     settings: null,
     downloadDir: null,
     archive: null,
@@ -181,6 +185,9 @@ export const useDownloadsStore = defineStore('downloads', {
       this.merges = snap.merges ?? []
       this.status = snap.status ?? ''
       if (typeof snap.mergeVerify === 'boolean') this.mergeVerify = snap.mergeVerify
+      // 轮询载荷里带上了旗标（payloadLocked），所以"另一处改了开关"能自我纠正，
+      // 不靠进设置页才读一次
+      if (typeof snap.danmakuDownload === 'boolean') this.danmakuDownload = snap.danmakuDownload
     },
 
     async refresh() {
@@ -196,6 +203,7 @@ export const useDownloadsStore = defineStore('downloads', {
       try {
         this.settings = await api.downloadSettings()
         this.mergeVerify = this.settings.mergeVerify !== false
+        this.danmakuDownload = !!this.settings.danmakuDownload
       } catch (err) {
         this.lastError = err instanceof Error ? err.message : String(err)
       }
@@ -278,6 +286,26 @@ export const useDownloadsStore = defineStore('downloads', {
         return null
       } finally {
         this.busyId = ''
+      }
+    },
+
+    /** 即点即存（v1 那个勾选框就是 toggled 直接写设置，不等"保存"按钮）。
+     *  失败时**先回滚再抛**：调用方要能区分"写成功了"和"写失败弹回来了"。
+     *  ⚠ 上一版返回最终值，于是失败(=prev) 与幂等成功(=prev) 在调用方看来一模一样，
+     *  界面把一次写失败说成了「已关闭：不再保存弹幕文件」——
+     *  这话是真的（现在确实是关着），但它把"没写进去、重启就会变回去"这件事藏掉了。
+     *  这是 danmaku_toggle_verify ⑥b 实测到的，不是我读代码想到的。 */
+    async setDanmakuDownload(on: boolean): Promise<boolean> {
+      const prev = this.danmakuDownload
+      this.danmakuDownload = on
+      try {
+        const res = await api.setDanmakuDownload(on)
+        this.danmakuDownload = !!res.danmakuDownload
+        return this.danmakuDownload
+      } catch (err) {
+        this.danmakuDownload = prev // 写失败就回滚，别让勾选框骗人
+        this.lastError = err instanceof Error ? err.message : String(err)
+        throw err
       }
     },
 

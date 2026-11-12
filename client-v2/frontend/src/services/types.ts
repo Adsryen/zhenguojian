@@ -352,6 +352,8 @@ export interface NativeApi {
   downloadRemoveBatch(ids: string[]): Promise<{ completed: string[]; failures: Record<string, string> }>
   downloadSettings(): Promise<DownloadSettingsSnapshot>
   saveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): Promise<DownloadSettingsSnapshot>
+  /** R22a③：单独设「下载时保存弹幕」，不连带改并发（v1 那个勾选框就是即点即存）。 */
+  setDanmakuDownload(on: boolean): Promise<{ danmakuDownload: boolean }>
   mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
   mergeCancel(id: string): Promise<{ ok: boolean }>
   downloadDirectory(): Promise<DownloadDirectoryInfo>
@@ -576,6 +578,9 @@ export interface DownloadSnapshot {
   merges: MergeEntryRow[]
   status?: string
   mergeVerify?: boolean
+  /** R22a③：轮询载荷带下来的「下载时保存弹幕」当前值（Go payloadLocked）。
+   *  带上它，前端在"别处改了开关"后能自我纠正，而不是要重进设置页。 */
+  danmakuDownload?: boolean
 }
 
 /** App.DownloadStart entries 单元 */
@@ -585,7 +590,10 @@ export interface DownloadEntry {
 }
 
 /** App.DownloadSettings：资源设置 + mergeVerify */
-export type DownloadSettingsSnapshot = ResourceSettingsSnapshot & { mergeVerify?: boolean }
+export type DownloadSettingsSnapshot = ResourceSettingsSnapshot & { mergeVerify?: boolean
+  /** R22a③「下载时保存弹幕」（v1 勾选框，默认关）。真值在 Go 的 downloads.state.json，
+   *  不在 localStorage 另存一份——抓弹幕发生在下载完成那一刻，页面关掉也得能跑。 */
+  danmakuDownload?: boolean }
 
 /** 打包提交指纹（exe 同级 build-info.json 或构建期 VCS 注入） */
 export interface BuildInfo {

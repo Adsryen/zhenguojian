@@ -323,6 +323,9 @@ const showSettings = ref(false)
 const conc = ref(2)
 const bySource = ref(false)
 const verify = ref(true)
+// R22a③「下载时保存弹幕」（v1 downloads.py:1095-1099 那个勾选框，默认关）
+const saveDanmaku = ref(false)
+const savingDanmaku = ref(false)
 const savingSettings = ref(false)
 
 watch(
@@ -334,6 +337,24 @@ watch(
   },
   { immediate: true }
 )
+
+// 弹幕开关单独跟着 store（它即点即存，不进那个"保存"按钮的批量提交）
+watch(() => store.danmakuDownload, (on) => { saveDanmaku.value = !!on }, { immediate: true })
+
+async function onSaveDanmaku() {
+  savingDanmaku.value = true
+  try {
+    const got = await store.setDanmakuDownload(saveDanmaku.value)
+    showToast(got ? t('downloads.saveDanmakuOn') : t('downloads.saveDanmakuOff'))
+  } catch {
+    // 写失败：勾选框已经被 store 弹回原值，这里必须说一句"没写进去、已回滚"。
+    // 不说的那版会把失败播报成一次正常操作（⑥b 实测）。
+    saveDanmaku.value = store.danmakuDownload
+    showToast(t('downloads.saveDanmakuFail'))
+  } finally {
+    savingDanmaku.value = false
+  }
+}
 
 async function onSaveSettings() {
   savingSettings.value = true
@@ -472,6 +493,13 @@ async function onEnqueue() {
     <div class="panel-row">
       <label class="p-check"><input v-model="bySource" type="checkbox" />{{ t('downloads.bySource') }}</label>
       <label class="p-check"><input v-model="verify" type="checkbox" />{{ t('downloads.verifyDecode') }}</label>
+      <!-- v1 downloads.py:1095-1099：勾上后每集解密完成会额外保存同名 .ass/.danmaku.json，
+           默认关；即点即存（v1 的 toggled 直接写设置，不等下面的保存按钮）。 -->
+      <label class="p-check">
+        <input v-model="saveDanmaku" type="checkbox" data-testid="dl-save-danmaku"
+               :disabled="savingDanmaku" :title="t('downloads.saveDanmakuHint')"
+               @change="onSaveDanmaku" />{{ t('downloads.saveDanmaku') }}
+      </label>
     </div>
     <div v-if="store.settings?.warning" class="p-warn text-muted">{{ store.settings.warning }}</div>
     <div class="panel-row">

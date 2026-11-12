@@ -348,6 +348,8 @@ const realApi: NativeApi = {
   downloadSettings: () => callGo<DownloadSettingsSnapshot>('DownloadSettings'),
   saveDownloadSettings: (concurrency, bySource, mergeVerify) =>
     callGo<DownloadSettingsSnapshot>('SaveDownloadSettings', concurrency, bySource, mergeVerify),
+  setDanmakuDownload: (on) =>
+    callGo<{ danmakuDownload: boolean }>('DownloadSetDanmakuDownload', on),
   mergeStart: (mode, drama, jobIds) =>
     callGo<{ queued: number; replaced: boolean; episodes: number[] }>(
       'MergeStart',
@@ -930,6 +932,20 @@ const mockApi: NativeApi = {
   downloadSettings: async () => mockDownloadSettings(),
   saveDownloadSettings: async (concurrency, bySource, mergeVerify) =>
     mockSaveDownloadSettings(concurrency, bySource, mergeVerify),
+  setDanmakuDownload: async (on) => {
+    // 测试缝：`__zgjFailDanmakuToggle` 让它失败，专门验证
+    // "写失败 → 勾选框弹回原值 + 明说已回滚"这条分支。
+    // 没有缝的话这条分支只能靠真断桥，而它恰恰是最容易写错的一种
+    // （失败了却把勾选留在 true，等于界面在骗人）。
+    if ((window as any)?.__zgjFailDanmakuToggle) {
+      throw new ApiError('mock 保存弹幕开关失败', 'mock_fail')
+    }
+    // mock 面把开关存进示例态设置表同一个键（真值语义与 Go 一致：默认关）
+    const s = mockDownloadSettings()
+    mockSaveDownloadSettings(
+      s.downloadConcurrency ?? 2, !!s.downloadBySource, s.mergeVerify !== false, !!on)
+    return { danmakuDownload: !!on }
+  },
   mergeStart: async (mode, drama, jobIds) => mockMergeStart(mode, drama, jobIds),
   mergeCancel: async (id) => mockMergeCancel(id),
   downloadDirectory: async () => mockDownloadDirectory(),

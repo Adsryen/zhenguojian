@@ -487,7 +487,7 @@ interface MockDlState {
   timer?: ReturnType<typeof setInterval>
 }
 
-function mockDlSettings(): Required<Pick<DownloadSettingsSnapshot, 'downloadConcurrency' | 'downloadBySource' | 'mergeVerify'>> {
+function mockDlSettings(): Required<Pick<DownloadSettingsSnapshot, 'downloadConcurrency' | 'downloadBySource' | 'mergeVerify' | 'danmakuDownload'>> {
   try {
     const raw = localStorage.getItem(MOCK_DL_SETTINGS_KEY)
     if (raw) {
@@ -495,13 +495,15 @@ function mockDlSettings(): Required<Pick<DownloadSettingsSnapshot, 'downloadConc
       return {
         downloadConcurrency: typeof s.downloadConcurrency === 'number' ? s.downloadConcurrency : 2,
         downloadBySource: !!s.downloadBySource,
-        mergeVerify: s.mergeVerify === undefined ? true : !!s.mergeVerify
+        mergeVerify: s.mergeVerify === undefined ? true : !!s.mergeVerify,
+        // 「下载时保存弹幕」默认**关**（v1 tools.danmaku_download_enabled 默认 False）
+        danmakuDownload: !!s.danmakuDownload
       }
     }
   } catch {
     /* 忽略：回落默认 */
   }
-  return { downloadConcurrency: 2, downloadBySource: false, mergeVerify: true }
+  return { downloadConcurrency: 2, downloadBySource: false, mergeVerify: true, danmakuDownload: false }
 }
 
 function mockDlSaveSettings(s: DownloadSettingsSnapshot): void {
@@ -510,7 +512,8 @@ function mockDlSaveSettings(s: DownloadSettingsSnapshot): void {
     JSON.stringify({
       downloadConcurrency: s.downloadConcurrency ?? 2,
       downloadBySource: !!s.downloadBySource,
-      mergeVerify: s.mergeVerify !== false
+      mergeVerify: s.mergeVerify !== false,
+      danmakuDownload: !!s.danmakuDownload
     })
   )
 }
@@ -746,14 +749,15 @@ export function mockDownloadSettings(): DownloadSettingsSnapshot {
   }
 }
 
-export function mockSaveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): DownloadSettingsSnapshot {
+export function mockSaveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean, danmakuDownload = false): DownloadSettingsSnapshot {
   const snap: DownloadSettingsSnapshot = {
     proxyMode: 'auto',
     catalogConcurrency: 3,
     catalogIntervalMs: 250,
     downloadConcurrency: Math.max(1, Math.min(8, Math.round(concurrency || 2))),
     downloadBySource: !!bySource,
-    mergeVerify: !!mergeVerify
+    mergeVerify: !!mergeVerify,
+    danmakuDownload: !!danmakuDownload
   }
   mockDlSaveSettings(snap)
   mockDlState().status = '下载设置已保存（示例数据）'
