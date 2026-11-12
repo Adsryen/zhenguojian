@@ -301,6 +301,40 @@ func (a *App) SaveWatch(dramaJSON string, episode, position, duration float64, f
 	return `{"ok":true}`, nil
 }
 
+// SaveLocalWatch 记一条**本地文件**的观看进度（R22a 的第①件：写入侧）。
+//
+// 这是本轮最容易写错的一处，先把事实钉住：
+// `Store.SaveLocalWatch`（store.go:1445）**早就移植好了**，含 v1 的去抖语义
+// （同一 local_path + 位置/时长差都 <0.5s + 未看完 → 直接不写）。
+// 但它**没有绑定、没有调用方、也没有一条单测**——
+// 所以第三十八轮我写对账时说"有字段、会序列化，但没有任何代码写它"其实还轻了：
+// 写入函数都在，缺的同样是"对外口子 + 调用点 + 测试"（和 R6 下一季、R23 观察器同一个形状）。
+//
+// 与 v1 的一处**已知不同**（不是我偷懒，是 store.go:1434-1444 注释里写明的取舍）：
+// v1 的 `save_local_watch(path, …)` 会用文件名 stem 去 `download_dir()/episodes.json`
+// 反查是哪部剧（watchstore.py:529-581 `_resolve_local`，含 `local:<stem>` 兜底）；
+// v2 的 Store 版本**故意不带那个解析器**（episodes.json 属于另一个子系统），
+// 改成由调用方把 (dramaID, title) 传进来。所以这条绑定的入参多一个 dramaJSON。
+// 反查这件事在 v2 里归前端（它本来就知道自己点的是哪一行），
+// 归到前端也就等于**不做 episodes.json 那套字符串匹配**。
+func (a *App) SaveLocalWatch(dramaJSON, path string, position, duration float64, finished bool) (string, error) {
+	s, err := getWatchStore()
+	if err != nil {
+		return "", err
+	}
+	d, err := decodeWatchDrama(dramaJSON)
+	if err != nil {
+		return "", err
+	}
+	// 本地进度只在"确实知道是哪部剧"时才记：
+	// dramaID 空时 Store 那边第一行就 return（v1 同形），这里不假装写成功。
+	if d.ID == "" {
+		return "", errors.New("本地观看记录需要剧集信息")
+	}
+	s.SaveLocalWatch(d.ID, d.Title, path, position, duration, finished)
+	return `{"ok":true}`, nil
+}
+
 func (a *App) RemoveHistory(dramaID string) (string, error) {
 	s, err := getWatchStore()
 	if err != nil {
