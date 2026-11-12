@@ -66,11 +66,11 @@ async function copyCoverDiagnostics() {
       try {
         await app.ClipboardWrite(text)
       } catch (e: any) {
-        showToast(tf('covers.banner.copyFailMsg', { m: e?.message ?? e }))
+        showToast(tf('common.copyFail', { m: e?.message ?? e }))
         return
       }
     } else {
-      showToast(t('covers.banner.copyNoClipboard'))
+      showToast(t('common.copyNoClipboard'))
       return
     }
   }
@@ -304,14 +304,14 @@ onBeforeUnmount(() => {
 
   <div v-if="store.sourcesError" class="state-block">
     <div>{{ tf('discover.sourceListFail', { m: store.sourcesError }) }}</div>
-    <button class="btn" @click="store.loadSources(true)">{{ t('discover.retry') }}</button>
+    <button class="btn" @click="store.loadSources(true)">{{ t('common.retry') }}</button>
   </div>
   <div v-else-if="error && !loading" class="state-block">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" />
     </svg>
     <div>{{ error }}</div>
-    <button class="btn" @click="loadFirst(true)">{{ t('discover.retry') }}</button>
+    <button class="btn" @click="loadFirst(true)">{{ t('common.retry') }}</button>
   </div>
   <div v-else class="grid-wrap">
     <PosterGrid

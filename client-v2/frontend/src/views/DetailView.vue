@@ -138,11 +138,41 @@ function goPlay() {
    「单次最多添加 500 集」），长季按 500 分块提交并累加 added。 */
 
 /** 真实入队文案（i18n.ts 本任务禁改，键表随返报上交，后续统一抽取） */
+/* v2-6-parity：本地 L 表迁入 i18n.ts 的 detail.*（zh 逐字不变）。
+   dlAllReady/dlToastGo 用 getter 而非取值常量：模块级求值会冻结 locale，
+   getter 每次渲染重算，切语言即时生效。 */
 const L = {
-  dlQueued: (n: number) => `已加入下载队列 ${n} 集`,
-  dlAllReady: '所选分集均已在下载队列中',
-  dlFail: (m: unknown) => `加入下载队列失败：${m}`,
-  dlToastGo: '查看下载队列'
+  dlQueued: (n: number) => tf('detail.dlQueued', { n }),
+  get dlAllReady() { return t('detail.dlAllReady') },
+  dlFail: (m: unknown) => tf('detail.dlFail', { m: String(m ?? '') }),
+  get dlToastGo() { return t('detail.dlToastGo') }
+}
+
+/** v1 main.py:185-186 copy_summary：复制完整简介（折叠态也复制全文，与展开无关）。
+    剪贴板 web API 优先 → Wails ClipboardWrite 兜底（与封面诊断复制同一套路）。 */
+async function copySummary() {
+  const text = (meta.value?.description || '').trim()
+  if (!text) {
+    showToast(t('detail.noDescription'))
+    return
+  }
+  try {
+    await navigator.clipboard.writeText(text)
+  } catch {
+    const app = (window as any).go?.main?.App
+    if (app?.ClipboardWrite) {
+      try {
+        await app.ClipboardWrite(text)
+      } catch (e: any) {
+        showToast(tf('common.copyFail', { m: e?.message ?? e }))
+        return
+      }
+    } else {
+      showToast(t('common.copyNoClipboard'))
+      return
+    }
+  }
+  showToast(t('detail.copySummaryDone'))
 }
 
 /** DownloadStart quality：0=核心自动选最高档（与 resolve 阶梯的 quality=1 语义无关） */
@@ -184,8 +214,8 @@ async function downloadCurrent() {
       ])
       showToast(
         added
-          ? `第${selectedEpisode.value}集已加入本地暂存队列（共 ${queueLength()} 项）。当前为示例/降级模式，尚未开始真实下载`
-          : `第${selectedEpisode.value}集已在队列中（共 ${queueLength()} 项）`
+          ? tf('detail.localQueuedOne', { n: selectedEpisode.value, q: queueLength() })
+          : tf('detail.localDupOne', { n: selectedEpisode.value, q: queueLength() })
       )
       return
     }
@@ -193,7 +223,7 @@ async function downloadCurrent() {
     toastQueued(added)
   } catch (e: any) {
     // 核心中文错误透出（磁盘剩余不足/下载集数无效/服务未初始化等）
-    showToast(downloadViaLocal() ? `获取播放地址失败：${e?.message ?? e}` : L.dlFail(e?.message ?? e))
+    showToast(downloadViaLocal() ? tf('detail.resolveFail', { m: e?.message ?? e }) : L.dlFail(e?.message ?? e))
   } finally {
     downloading.value = false
   }
@@ -216,8 +246,8 @@ async function downloadAll() {
     const added = enqueueDownloads(items)
     showToast(
       added
-        ? `已登记 ${added} 集到本地队列（共 ${queueLength()} 项）。当前为示例/降级模式，尚未开始真实下载`
-        : `本剧已全部在队列中（共 ${queueLength()} 项）`
+        ? tf('detail.localQueuedAll', { a: added, q: queueLength() })
+        : tf('detail.localAllReady', { q: queueLength() })
     )
     return
   }
@@ -239,9 +269,9 @@ async function onFollow() {
   // stores/watch：真值 Go watchstore ToggleFollow（无桥降级 localStorage 记录）
   try {
     const on = await watchStore.toggleFollow(d)
-    showToast(on ? `已追剧《${d.title}》` : `已取消追剧《${d.title}》`)
+    showToast(tf(on ? 'detail.followDone' : 'detail.unfollowDone', { t: d.title }))
   } catch (e: any) {
-    showToast(e?.message ?? '追剧操作失败')
+    showToast(e?.message ?? t('detail.followFail'))
   }
 }
 
@@ -414,7 +444,7 @@ watch(
         <div class="hero-side">
           <button class="btn back" @click="goBack">
             <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6" /></svg>
-            返回
+            {{ t('common.back') }}
           </button>
           <div class="cover-box" :class="{ empty: !coverResolved }">
             <img v-if="coverResolved" :src="coverUrl(coverResolved)" :alt="meta.title" />
@@ -423,7 +453,7 @@ watch(
         </div>
         <div class="hero-meta">
           <h1 class="title">
-            {{ meta.title || '（无标题）' }}
+            {{ meta.title || t('detail.noTitle') }}
             <span v-if="statusKey" class="status-pill" :class="statusKey === 'status.ongoing' ? 'ongoing' : 'finished'">{{ t(statusKey) }}</span>
             <span v-if="meta.vip" class="vip-chip">VIP</span>
           </h1>
@@ -438,7 +468,7 @@ watch(
             <span v-for="t in metaTags" :key="t" class="chip static">{{ t }}</span>
           </div>
           <p v-if="meta.description" class="desc" :class="{ expanded: descExpanded }" @click="descExpanded = !descExpanded">
-            {{ meta.description }}<span v-if="!descExpanded && meta.description.length > 120" class="more">…展开</span>
+            {{ meta.description }}<span v-if="!descExpanded && meta.description.length > 120" class="more">{{ t('detail.expand') }}</span>
           </p>
           <p v-if="anchorText" class="anchor text-muted">{{ anchorText }}</p>
         </div>
@@ -459,8 +489,8 @@ watch(
     </div>
     <div v-else-if="error" class="state-block">
       <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" /></svg>
-      <div>详情加载失败：{{ error }}</div>
-      <button class="btn" @click="loadDetail()">重试</button>
+      <div>{{ tf('detail.loadFailMsg', { m: error }) }}</div>
+      <button class="btn" @click="loadDetail()">{{ t('common.retry') }}</button>
     </div>
     <template v-else-if="drama">
       <!-- 演职员条（v2-D）：简介下方横排，discovery 未接入/失败时整条不渲染 -->
@@ -490,21 +520,25 @@ watch(
       <div class="actions">
         <button class="btn primary" :disabled="!chapters.length" @click="goPlay">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M8 5.5v13l11-6.5z" /></svg>
-          {{ selectedEpisode ? `播放第 ${selectedEpisode} 集` : '播放' }}
+          {{ selectedEpisode ? tf('detail.playEpisode', { n: selectedEpisode }) : t('detail.play') }}
         </button>
         <button class="btn" :disabled="!chapters.length || downloading" @click="downloadCurrent">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v12m0 0 4-4m-4 4-4-4M4 20h16" /></svg>
-          {{ downloading ? '处理中…' : '下载当集' }}
+          {{ downloading ? t('detail.downloading') : t('detail.downloadCurrent') }}
         </button>
-        <button class="btn" :disabled="!chapters.length || downloading" @click="downloadAll">下载全部（{{ chapters.length }} 集）</button>
-        <button class="btn" :class="{ toggled: followed }" @click="onFollow">{{ followed ? '已追剧 ✓' : '＋ 追剧' }}</button>
-        <button class="btn" :class="{ toggled: watched }" @click="onWatchedMark">{{ watched ? '已看过 ✓' : '看过' }}</button>
+        <button class="btn" :disabled="!chapters.length || downloading" @click="downloadAll">{{ tf('detail.downloadAll', { n: chapters.length }) }}</button>
+        <button class="btn" :class="{ toggled: followed }" @click="onFollow">{{ followed ? t('detail.followed') : t('detail.follow') }}</button>
+        <button class="btn" :class="{ toggled: watched }" @click="onWatchedMark">{{ watched ? t('detail.watched') : t('detail.watchMark') }}</button>
+        <button class="btn" :disabled="!meta.description" @click="copySummary">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
+          {{ t('detail.copySummary') }}
+        </button>
       </div>
 
       <!-- 选集 -->
       <div class="ep-section card">
         <div class="section-head">
-          <h2>选集</h2>
+          <h2>{{ t('detail.episodes') }}</h2>
           <span v-if="chapters.length" class="text-muted">{{ episodesHead }}</span>
           <span v-else class="text-muted">{{ t('detail.noEpisodes') }}</span>
         </div>

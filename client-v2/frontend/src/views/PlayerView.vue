@@ -351,7 +351,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="player">
     <header class="pl-top" ref="topEl">
-      <button class="pl-btn ghost" type="button" @click="closePlayer">← {{ t('player.back') }}</button>
+      <button class="pl-btn ghost" type="button" @click="closePlayer">← {{ t('common.back') }}</button>
       <h1 class="pl-title">{{ store.title || t('player.title') }}</h1>
       <div class="pl-badges">
         <span v-if="store.demoMode" class="pl-badge demo">{{ t('player.badgeDemo') }}</span>
