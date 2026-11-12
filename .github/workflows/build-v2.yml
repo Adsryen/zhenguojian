@@ -27,6 +27,11 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
+          # go:embed all:frontend/dist 要求该目录非空，而 dist 是构建产物（仓库里只有占位）：
+          # 不先起 npm 的话根包会 `[setup failed]  main.go:13:12: pattern all:frontend/dist`。
+          # 这里只需要"有文件可嵌"，真实资源由 windows job 的 Frontend 步骤产出并打包。
+          mkdir -p frontend/dist
+          test -f frontend/dist/index.html || printf '<!doctype html>' > frontend/dist/index.html
           mkdir -p "$RUNNER_TEMP/ov"
           python3 scripts/make-overlay.py "$RUNNER_TEMP/ov/overlay.json"
           go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./...
