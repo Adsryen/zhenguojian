@@ -15,7 +15,9 @@
      频段切分），故以 DOM data-gender（store state 镜像）断言，真实桥下即请求参数。
   ④ /reserve 与 /reserve?tab=calendar → router.replace → 落 #/calendar（旧占位合并）。
 
-方法：VITE_MOCK dev server（5182，--strictPort，自管理：端口被占则复用/自行拉起）。
+方法：VITE_MOCK dev server（**独占端口 5186**，启停走 `_devserver`：
+     进门先断言端口为空，**绝不复用别人的服务器**——旧版「端口被占则复用」会让
+     5182 上的 mock 孤儿冒充 detail_download_verify 的非 mock 服务器，制造 ② 段假红灯。
 localStorage 种子经 add_init_script 注入（zgj.follows / zgj.history），
 使 follow 列表非空且首行有进度（mock watchlist = localStorage 降级面）。
 
@@ -27,13 +29,15 @@ import json
 import os
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 from urllib.parse import urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FRONTEND = os.path.dirname(HERE)  # client-v2/frontend（本项目验证目录约定：frontend/verification/）
-PORT = 5182
+PORT = 5186
 BASE = f"http://127.0.0.1:{PORT}"
 EXEC = os.path.expanduser(
     "~/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headless-shell-linux64/chrome-headless-shell"
@@ -90,21 +94,8 @@ def row_for(page, title):
 async def main():
     from playwright.async_api import async_playwright
 
-    owned = None
-    if not port_open("127.0.0.1", PORT):
-        owned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-        for _ in range(60):
-            if port_open("127.0.0.1", PORT):
-                break
-            time.sleep(0.5)
-    if not port_open("127.0.0.1", PORT):
-        print("dev:mock 未能在 5182 启动")
-        return 2
+    # 端口预检 + 严格收口见 _devserver.py（旧写法「端口被占则复用」是 R8 假红灯的来源）
+    owned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="reserve-calendar")
 
     try:
         async with async_playwright() as pw:
@@ -212,12 +203,7 @@ async def main():
             await page.screenshot(path=os.path.join(HERE, "reserve-follow.png"))
             await browser.close()
     finally:
-        if owned is not None:
-            owned.terminate()
-            try:
-                owned.wait(5)
-            except Exception:
-                owned.kill()
+        _devserver.stop_dev(owned, PORT, name="reserve-calendar")
 
     fails = [r for r in RESULTS if r[0] == "FAIL"]
     print(f"\n== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ==")

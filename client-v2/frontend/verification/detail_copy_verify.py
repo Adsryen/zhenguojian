@@ -30,7 +30,6 @@ EXE = "/home/ryen/.cache/ms-playwright/chromium_headless_shell-1254/chrome-headl
 OUT = os.path.dirname(os.path.abspath(__file__))
 FRONT = os.path.abspath(os.path.join(OUT, ".."))
 BASE = "http://127.0.0.1:5183"
-PID = os.path.join(OUT, "dev-5183.pid")
 
 failures = []
 
@@ -44,34 +43,16 @@ def check(name, cond, detail=""):
         failures.append(name)
 
 
+import _devserver
+
+
 def start_server():
-    proc = subprocess.Popen(
-        ["npm", "run", "dev:mock", "--", "--port", "5183", "--strictPort"],
-        cwd=FRONT, stdout=open(os.path.join(OUT, "dev-5183.log"), "wb"),
-        stderr=subprocess.STDOUT, start_new_session=True)
-    open(PID, "w").write(str(proc.pid))
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError("dev:mock 提前退出，见 dev-5183.log")
-        try:
-            with urllib.request.urlopen(BASE + "/", timeout=2) as r:
-                if r.status == 200:
-                    return proc
-        except Exception:
-            time.sleep(0.5)
-    raise RuntimeError("dev:mock 60s 未就绪")
+    # 端口预检 + 严格收口（泄漏的 vite 会让下一轮验收出假红灯，见 _devserver.py）
+    return _devserver.start_dev(FRONT, 5183, True, OUT, name="detail-copy")
 
 
 def stop_server(proc):
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-    except Exception:
-        pass
-    try:
-        os.remove(PID)
-    except OSError:
-        pass
+    _devserver.stop_dev(proc, 5183)
 
 
 def to_detail(page):

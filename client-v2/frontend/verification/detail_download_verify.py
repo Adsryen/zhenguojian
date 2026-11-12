@@ -46,34 +46,21 @@ def check(name, cond, detail=""):
         failures.append(name)
 
 
+import _devserver
+
+
 def start_server(name, port, mock):
-    args = ["npm", "run", "dev:mock" if mock else "dev", "--", "--port", str(port), "--strictPort"]
-    log = open(os.path.join(OUT, f"dev-{port}.log"), "wb")
-    proc = subprocess.Popen(args, cwd=FRONT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    base = f"http://127.0.0.1:{port}"
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"{name} dev server 提前退出 code={proc.returncode}，见 dev-{port}.log")
-        try:
-            with urllib.request.urlopen(base + "/", timeout=2) as r:
-                if r.status == 200:
-                    return proc
-        except Exception:
-            time.sleep(0.5)
-    proc.kill()
-    raise RuntimeError(f"{name} dev server 60s 未就绪，见 dev-{port}.log")
+    # 端口预检 + 严格收口见 _devserver.py（R8 根因：泄漏的 mock vite 占了非 mock 端口，
+    # 就绪探测被孤儿答 200，② 连到 mock 页面 → chapters 为空 → 假红灯）
+    return _devserver.start_dev(FRONT, port, mock, OUT, name=name)
 
 
-def stop_server(proc):
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        proc.wait(timeout=10)
-    except Exception:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:
-            pass
+def stop_server(proc, port=None):
+    if port is None:
+        _devserver.stop_dev(proc, 0, quiet_port=True)
+    else:
+        _devserver.stop_dev(proc, port)
+
 
 
 # ---------- 真实态 stub（window.go.main.App，api.ts hasBridge 模块加载即读） ----------
@@ -213,8 +200,8 @@ def main():
 
             browser.close()
     finally:
-        stop_server(mock_proc)
-        stop_server(real_proc)
+        stop_server(mock_proc, 5181)
+        stop_server(real_proc, 5182)
 
     print(f"\n{'ALL PASS' if not failures else 'FAILURES: ' + ', '.join(failures)}")
     sys.exit(0 if not failures else 1)
