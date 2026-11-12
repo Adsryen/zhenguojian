@@ -146,7 +146,25 @@ func (a *App) DownloadRemoveBatch(jobIDsJSON string) (string, error) {
 	return marshalJSON(out)
 }
 
-// DownloadSettings → JSON（资源设置 + mergeVerify 合并视图）。
+// DownloadSetDanmakuDownload 客户端开关「下载时保存弹幕」（v1 downloads.py:1095-1099 那个勾选框，
+// 真值在 tools.danmaku_download_enabled，默认关）。
+//
+// 为什么开关落在 Go 而不是 localStorage：抓弹幕发生在**下载完成的那一刻**，
+// 那是 Go 的轮询循环，页面关掉也得能跑；开关放前端就等于把真值放在没人读的地方。
+// 落盘与 mergeVerify 同一个文件（downloads.state.json），两个键一起写，
+// 详见 internal/downloadsvc/sidecar.go 的 loadClientFlags/saveClientFlags。
+func (a *App) DownloadSetDanmakuDownload(on bool) (string, error) {
+	svc, err := a.getDownloadSvc()
+	if err != nil {
+		return "", err
+	}
+	if err := svc.SetDanmakuDownload(on); err != nil {
+		return "", err
+	}
+	return marshalJSON(map[string]any{"danmakuDownload": svc.DanmakuDownload()})
+}
+
+// DownloadSettings → JSON（资源设置 + mergeVerify + danmakuDownload 合并视图）。
 func (a *App) DownloadSettings() (string, error) {
 	svc, err := a.getDownloadSvc()
 	if err != nil {

@@ -79,6 +79,9 @@ type Service struct {
 	mu        sync.Mutex
 	started   bool
 	cancel    context.CancelFunc
+	// runCtx OnStartup 存下来的运行上下文（给弹幕保存这类后台任务用）。
+	// 为什么不用 refresh 的参数传：那样要改五个调用点，而其中三个本来就没有 ctx。
+	runCtx context.Context
 	wg        sync.WaitGroup
 	mergeWake chan struct{}
 
@@ -90,7 +93,15 @@ type Service struct {
 	autoResumeRun bool
 	lastSig       string
 	mergeVerify   bool
-	verifyLoaded  bool
+	// R22a③「下载时保存弹幕」客户端开关（默认关，v1 tools.danmaku_download_enabled）。
+	// 与 mergeVerify 同一个文件，所以读取/写入都走 sidecar.go 的 loadClientFlags/saveClientFlags
+	// ——各写各的键会互相抹掉。
+	danmakuDownload bool
+	flagsLoaded     bool
+	sidecarBusy     map[string]bool
+	sidecarGate     chan struct{}
+	sidecarReports  []SidecarReport
+	prevStates      map[string]string
 	// 交付 A：merges 表快照持久化（merge_state.go）
 	mergesLoaded     bool
 	mergesFlushTimer *time.Timer
@@ -140,6 +151,9 @@ func (s *Service) OnStartup(ctx context.Context) {
 	resumeQueued := s.hasQueuedMergesLocked()
 	runCtx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
+	// 弹幕保存要挂在运行上下文上（关窗就得收）。
+	// 不用 refresh 的参数传：五个调用点里三个本来就没有 ctx（见 refresh 注释）。
+	s.runCtx = runCtx
 	s.wg.Add(2)
 	s.mu.Unlock()
 	go func() {
@@ -211,10 +225,18 @@ func (s *Service) refresh(emit bool) ([]map[string]any, error) {
 	s.applyJobsLocked(jobs)
 	first := !s.autoResumeRun
 	s.autoResumeRun = true
+	// R22a③：找出新变成 completed 的 job（弹幕只在"完成的那一刻"抓一次，
+	// 与 v1 一致；第一遍刷新不算跃迁，否则每次启动都把历史重抓一遍）。
+	fresh, next := noteCompletedTransition(s.prevStates, jobs)
+	runCtx := s.runCtx
+	s.prevStates = next
 	s.mu.Unlock()
 	if first {
 		s.autoResumeInterrupted(jobs)
 	}
+	// 弹幕保存挂在"新完成"那一刻，且在锁外跑（v1 也是丢给后台线程）。
+	// runCtx 来自 OnStartup：关窗时它会取消，正在翻弹幕的 goroutine 跟着收。
+	s.queueSidecars(runCtx, fresh)
 	if emit {
 		s.notify()
 	}
@@ -329,8 +351,10 @@ func (s *Service) payloadLocked() map[string]any {
 	return map[string]any{
 		"jobs":        jobs,
 		"merges":      merges,
-		"status":      s.status,
-		"mergeVerify": s.mergeVerifyLocked(),
+		"status":          s.status,
+		"mergeVerify":     s.mergeVerifyLocked(),
+		// R22a③：轮询面也带上，前端勾选状态才能在"另一处也改了开关"后自我纠正
+		"danmakuDownload": s.danmakuDownloadEnabled(),
 	}
 }
 
@@ -438,7 +462,7 @@ func (s *Service) RemoveBatch(ids []string) (map[string]any, error) {
 
 // ---------- 设置（v1 core_client.save_download_settings 读-改-写语义） ----------
 
-// Settings 资源设置 + 客户端 mergeVerify 合并视图。
+// Settings 资源设置 + 客户端两个旗标（mergeVerify、danmakuDownload）的合并视图。
 func (s *Service) Settings() (map[string]any, error) {
 	if s.call == nil {
 		return nil, errors.New("下载服务未接线（缺少核心门面）")
@@ -453,6 +477,8 @@ func (s *Service) Settings() (map[string]any, error) {
 	}
 	s.mu.Lock()
 	out["mergeVerify"] = s.mergeVerifyLocked()
+	// R22a③：设置面也回显开关（前端勾选框的唯一真相，不在 localStorage 另存一份）
+	out["danmakuDownload"] = s.danmakuDownloadEnabled()
 	s.mu.Unlock()
 	return out, nil
 }
@@ -487,9 +513,12 @@ func (s *Service) SaveSettings(concurrency int, bySource bool, verify bool) (map
 	}
 	s.mu.Lock()
 	s.mergeVerify = verify
-	s.verifyLoaded = true
+	// 只留一把"读过盘"的闩（flagsLoaded）：两个旗标同文件，
+	// 各留各的闩会一个读盘一个不读，行为随调用顺序变。
+	s.flagsLoaded = true
 	s.mu.Unlock()
-	if err := s.saveVerifyState(verify); err != nil {
+	// 两个旗标一起写：只写 mergeVerify 会把 danmakuDownload 抹掉（同文件不同键）
+	if err := s.saveClientFlags(); err != nil {
 		return nil, err
 	}
 	s.notify()
@@ -498,19 +527,10 @@ func (s *Service) SaveSettings(concurrency int, bySource bool, verify bool) (map
 
 // mergeVerifyLocked 首次访问从 DataDir 状态文件恢复（默认开）。
 func (s *Service) mergeVerifyLocked() bool {
-	if !s.verifyLoaded {
-		s.verifyLoaded = true
-		if path := s.verifyStatePath(); path != "" {
-			if body, err := os.ReadFile(path); err == nil {
-				var st struct {
-					MergeVerify *bool `json:"mergeVerify"`
-				}
-				if json.Unmarshal(body, &st) == nil && st.MergeVerify != nil {
-					s.mergeVerify = *st.MergeVerify
-				}
-			}
-		}
-	}
+	// 读盘收敛到 sidecar.go 的 loadClientFlagsLocked：那里一次读回**两个**旗标。
+	// 原来这里自己读一遍只取 mergeVerify，是第二处解析同一文件的地方——
+	// 加第二个键之后如果继续留着，读到的就是两份不同步的真相。
+	s.loadClientFlagsLocked()
 	return s.mergeVerify
 }
 
@@ -534,6 +554,8 @@ func (s *Service) verifyStatePath() string {
 	return filepath.Join(dir, "downloads.state.json")
 }
 
+// saveVerifyState 保留给老调用点，但实现改为"两个旗标一起写"。
+// 单独写 mergeVerify 会把 danmakuDownload 抹掉——同一文件里的键必须一起落盘。
 func (s *Service) saveVerifyState(verify bool) error {
 	path := s.verifyStatePath()
 	if path == "" {
