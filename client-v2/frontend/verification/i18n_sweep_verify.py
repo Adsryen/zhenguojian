@@ -142,15 +142,133 @@ async def cjk_nodes(page):
     )
 
 
+_GLOBAL_PATS = [(p, re.compile(p)) for p in GLOBAL_ALLOW]
+WHITELIST_HITS = {p: 0 for p, _ in _GLOBAL_PATS}
+RAW_NODES = []   # en 态扫到的、含 CJK 的候选节点（豁免过滤之前）
+
+
+def ablation():
+    """对每条白名单做消融：把它拿掉之后，本次扫到的节点里有几条会因此变成违规。
+
+    0 条 = 这条**当前没有保护任何东西**（可能是彻底过期，也可能只是被节点级
+    excludes 提前挡住了——后者仍值得留作第二道防线，所以要人工判读，不自动删）。
+    >0 条 = 正在保护，数字就是它挡住的节点数。
+    为什么不用「本次有没有命中」直接判死：命中数为 0 有 40 条，
+    一半是数据被 selector 级 excludes 先挡掉了，那种叫冗余不叫错误。
+    """
+    rows = []
+    for pat, _rx in _GLOBAL_PATS:
+        others = [(q, rx) for q, rx in _GLOBAL_PATS if q != pat]
+        exposed = [x["t"][:40] for x in RAW_NODES
+                   if not any(rx.search(x["t"]) for _q, rx in others)]
+        rows.append((pat, len(exposed), exposed[:2]))
+    return rows
+
+
 def unexpected(nodes):
-    pats = [re.compile(p) for p in GLOBAL_ALLOW]
-    return [x for x in nodes if not any(p.search(x["t"]) for p in pats)]
+    """过滤掉被白名单豁免的节点，并**统计每条白名单实际放过多少节点**。
+    R12 手工删过两条死条目（r"待核心接线" / r"已切换到"：早已是 i18n 键产出，
+    en 态渲染英文，留着只会把真的中文泄漏一起放过）。
+    这里把它变成常驻可见项，不再依赖人肉想起来去清。"""
+    out = []
+    for x in nodes:
+        hit = None
+        for pat, rx in _GLOBAL_PATS:
+            if rx.search(x["t"]):
+                hit = pat
+                break
+        if hit is None:
+            out.append(x)
+        else:
+            WHITELIST_HITS[hit] += 1
+    return out
 
 
 async def settle(page, url, sel):
     await page.goto(BASE + url)
     await page.wait_for_selector(sel, timeout=15000)
     await page.wait_for_timeout(1000)
+
+
+# 「这条中文来自数据/专有名」的 provenance 判据，逐条都是本轮审计里亲眼核对过的：
+#   真果鉴 / 真         品牌字标（NavRail 的 brand-name / brand-mark），静态扫描器也登记为豁免
+#   ^·? \d[\d.]*[万亿] 核心/fixtures 的 heat/views 串自带中文数量单位（1286万 / 2.1亿）
+#   ^[^ ]*[万亿] (heat|followers|plays)$  同上，数字来自数据、单位词是英文
+#   绝对不存在的剧名zzz  本脚本 zh 段自己敲进搜索框的测试词，落进了「最近搜索」chip
+#   ^第\d+集$           不是前端硬编码：是核心 chapter.title 透传。
+#                       证据 = detail_download_verify 的 stub 返回 title:"第"+i+"集"，
+#                       UI 显示的正是它；player_verify ④ 也用 text-is("第3集") 断言切集。
+#   ^中文$              语言选择项的母语名（另一项是 English），切语言也不该翻。
+PROVENANCE_RX = re.compile(
+    r"^(?:第\d+集$|中文$|真果鉴|真|·?\s*\d[\d.]*[万亿](?:\s*(?:heat|followers|plays))?"
+    r"|绝对不存在的剧名zzz)"
+)
+
+AUDIT_ROUTES = ["/#/discover", "/#/library", "/#/search", "/#/detail/hongguo%3A7439220582928952383",
+              "/#/calendar", "/#/reserve?tab=follow", "/#/history", "/#/downloads", "/#/settings"]
+
+
+async def audit_full_page(page, base):
+    """整页 en 扫描，**只报告不断言**：现有 en 门禁实际只看了 2 个 CJK 候选节点
+    （范围全靠逐页 selector + 一长串节点级 excludes），所以先把真实情况量出来，
+    再决定哪些能收成硬断言——不把没覆盖的东西说成已经覆盖了。"""
+    from i18n_static_scan import SRC
+    # 数据来源两处：mock fixtures 本体 + 本脚本自己往 localStorage 灌的种子
+    corpus = open(os.path.join(SRC, "services", "fixtures.ts"), encoding="utf-8").read() + SEED_JS
+    DATA_TOKENS = set()
+    # 两种引号都收，长度下限 1 字：初版写 {2,}，于是 1 字的数据
+    # （fixtures.ts:377 的 badge:'爆'）与 2 字标签词会漏收，凭空造出假「待判定」。
+    for _groups in re.findall(r"'([^'\n]{1,}?)'|\"([^\"\n]{1,}?)\"", corpus):
+        for _tok in _groups:
+            if _tok and re.search(r"[\u4e00-\u9fff]", _tok):
+                DATA_TOKENS.add(_tok)
+    # 单字节点 = 封面/头像的「标题首字占位」（PosterGrid/SearchGroups/cast-initial 的
+    # `title.trim()[0] || '剧'`）。字符来自数据本身，不是文案：按「是不是某个数据 token 的首字」判。
+    FIRST_CHARS = {tok[0] for tok in DATA_TOKENS}
+    rows = {}
+    for route in AUDIT_ROUTES:
+        await page.goto(base + route)
+        await page.wait_for_timeout(900)
+        nodes = await page.evaluate("""() => {
+          const out = [], cjk = /[\u3400-\u4dbf\u4e00-\u9fff]/;
+          const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          let n;
+          while ((n = w.nextNode())) {
+            const el = n.parentElement; if (!el) continue;
+            const cs = getComputedStyle(el);
+            if (cs.display === 'none' || cs.visibility === 'hidden') continue;
+            const t = (n.textContent || '').trim();
+            if (t && cjk.test(t)) out.push({ t, cls: String(el.className || el.tagName) });
+          }
+          return out;
+        }""")
+        data, unknown = 0, []
+        for x in nodes:
+            t = x["t"]
+            key = t[:26]
+            # 判据：这条中文里的某个 ≥3 字段落在 mock 数据/种子数据里出现过 → 属数据透传。
+            # 用「子串包含」而不是「前缀等于」：界面常见 `一世之尊 · Full season (2 eps)`
+            # 这种「数据 + 英文标签」拼接，前缀法会把它们全推到待判定里，
+            # 制造 5 条假疑点（本轮实测就是这样，逐条核过 fixtures.ts:1027 / SEED_JS 才确认全是数据）。
+            hit = (PROVENANCE_RX.match(t)
+                   or next((tok for tok in DATA_TOKENS if tok in t), None)
+                   or (len(t) == 1 and t in FIRST_CHARS and t))
+            if hit:
+                data += 1
+            else:
+                unknown.append((key, x["cls"][:26]))
+        rows[route] = (len(nodes), data, unknown)
+    print("\n──────── en 态整页审计（只报告，不计 PASS/FAIL）────────")
+    tot_u = 0
+    for r, (n, d, unk) in rows.items():
+        tot_u += len(unk)
+        print(f"  {r:52} 节点 {n:3}  fixtures可解释 {d:3}  待判定 {len(unk)}")
+        for t, cls in unk[:4]:
+            print(f"       ⚠ {t!r}  @{cls}")
+    print(f"  合计待判定：{tot_u}")
+    print("  说明：『待判定』≠『泄漏』，但本条已升级为硬断言——新增未定性中文会直接把 sweep 跑红，"
+          "处置只有两种：进 i18n，或在 provenance 里写出可核对的证据（数据出处/契约出处）。")
+    return [(r,) + u for r, (_n, _d, unk) in rows.items() for u in unk]
 
 
 async def main():
@@ -382,6 +500,7 @@ async def main():
                     }""",
                     [scope, sel_ex],
                 )
+                RAW_NODES.extend(nodes)
                 bad = unexpected(nodes)
                 check(f"en|{url} 无未豁免 CJK", not bad, f"bad={json.dumps(bad[:4], ensure_ascii=False)}")
                 if url == "/#/search":
@@ -403,11 +522,26 @@ async def main():
                 miss = [s for s in spots if s not in body_txt]
                 check(f"en|{url} 英文代表文案出现", not miss, f"missing={miss}")
 
+            if "--audit" in sys.argv:
+                unknown = await audit_full_page(page, BASE)
+                check("audit|en 整页无未定性中文节点", not unknown,
+                      f"待判定 {len(unknown)} 条，例：{[u[0] for u in unknown[:3]]}")
+
             await browser.close()
     finally:
         stop_server(proc)
 
     failed = [r for r in RESULTS if not r[1]]
+    rows = ablation()
+    protecting = [(p, n) for p, n, _ in rows if n]
+    idle = [p for p, n, _ in rows if not n]
+    print(f"白名单共 {len(rows)} 条；本次 en 扫描实际采到 CJK 候选节点 {len(RAW_NODES)} 个")
+    print("  正在保护：", protecting or "（无）")
+    print("  消融后无影响（当前没挡任何东西）：", len(idle))
+    if idle:
+        print("     " + str(idle[:20]) + (" …" if len(idle) > 20 else ""))
+        print("     判读口径：删了不会立刻红 ≠ 该删。两类原因：串已进 i18n（真过期，删）；"
+              "或数据被节点级 excludes 先挡住（冗余第二道防线，留但要注明）。")
     print(f"\n===== i18n_sweep: {len(RESULTS) - len(failed)}/{len(RESULTS)} PASS =====")
     for n, _, d in failed:
         print(f"  FAIL: {n} | {d}")
