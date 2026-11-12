@@ -110,6 +110,27 @@ func (a *App) CancelReservation(dramaID string) (string, error) {
 	return marshalJSON(map[string]any{"ok": s.CancelReservation(dramaID)})
 }
 
+// SetNextSeason 把「下一季是另一部剧」这个入口记在旧季记录上
+// （v1 main.py:2598 在季末提示查到下一季后调 watchstore.mark_next_season）。
+//
+// 澄清一条旧记录：任务笔记写的「Go 侧 SetNextSeason 绑定待补」只对了一半 ——
+// Store.MarkNextSeason 连同单测（store_test.go:1151 TestMarkNextSeason）早就齐了，
+// 真正缺的是这条对外绑定和前端调用点，所以 v1 的「记住入口」行为一直没通到用户。
+//
+// season 传 0：与 v1 `int(season or season_number(next_drama.title))` 一致，
+// 由 store 从下一季标题推导。dramaID 不在追剧表时照 v1 返回 false，不谎报成功。
+func (a *App) SetNextSeason(dramaID, nextDramaJSON string) (string, error) {
+	s, err := getWatchStore()
+	if err != nil {
+		return "", err
+	}
+	next, err := decodeWatchDrama(nextDramaJSON)
+	if err != nil {
+		return "", err
+	}
+	return marshalJSON(map[string]any{"marked": s.MarkNextSeason(dramaID, next, 0)})
+}
+
 func (a *App) RemoveFollow(dramaID string) (string, error) {
 	s, err := getWatchStore()
 	if err != nil {

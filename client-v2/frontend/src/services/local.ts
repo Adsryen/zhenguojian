@@ -1,10 +1,12 @@
 /* 本地兜底存储：追剧/预约/历史 已切换为 stores/watch → Go watchstore 真值，
    本模块仅保留为 DEGRADED（无桥）降级缓存层（watch.ts 在 MOCK/DEGRADED/桥竞态时回落此处同名函数）；
    看过标记主存储已迁 Go seen-library.json（watch.ts loadSeen 首载时一次性上传本地存量并清键，
-   localStorage 同名键降级为迁移源/缓存）；下载队列草稿仍以 localStorage 为主存储
-   （UI 暂存态：plan 已 resolve、尚未投引擎，V2-3 接通真实下载后废弃）。
-   —— 历史依赖请求见 V2-2 终报：需要 Go 端提供 Follows/History/Watched/Reservations 绑定后切换。 */
+   localStorage 同名键降级为迁移源/缓存）；下载队列在真实桥下走 Go Enqueue（V2-3 已接通），
+   localStorage 那份只在 MOCK/DEGRADED 面充当暂存草稿（文案会说明「尚未开始真实下载」）。
+   追剧/历史/看过/预约的真值也早已切到 Go watchstore（bindings_watchstore.go /
+   bindings_seen.go），本模块是降级缓存与迁移源。 */
 import type { Drama } from './types'
+import { seasonNumber } from './series'
 
 /* 命名空间用拼接：字面量 'zgj.xxx' 曾被工具链脱敏管道损坏（history 键被替换成星号），
    拆开后不再匹配脱敏模式。勿改回整串字面量。 */
@@ -37,6 +39,11 @@ export type HistoryMap = Record<string, HistoryEntry>
 export interface FollowEntry {
   drama: Drama
   ts: number
+  /** v1 watchstore 的「下一季入口」在 mock 面的镜像：只有已追才写，字段名照核心 */
+  nextDrama?: Drama
+  nextSeason?: number
+  newSeason?: boolean
+  arrived?: boolean
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -135,6 +142,25 @@ export function toggleFollow(drama: Drama): boolean {
     return false
   }
   map[drama.id] = { drama, ts: Date.now() }
+  writeJson(FOLLOWS_KEY, map)
+  return true
+}
+
+/**
+ * mock 面 mark_next_season（v1 watchstore.py:428-454 的降级版）。
+ * 与 v1 一致的两点：**只有已在追剧表才生效**（返回 false 不谎报），
+ * 以及 season=0 时从下一季标题推导季号（用 services/series 的 seasonNumber）。
+ */
+export function markNextSeason(dramaId: string, next: Drama, season = 0): boolean {
+  const map = readJson<Record<string, FollowEntry>>(FOLLOWS_KEY, {})
+  const row = map[dramaId]
+  if (!row) return false
+  const num = season || seasonNumber(next.title)
+  row.nextDrama = next
+  row.nextSeason = num
+  row.newSeason = true
+  row.arrived = true
+  map[dramaId] = row
   writeJson(FOLLOWS_KEY, map)
   return true
 }

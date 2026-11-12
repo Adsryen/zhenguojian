@@ -294,6 +294,9 @@ export interface NativeApi {
   /** 弹幕不透明度，百分比 20–100（v1 tools.danmaku_opacity 同一量纲）；
       真桥侧由壳层换算成 0.2–1.0 再交给 App.PlayerDanmakuOpacity。 */
   setDanmakuOpacity(percent: number): Promise<void>
+  /** 记住「下一季是另一部剧」的入口（v1 mark_next_season）。
+   *  marked=false 表示旧季不在追剧表——照 v1 不谎报成功。 */
+  setNextSeason(dramaID: string, nextDrama: Drama): Promise<{ marked: boolean }>
   danmakuAll(session: string): Promise<DanmakuWindowResult>
   // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
   watchlist(): Promise<WatchRow[]>

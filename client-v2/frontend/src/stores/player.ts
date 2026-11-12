@@ -446,13 +446,24 @@ export const usePlayerStore = defineStore('player', {
       }
     },
 
-    /** 查下一季（series:next lane；prompted/busy 幂等在 nextSeason.ts 模块内） */
+    /** 查下一季（series:next lane；prompted/busy 幂等在 nextSeason.ts 模块内）。
+     *  查到之后把入口写回追剧记录 —— v1 main.py:2598 mark_next_season 的那一步，
+     *  此前 v2 只有查询、没有回写，所以「双击旧季直达下一季」的核心能力是断的（R6）。
+     *  失败只影响入口记忆，不打断播放，也不谎报（marked=false 表示旧季根本没在追剧表）。 */
     async checkNextSeason() {
       const drama = this.drama
       if (!drama) return
       const hit = await lookupNextSeason(drama)
       this.nextSeason = hit
-      if (!hit) this.status = t('player.seriesEndNoNext')
+      if (!hit) {
+        this.status = t('player.seriesEndNoNext')
+        return
+      }
+      try {
+        await api.setNextSeason(drama.id, hit.drama)
+      } catch {
+        /* 入口记忆失败不影响本季已播完的事实，也不弹错打断播放 */
+      }
     },
 
     /** V2-F：节流落盘——播放中位移≥5s 或距上次≥5s 即写 saveWatch（未完成态） */

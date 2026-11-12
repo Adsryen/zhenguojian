@@ -49,6 +49,7 @@ import {
   HISTORY_KEY,
   historyKey,
   isFollowed,
+  markNextSeason as localMarkNextSeason,
   readFollows,
   readHistory,
   readReservations,
@@ -285,6 +286,10 @@ const realApi: NativeApi = {
   setDanmakuOpacity: async (percent: number) => {
     await callGo('PlayerDanmakuOpacity', clampOpacityPercent(percent) / 100)
   },
+  // R6：v1 main.py:2598 季末查到下一季后 mark_next_season 的绑定（Go 侧方法早已齐备，
+  // 缺的是这条对外绑定 + 前端调用点）。marked=false 表示旧季不在追剧表，照 v1 不谎报。
+  setNextSeason: async (dramaID: string, nextDrama: Drama) =>
+    callGo<{ marked: boolean }>('SetNextSeason', dramaID, JSON.stringify(nextDrama)),
   danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session),
   watchlist: () => callGo<WatchRow[]>('Watchlist'),
   historyList: () => callGo<HistoryRow[]>('HistoryList'),
@@ -574,6 +579,9 @@ const mockApi: NativeApi = {
   setDanmakuOpacity: async (percent: number) => {
     mockSnap.danmaku = { ...mockSnap.danmaku, opacity: clampOpacityPercent(percent) }
   },
+  setNextSeason: async (dramaID: string, nextDrama: Drama) => ({
+    marked: localMarkNextSeason(dramaID, nextDrama),
+  }),
   danmakuAll: async (session: string) => {
     await delay(200)
     return mockDanmakuAll(session)
