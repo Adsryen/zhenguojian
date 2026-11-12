@@ -15,8 +15,12 @@
 
 - `internal/player/service.go:53` 有 `Plan.Local`，`internal/mpv/player.go:248/284`
   的 `lavfOptions(local, key)` 会把本地/解密参数一路带给 mpv —— **底层早就备好**；
-- `internal/watchstore/store.go:321/395` 有 `LocalPath/HasLocalPath` 且会序列化出 `localPath`，
-  但**没有任何代码写它**（439 只是 JSON 读回）；
+- `internal/watchstore/store.go:321/395` 有 `LocalPath/HasLocalPath` 且会序列化出 `localPath`；
+  **更正（第三十九轮）**：我原先在这条里写「没有任何代码写它」不准确 ——
+  写入函数 `Store.SaveLocalWatch`（store.go:1445，v1 watchstore.py:608-637 的端口，
+  带去抖与 duration 回落）**本来就在**，缺的是绑定、调用点和单测（三条都没有）。
+  也就是说断点位置比我原先说的更靠外一层，这直接改变了下一笔该写什么：
+  不是补一个 resolver，而是补一条 12 行的绑定 + 测试（`b3c2541`）。
 - `frontend/src/services/types.ts:445` 声明了 `localPath?`，全仓**零消费点**（grep 空）。
 
 所以这不是"入口没做"，是**一整条链没接**：没 writer、没 reader、没有能播本地文件的绑定。
@@ -57,3 +61,19 @@ v1 的本地播放入口在**追剧页与历史页**（外加下载页的合并�
 原因是我漏了 `setLoaded`：抓取窗口要先知道时长才发起。
 **如果没写对照，这条用例会永远绿着，什么也不证明**（第 27 轮"恒为 0 的计数不是证据"的机器兑现）。
 本地侧现在也给一次 `setLoaded`，否则"没抓到"可能只是"还没时长"。
+
+## 第三十九轮的三条读数错（全在我的测试里，端口语义一条没改）
+
+CI 首跑红三条，判到根上都是**我的测试写错**：
+
+1. `row["episode"].(float64)` 静默失败得零值 → 断言报"值是 0"，看着像端口漏字段。
+   真相是同包 `decode()` 开了 `json.Decoder.UseNumber()`，数字是 **json.Number**。
+   ⚠ 这条最阴的地方是它的**表现形态是假阳性**：类型断言失败不报错，给零值。
+   以后在 watchstore 包里读行数值一律走 `rowNum` helper（两种数字类型都收，别的类型直接判错）。
+2. `updated` 的相等比较同样落在 json.Number 上。
+3. `NeedsDramaID` 用例假设库文件必然存在，而 v2 是**首次变更才落盘** ——
+   空 dramaID 那条什么都没写，文件本就不该在。现在 `localRows()` 把"文件不存在"
+   当成"一条都没写过"的证据，而不是读库失败。
+
+五条语义断言一条没删、没放宽：去抖阈值仍两侧都测（0.4s 不写 / 0.6s 写）、
+`finished=true` 仍必须落盘、`duration=0` 仍回落、仍要求绝对路径。
