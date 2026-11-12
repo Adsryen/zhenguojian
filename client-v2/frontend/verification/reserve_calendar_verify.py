@@ -201,6 +201,48 @@ async def main():
             check("②c 点「全部」还原两行", n_all == 2, f"rows={n_all}")
 
             await page.screenshot(path=os.path.join(HERE, "reserve-follow.png"))
+
+            # ---- ③ R9c-3：失败整句的唯一出口（__zgjWatchFault 钩子）----
+            # 背景：watch store 原先「this.error = 整句」却又 `throw e`（裸核心串），
+            # 而视图两条读法并存（ReserveView:137 读 e.message、:146 读 watchStore.error），
+            # 同一次失败会有两种呈现。现在 store.fail() 抛的就是同一句整句文案。
+            await page.evaluate("() => { window.__zgjWatchFault = '故意炸' }")
+            # 注：ReserveView.unfollow() 实际调 watchStore.toggleFollow，整句取 watch.errFollow
+            # （watch.errUnreserve / errUnfollow 是另外的调用路径），所以文案是「追剧操作失败：…」
+            await page.locator(".btn.sm.danger", has_text="取消追剧").first.click()
+            await page.wait_for_selector(".toast", timeout=8000)
+            await page.wait_for_timeout(400)
+            t1 = (await page.locator(".toast").first.inner_text()).strip()
+            check("③a 取消追剧失败 = store 整句（读 e.message 的那条路）",
+                  t1 == "追剧操作失败：故意炸", f"toast={t1!r}")
+
+            # 挂载时 ensureLoaded 的失败走 watchStore.error → 同一句式
+            await page.add_init_script("window.__zgjWatchFault = '故意炸'")
+            await page.reload()
+            await page.wait_for_selector(".page-title", timeout=15000)
+            await page.wait_for_selector(".toast", timeout=8000)
+            await page.wait_for_timeout(400)
+            t2 = (await page.locator(".toast").first.inner_text()).strip()
+            check("③b 读取失败 = 同一句式（读 watchStore.error 的那条路）",
+                  t2 == "读取观看数据失败：故意炸", f"toast={t2!r}")
+
+            # en 态：同一动作必须整句英文且不残留中文（故障串用 ASCII，
+            # 因为断言的是「句式」而不是被拼进来的核心消息）
+            # ③b 注册的 add_init_script 每次导航都会把故障串重置成中文，
+            # 所以这里必须再叠一条 ASCII 的（后注册的 init script 后执行才生效），
+            # evaluate 里那次赋值会被 init script 覆盖——第一版我就栽在这里。
+            await page.add_init_script("window.__zgjWatchFault = 'boom'")
+            await page.evaluate("() => localStorage.setItem('zgj.locale','en')")
+            await page.reload()
+            await page.wait_for_selector(".page-title", timeout=15000)
+            await page.wait_for_selector(".toast", timeout=8000)
+            await page.wait_for_timeout(400)
+            t3 = (await page.locator(".toast").first.inner_text()).strip()
+            cjk = [c for c in t3 if "\u4e00" <= c <= "\u9fff"]
+            check("③c en 态整句英文且零 CJK",
+                  t3 == "Failed to load watch data: boom" and not cjk, f"toast={t3!r} cjk={cjk}")
+            await page.evaluate("() => localStorage.setItem('zgj.locale','zh')")
+
             await browser.close()
     finally:
         _devserver.stop_dev(owned, PORT, name="reserve-calendar")

@@ -10,6 +10,7 @@
 import { defineStore } from 'pinia'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { tf } from '@/services/i18n'
+import { ApiError } from '@/services/types'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import {
   clearHistory as clearHistoryLocal,
@@ -191,6 +192,26 @@ export const useWatchStore = defineStore('watch', {
     isSeen: (s) => (dramaId: string): boolean => !!dramaId && s.seen[dramaId] !== undefined
   },
   actions: {
+    /** R9c-3：失败文案的唯一出口。
+     * `note` 只把整句写进 store.error（读数据这类失败没有调用方需要接异常）；
+     * `fail` 额外返回同一句子的 ApiError 供调用方抛 ——
+     * 于是视图无论读 `watchStore.error` 还是 `e?.message`，看到的都是同一句本地化文案。
+     * 旧写法是「this.error = 整句；throw e（裸核心串）」，两种呈现并存就是本轮要收掉的不一致。
+     * code / retryAt 原样透传，别把重试节律弄丢。 */
+    note(key: string, e: unknown): string {
+      const msg = tf(key, { m: (e as Error)?.message ?? String(e) })
+      this.error = msg
+      return msg
+    },
+
+    fail(key: string, e: unknown): ApiError {
+      const msg = this.note(key, e)
+      return new ApiError(
+        msg,
+        (e as { code?: string })?.code ?? '',
+        (e as { retryAt?: number })?.retryAt
+      )
+    },
     /** 是否走降级缓存面（与 api.ts DEGRADED/mock 判定同风格） */
     useLocalLayer(): boolean {
       return MOCK_MODE || DEGRADED
@@ -198,6 +219,13 @@ export const useWatchStore = defineStore('watch', {
 
     /** 桥面调用；降级面直接走 local.ts；真实桥竞态 bridge_missing 回落 local.ts 一次 */
     async callBridge<T>(run: () => Promise<T>, local: () => T): Promise<T> {
+      /* 验证钩子（先例：__zgjCoverFault / __zgjDiscoverInjectCatalog / searchAll 的 [sim_fault]）：
+         置 window.__zgjWatchFault = '错误文案' 后，桥调用一律抛出**非 bridge_missing 形状**的
+         ApiError，因此不会被 isBridgeDown 静默回落 —— watch.err* 这组整句文案由此在浏览器里可达、可断言。 */
+      const fault = typeof window !== 'undefined'
+        ? (window as unknown as { __zgjWatchFault?: unknown }).__zgjWatchFault
+        : undefined
+      if (typeof fault === 'string' && fault) throw new ApiError(fault, 'sim_watch')  // 只放 code，不塞进 message（真机上 callGoRaw 已剥过 code）
       if (this.useLocalLayer()) return local()
       try {
         return await run()
@@ -219,7 +247,7 @@ export const useWatchStore = defineStore('watch', {
         this.follows = follows ?? []
         this.history = history ?? []
       } catch (e) {
-        this.error = tf('watch.errLoadRows', { m: (e as Error)?.message ?? String(e) })
+        this.note('watch.errLoadRows', e)
       } finally {
         this.loading = false
         this.loaded = true
@@ -256,7 +284,7 @@ export const useWatchStore = defineStore('watch', {
         this.seenLoaded = true
       } catch (e) {
         this.seen = localSeenMap() // 桥读失败 → 降级缓存面（下次 force 重试）
-        this.error = tf('watch.errLoadSeen', { m: (e as Error)?.message ?? String(e) })
+        this.note('watch.errLoadSeen', e)
       }
     },
 
@@ -282,8 +310,7 @@ export const useWatchStore = defineStore('watch', {
       } catch (e) {
         if (had) this.seen[dramaId] = prev
         else delete this.seen[dramaId]
-        this.error = tf('watch.errToggleSeen', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errToggleSeen', e)
       }
     },
 
@@ -303,8 +330,7 @@ export const useWatchStore = defineStore('watch', {
         return on
       } catch (e) {
         this.follows = prev
-        this.error = tf('watch.errFollow', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errFollow', e)
       }
     },
 
@@ -322,8 +348,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.follows = prev
-        this.error = tf('watch.errUnfollow', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errUnfollow', e)
       }
     },
 
@@ -347,8 +372,7 @@ export const useWatchStore = defineStore('watch', {
         return on
       } catch (e) {
         this.follows = prev
-        this.error = tf('watch.errReserve', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errReserve', e)
       }
     },
 
@@ -367,8 +391,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.follows = prev
-        this.error = tf('watch.errUnreserve', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errUnreserve', e)
       }
     },
 
@@ -415,8 +438,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.history = prev
-        this.error = tf('watch.errDelete', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errDelete', e)
       }
     },
 
@@ -433,8 +455,7 @@ export const useWatchStore = defineStore('watch', {
         )
       } catch (e) {
         this.history = prev
-        this.error = tf('watch.errClear', { m: (e as Error)?.message ?? String(e) })
-        throw e
+        throw this.fail('watch.errClear', e)
       }
     }
   }
