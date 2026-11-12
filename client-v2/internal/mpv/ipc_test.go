@@ -126,9 +126,9 @@ func TestIPCRequestIDSnakeCompat(t *testing.T) {
 	defer server.Close()
 
 	type in struct {
-		Command  []any `json:"command"`
-		SnakeID  int   `json:"request_id"`
-		CamelID  int   `json:"requestID"`
+		Command []any `json:"command"`
+		SnakeID int   `json:"request_id"`
+		CamelID int   `json:"requestID"`
 	}
 
 	go func() {

@@ -29,7 +29,7 @@ from playwright.async_api import async_playwright
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-FRONTEND = os.path.join(ROOT, "client-v2", "frontend")
+FRONTEND = ROOT  # 脚本已从仓库根 verification/ 迁入 frontend/verification/
 PORT = 5183
 BASE = f"http://127.0.0.1:{PORT}"
 SHOT = os.path.join(HERE, "discover-hero.png")
