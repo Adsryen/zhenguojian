@@ -509,6 +509,11 @@ const zh: Record<string, string> = {
   'watch.errUnreserve': '取消预约失败：{m}',
   'watch.errDelete': '删除记录失败：{m}',
   'watch.errClear': '清空历史失败：{m}',
+  // v1 状态栏原文（main.py:851-857 done()）：
+  //   「追剧检查：%d 部有更新」/「追剧检查：%d 部暂时取不到更新」
+  // 失败那条在 v1 也是"不打扰用户"的一句话提示，不弹窗，这里保持一致。
+  'watch.checkedUpdated': '追剧检查：{n} 部有更新',
+  'watch.checkedFailed': '追剧检查：{n} 部暂时取不到更新',
   'player.panelEpisode': '· 第{n}集',
   // ── v2-6-parity：DiscoverView chrome 与兜底芯片（zh 与收敛前逐字一致）──
   'discover.refresh': '刷新',
@@ -1162,6 +1167,8 @@ const en: Record<string, string> = {
   'watch.errUnreserve': 'Cancel reserve failed: {m}',
   'watch.errDelete': 'Failed to delete the entry: {m}',
   'watch.errClear': 'Failed to clear history: {m}',
+  'watch.checkedUpdated': 'Follow check: {n} title(s) updated',
+  'watch.checkedFailed': 'Follow check: {n} title(s) unreachable for now',
   'player.panelEpisode': '· Ep {n}',
   // ── v2-6-parity: DiscoverView chrome + fallback chips ──
   'discover.refresh': 'Refresh',

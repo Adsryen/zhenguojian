@@ -206,9 +206,12 @@ export const useWatchStore = defineStore('watch', {
     seen: {} as Record<string, number>,
     loading: false,
     error: '',
+    /** R23：后台追剧检查的一句话结果（v1 打在状态栏，v2 走 hint，不打断操作） */
+    checkHint: '',
     /** 已首载标志（视图用它避免重复拉取；核心四字段之外的唯一扩展位） */
     loaded: false,
-    seenLoaded: false
+    seenLoaded: false,
+    _checkHintTimer: 0 as number
   }),
   getters: {
     /** 追更列表（v1：followed 行；预约行 Go FollowList 也返回，标志位区分） */
@@ -216,6 +219,13 @@ export const useWatchStore = defineStore('watch', {
     isSeen: (s) => (dramaId: string): boolean => !!dramaId && s.seen[dramaId] !== undefined
   },
   actions: {
+    /** 展示一轮后台检查的结论（v1「追剧检查：%d 部有更新」的对端）。
+        ms 到点自动清空；连续两轮之间不会互相盖住成永久残留。 */
+    setCheckHint(msg: string, ms = 8000) {
+      this.checkHint = msg
+      if (this._checkHintTimer) clearTimeout(this._checkHintTimer)
+      this._checkHintTimer = setTimeout(() => { this.checkHint = '' }, ms) as unknown as number
+    },
     /** R9c-3：失败文案的唯一出口。
      * `note` 只把整句写进 store.error（读数据这类失败没有调用方需要接异常）；
      * `fail` 额外返回同一句子的 ApiError 供调用方抛 ——

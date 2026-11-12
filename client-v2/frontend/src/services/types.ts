@@ -297,6 +297,9 @@ export interface NativeApi {
   /** 记住「下一季是另一部剧」的入口（v1 mark_next_season）。
    *  marked=false 表示旧季不在追剧表——照 v1 不谎报成功。 */
   setNextSeason(dramaID: string, nextDrama: Drama): Promise<{ marked: boolean }>
+  /** R23：把"最新剧数据"交给核心观察器（v1 watchstore.observe_drama）。
+   *  observed=false 表示这条根本不在追剧表（v1 对未追的剧直接 return，连 emit 都不发）。 */
+  observeDrama(drama: Drama): Promise<{ observed: boolean; changed: boolean; row: WatchRow | null }>
   danmakuAll(session: string): Promise<DanmakuWindowResult>
   // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
   watchlist(): Promise<WatchRow[]>

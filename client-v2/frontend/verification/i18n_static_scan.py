@@ -135,6 +135,13 @@ TS_EXEMPT = {
     # 把它翻成英文属于跨层契约变更，本机没有 Go 工具链，不能改。
     "stores/watch.ts": [("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON)],
 
+    # 同 watchstore：这里是**Go 核心契约的状态枚举**，不是界面文案
+    # （v1 main.py:780-782 的 `status in ("想看","在看","预约中")` 逐字端口）。
+    # 后台检查靠它挑行，翻成英文就等于改跨层契约。
+    "services/followCheck.ts": [
+        ("'想看'", STATUS_REASON), ("'在看'", STATUS_REASON), ("'预约中'", STATUS_REASON),
+    ],
+
     "services/series.ts": [
         ("'季'", "多季标题解析/归并算法里的中文后缀常量（v1 series.py 1:1 端口），"
                 "处理的是剧名本身，不是界面文案。条款收窄成带引号字面量，"

@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import NavRail from '@/components/NavRail.vue'
 import { useAppStore } from '@/stores/app'
 import { setupContextMenu } from '@/services/contextMenu' // V2-6 右键菜单：全局一处挂载
+import { installFollowCheckTestSeam, startFollowCheck, stopFollowCheck } from '@/services/followCheck' // R23 后台追剧检查
 import { api } from '@/services/api'
 import { t, tf } from '@/services/i18n'
 import { cleanReleaseBody } from '@/services/updatenotes'
@@ -31,6 +32,10 @@ function onUpdAvailable(payload: UpdateAvailableEvent) {
 
 onMounted(() => {
   void api.updateStartup().catch(() => undefined) // 懒触发启动自动检查（真实桥 goroutine / mock 定时器）
+  // v1 main.py:714-726：追剧后台检查在**主窗口**建定时器（启动 60s 后先跑一次，之后每 1800s）。
+  // 所以挂在这里（App 级）而不是某个视图，切页不会打断它；卸载时清掉，避免热重载叠加。
+  startFollowCheck()
+  installFollowCheckTestSeam() // 仅测试缝，产品路径不依赖它
   window.addEventListener('zgj:update-available', ((e: CustomEvent<UpdateAvailableEvent>) => onUpdAvailable(e.detail)) as EventListener)
   const EventsOn = (window as any).runtime?.EventsOn ?? (window as any).wails?.EventsOn
   if (typeof EventsOn === 'function') {
@@ -38,7 +43,10 @@ onMounted(() => {
     if (typeof off === 'function') offBus = off
   }
 })
-onBeforeUnmount(() => offBus?.())
+onBeforeUnmount(() => {
+  offBus?.()
+  stopFollowCheck()
+})
 
 function updGoSettings() {
   window.location.hash = '#/settings'

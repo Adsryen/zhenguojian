@@ -293,6 +293,8 @@ const realApi: NativeApi = {
   // 缺的是这条对外绑定 + 前端调用点）。marked=false 表示旧季不在追剧表，照 v1 不谎报。
   setNextSeason: async (dramaID: string, nextDrama: Drama) =>
     callGo<{ marked: boolean }>('SetNextSeason', dramaID, JSON.stringify(nextDrama)),
+  observeDrama: async (drama: Drama) =>
+    callGo<{ observed: boolean; changed: boolean; row: WatchRow | null }>('ObserveDrama', JSON.stringify(drama)),
   danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session),
   watchlist: () => callGo<WatchRow[]>('Watchlist'),
   historyList: () => callGo<HistoryRow[]>('HistoryList'),
@@ -497,6 +499,12 @@ const mockApi: NativeApi = {
     return mockRankings(board, page, force)
   },
   detail: async (drama: Drama) => {
+    // 测试缝：`__zgjDetailFail` 里列的 id 让详情失败，用来验后台检查的
+    // 「一条坏剧不打断整轮 + 结论说 N 部暂时取不到」（v1 main.py:855-857 的那条分支）。
+    const failList = (window as any)?.__zgjDetailFail as string[] | undefined
+    if (Array.isArray(failList) && failList.includes(String(drama?.id ?? ''))) {
+      throw new Error('mock detail 故障注入')
+    }
     await delay(250 + Math.random() * 300)
     return mockDetail(drama)
   },
@@ -585,6 +593,15 @@ const mockApi: NativeApi = {
   setNextSeason: async (dramaID: string, nextDrama: Drama) => ({
     marked: localMarkNextSeason(dramaID, nextDrama),
   }),
+  // mock/降级面的 observeDrama **不模拟旗标推进**：known/newSeason/arrived 怎么变
+  // 是 Go 里 observe_drama 的规格（store.go:1176 + 单测），在这里再抄一遍必然漂。
+  // 所以 mock 只做两件诚实的事：报告这条在不在追剧表、把行原样回吐。
+  // ⚠ 也就是说"检测出 N 部有更新"这条**没在 mock 里被证明**，只有 Go 单测证明过。
+  observeDrama: async (drama: Drama) => {
+    const rows = readFollows()
+    const hit = rows.find((r) => r.drama.id === drama.id)
+    return { observed: !!hit, changed: false, row: null as WatchRow | null }
+  },
   danmakuAll: async (session: string) => {
     await delay(200)
     return mockDanmakuAll(session)

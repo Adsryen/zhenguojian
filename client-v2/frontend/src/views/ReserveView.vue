@@ -183,6 +183,11 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
     <button class="btn" :disabled="watchStore.loading" @click="void watchStore.load(true)">{{ t('reserve.refresh') }}</button>
   </div>
 
+  <!-- 后台检查结论（R23）：v1 打在状态栏，这里同样是一句话提示，不打断操作 -->
+  <div v-if="watchStore.checkHint" class="text-muted hint" role="status" data-testid="follow-check-hint">
+    {{ watchStore.checkHint }}
+  </div>
+
   <div v-if="watchStore.loading && !follows.length" class="state-block">
     <div class="dots">{{ t('reserve.loading') }}</div>
   </div>
