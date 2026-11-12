@@ -22,6 +22,8 @@ import asyncio
 import os
 import socket
 import subprocess
+
+import _devserver
 import sys
 import time
 
@@ -85,21 +87,9 @@ async def click_archive_tab(page):
 async def main():
     from playwright.async_api import async_playwright
 
-    owned = None
-    if not port_open("127.0.0.1", PORT):
-        owned = subprocess.Popen(
-            ["npm", "run", "dev:mock", "--", "--port", str(PORT), "--strictPort"],
-            cwd=FRONTEND,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.STDOUT,
-        )
-        for _ in range(60):
-            if port_open("127.0.0.1", PORT):
-                break
-            time.sleep(0.5)
-    if not port_open("127.0.0.1", PORT):
-        print("dev:mock 未能在 5190 启动")
-        return 2
+    # 端口预检 + 严格收口见 _devserver.py。旧写法 Popen 不带 start_new_session，
+    # 结束只 terminate()：npm 壳退了、vite 子进程继续占着 5190，下一轮就测到旧构建。
+    owned = _devserver.start_dev(FRONTEND, PORT, True, HERE, name="archive-scan")
 
     try:
         async with async_playwright() as pw:
@@ -221,12 +211,7 @@ async def main():
 
             await browser.close()
     finally:
-        if owned is not None:
-            owned.terminate()
-            try:
-                owned.wait(5)
-            except Exception:
-                owned.kill()
+        _devserver.stop_dev(owned, PORT, name="archive-scan")
 
     fails = [r for r in RESULTS if r[0] == "FAIL"]
     print(f"\n== {len(RESULTS) - len(fails)}/{len(RESULTS)} PASS ==")
