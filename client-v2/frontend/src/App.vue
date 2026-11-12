@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import NavRail from '@/components/NavRail.vue'
 import { useAppStore } from '@/stores/app'
 import { setupContextMenu } from '@/services/contextMenu' // V2-6 右键菜单：全局一处挂载
 import { api } from '@/services/api'
 import { t, tf } from '@/services/i18n'
+import { cleanReleaseBody } from '@/services/updatenotes'
 import type { UpdateAvailableEvent } from '@/services/types'
 
 const store = useAppStore()
@@ -12,6 +13,15 @@ setupContextMenu()
 
 /* ── V-UPD 全局顶部更新横幅（update:available 事件驱动；无事件永不出条） ── */
 const updBanner = ref<UpdateAvailableEvent | null>(null)
+
+/* 横幅摘要：release body 常是 markdown（CI 自动生成的资产对照表），直接截 60 字
+   会露出「## | 文件 | 用途 |」噪音——先净化再截。 */
+const updBannerSum = computed(() => {
+  const body = updBanner.value?.body ?? ''
+  if (!body) return ''
+  const text = cleanReleaseBody(body, 200).replace(/\s+/g, ' ').trim()
+  return text.length > 90 ? text.slice(0, 90) + '…' : text
+})
 let offBus: (() => void) | undefined
 
 function onUpdAvailable(payload: UpdateAvailableEvent) {
@@ -47,7 +57,7 @@ async function updSkipVersion() {
       <div v-if="updBanner" class="upd-banner" data-testid="update-banner">
         <span class="upd-banner-text">
           {{ tf('update.banner', { tag: updBanner.tag }) }}
-          <em v-if="updBanner.body" class="upd-banner-sum">{{ updBanner.body.slice(0, 60).replace(/\s+/g, ' ') }}…</em>
+          <em v-if="updBannerSum" class="upd-banner-sum">{{ updBannerSum }}</em>
         </span>
         <button class="upd-banner-btn" data-testid="update-banner-go" @click="updGoSettings">{{ t('update.banner.go') }}</button>
         <button class="upd-banner-btn upd-banner-ghost" data-testid="update-banner-skip" @click="updSkipVersion">{{ t('update.banner.skip') }}</button>

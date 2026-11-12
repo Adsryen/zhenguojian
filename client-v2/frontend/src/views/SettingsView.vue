@@ -10,6 +10,7 @@ import SourceGrid from '@/components/settings/SourceGrid.vue'
 import SoraniLoginDialog from '@/components/SoraniLoginDialog.vue'
 import { api, MOCK_MODE } from '@/services/api'
 import { locale, setLocale, t, tf } from '@/services/i18n'
+import { cleanReleaseBody } from '@/services/updatenotes'
 import { applyTheme, loadTheme, type ThemeMode } from '@/styles/theme'
 import { useAppStore } from '@/stores/app'
 import type { SoraniStatus, UpdateAsset, UpdateCheckResult, UpdateDownloadState, UpdateStatus } from '@/services/types'
@@ -209,9 +210,8 @@ const updDownloadText = computed(() => {
   return ''
 })
 const updNotes = computed(() => {
-  const body = (updRelease.value?.body ?? '').trim()
-  if (!body) return t('update.notesEmpty')
-  return body.length > 300 ? body.slice(0, 300) + '… ' + t('update.notesTrunc') : body
+  const text = cleanReleaseBody(updRelease.value?.body ?? '')
+  return text || t('update.notesEmpty')
 })
 function fmtSize(n: number): string {
   if (!n) return '0 B'
@@ -327,7 +327,7 @@ watch(() => updSelectedAsset.value?.name, (n) => { if (n) updAssetSel.value = n 
 onBeforeUnmount(stopUpdPoll)
 
 /* ---------------- 存储与关于（只读） ---------------- */
-const APP_VERSION = '2.0.0-shell'
+const appVersionText = ref('…')
 const dataDir = ref('…')
 const coreOk = ref<boolean | null>(null)
 const commitText = ref('…')
@@ -397,6 +397,7 @@ onMounted(async () => {
   await loadNetwork()
   try {
     const bi = await api.buildInfo()
+    appVersionText.value = bi.version && bi.version !== 'v0.0.0-dev' ? bi.version : t('update.devVersion')
     commitText.value = bi.revision && bi.revision !== 'unknown'
       ? `${bi.revision.slice(0, 12)}${bi.commitTime ? ' · ' + bi.commitTime : ''}${bi.modified ? '（含未提交改动）' : ''}`
       : '未知（构建未注入版本信息）'
@@ -636,20 +637,26 @@ onMounted(async () => {
         <span v-if="MOCK_MODE" class="badge badge-warn">{{ t('settings.mockBadge') }}</span>
       </div>
       <div class="sec-hint">{{ t('update.hint') }}</div>
-      <div class="kv">
-        <span class="kv-k">{{ t('update.current') }}</span>
-        <span class="kv-v" data-testid="update-current">
-          {{ updStatus ? updStatus.current : '…' }}
-          <span v-if="updStatus?.dev" class="text-muted">· {{ t('update.devBadge') }}</span>
-        </span>
-      </div>
-      <div class="kv">
-        <span class="kv-k">{{ t('update.lastCheck') }}</span>
-        <span class="kv-v">{{ lastCheckText }}</span>
-      </div>
-      <div class="field">
-        <label class="field-label"></label>
-        <div class="field-control save-row">
+      <div class="upd-status-grid">
+        <div class="kv">
+          <span class="kv-k">{{ t('update.current') }}</span>
+          <span class="kv-v" data-testid="update-current">
+            <span class="upd-ver">{{ updStatus ? updStatus.current || t('update.devVersion') : '…' }}</span>
+            <span v-if="updStatus?.dev" class="text-muted">· {{ t('update.devBadge') }}</span>
+          </span>
+        </div>
+        <div v-if="updResult?.available && updRelease" class="kv" data-testid="update-latest-row">
+          <span class="kv-k">{{ t('update.latestTag') }}</span>
+          <span class="kv-v">
+            <span class="upd-ver">{{ updRelease.tag }}</span>
+            <span class="badge badge-warn upd-new-badge">{{ t('update.badgeNew') }}</span>
+          </span>
+        </div>
+        <div class="kv">
+          <span class="kv-k">{{ t('update.lastCheck') }}</span>
+          <span class="kv-v">{{ lastCheckText }}</span>
+        </div>
+        <div class="upd-check-cell">
           <button class="btn" data-testid="update-check-btn" :disabled="updChecking" @click="doUpdateCheck(false)">
             {{ updChecking ? t('update.checking') : t('update.check') }}
           </button>
@@ -662,20 +669,18 @@ onMounted(async () => {
           <div class="upd-new" data-testid="update-available-line">
             {{ tf('update.available', { tag: updRelease.tag, date: updRelease.publishedAt ? new Date(updRelease.publishedAt).toLocaleString() : '—' }) }}
           </div>
-          <div class="upd-notes" data-testid="update-notes">{{ updNotes }}</div>
-          <div class="field">
+          <details class="upd-details" data-testid="update-notes-details">
+            <summary>{{ t('update.notesTitle') }}</summary>
+            <pre class="upd-notes" data-testid="update-notes">{{ updNotes }}</pre>
+          </details>
+          <div class="field upd-asset-row">
             <label class="field-label">{{ t('update.asset') }}</label>
-            <div class="field-control">
-              <select v-model="updAssetSel" class="ctl" data-testid="update-asset-select">
+            <div class="field-control save-row">
+              <select v-model="updAssetSel" class="ctl upd-asset-select" data-testid="update-asset-select">
                 <option v-for="a in updAssets" :key="a.name" :value="a.name">
-                  {{ a.name === 'zhenGuoJian-v2.exe' ? t('update.asset.exe') : a.name === 'zhenGuoJian-v2-app.zip' ? t('update.asset.appzip') : a.name }}({{ fmtSize(a.size) }})
+                  {{ a.name === 'zhenGuoJian-v2.exe' ? t('update.asset.exe') : a.name === 'zhenGuoJian-v2-app.zip' ? t('update.asset.appzip') : a.name }} ({{ fmtSize(a.size) }}) 
                 </option>
               </select>
-            </div>
-          </div>
-          <div class="field">
-            <label class="field-label"></label>
-            <div class="field-control save-row">
               <button
                 v-if="!updDownload || updDownload.state !== 'downloading'"
                 class="btn"
@@ -700,7 +705,7 @@ onMounted(async () => {
           </div>
         </template>
         <template v-else-if="updResult?.skippedTag">{{ tf('update.skipped', { tag: updResult.skippedTag }) }}</template>
-        <template v-else>{{ t('update.latest') }}</template>
+        <template v-else><span class="upd-ok" data-testid="update-latest-line">✓ {{ t('update.latest') }}</span></template>
         <span v-if="updResult?.cooldown" class="text-muted"> · {{ t('update.cooldown') }}</span>
         <div v-if="updApplyMsg" data-testid="update-apply-msg">{{ updApplyMsg }}</div>
       </div>
@@ -763,7 +768,7 @@ onMounted(async () => {
       <div class="sec-hint">{{ t('settings.storage.hint') }}</div>
       <div class="kv">
         <span class="kv-k">{{ t('settings.storage.version') }}</span>
-        <span class="kv-v">真果鉴 v{{ APP_VERSION }}</span>
+        <span class="kv-v selectable">真果鉴 {{ appVersionText }}</span>
       </div>
       <div class="kv">
         <span class="kv-k">{{ t('settings.storage.core') }}</span>
@@ -968,5 +973,45 @@ onMounted(async () => {
 .kv-v.selectable {
   cursor: text;
   user-select: text;
+}
+
+/* V-UPD 更新区版式（alpha.24 UI 优化） */
+.upd-status-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 16px;
+  align-items: center;
+  margin: 8px 0 10px;
+}
+.upd-status-grid .kv { grid-column: 1; }
+.upd-check-cell {
+  grid-column: 2;
+  grid-row: 1 / span 3;
+  align-self: center;
+}
+.upd-ver { font-weight: 600; }
+.upd-new-badge { margin-left: 8px; }
+.upd-details { margin: 8px 0; }
+.upd-details summary {
+  cursor: pointer;
+  color: var(--muted, #8b93a7);
+  font-size: 13px;
+}
+.upd-details .upd-notes { margin-top: 6px; }
+.upd-notes {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.upd-asset-row .upd-asset-select {
+  flex: 1;
+  min-width: 220px;
+}
+.upd-ok {
+  color: var(--success, #2ea043);
+  font-weight: 600;
 }
 </style>

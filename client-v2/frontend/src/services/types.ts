@@ -569,6 +569,7 @@ export interface BuildInfo {
   revision?: string
   commitTime?: string
   modified?: boolean
+  version?: string
 }
 
 /** 带协议 code 的错误（discovery_unavailable / source_blocked 等） */

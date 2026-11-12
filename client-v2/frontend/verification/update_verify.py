@@ -26,8 +26,10 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 自适应：脚本约定在 client-v2/frontend/verification/；若被放到仓库根 verification/ 也能跑
+_ROOT_ALT = os.path.normpath(os.path.join(HERE, "..", "..", "client-v2", "frontend"))
 ROOT = os.path.dirname(HERE)
-FRONTEND = os.path.join(ROOT, "client-v2", "frontend")
+FRONTEND = ROOT if os.path.basename(ROOT) == "frontend" else _ROOT_ALT
 PORT = 5189
 BASE = f"http://127.0.0.1:{PORT}"
 EXEC = os.path.expanduser(
