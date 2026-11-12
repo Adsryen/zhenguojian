@@ -210,6 +210,27 @@ core 下载完成的是 **CENC 加密态** `media.mp4`，直接播放会卡死�
 
 ## 从源码重新构建
 
+### 一键打包（推荐）
+
+双击本目录的 `一键打包.bat`（等价于 `powershell -ExecutionPolicy Bypass -File build\build-win.ps1`）。
+脚本依次自动完成：关闭占用产物的旧实例（selftest/旧版程序残留会锁住 `dist\runtime`）→ 探测本地代理
+（默认 `http://127.0.0.1:17890`，不通自动直连）→ 准备 `.venv-build` 构建依赖（requirements 钉版在
+新 Python 上装不上时自动退兼容最新版）→ `build.py`（vendor 过期出现 `undefined: core.XXX` 时自动
+`go mod vendor` 同步后重试）→ `--selftest` 全链路自检并清掉测试落盘 → `package.py` 出 `真果鉴.zip`。
+
+参数：`-SkipSelfTest`（接口异常仍想先出包）、`-SkipZip`、`-MpvPath <mpv.exe>`、`-Proxy <url>`、
+`-FreshDeps`（重建 venv）。selftest 结果以本轮新写的 `dist\selftest-report.json` 为准，未通过则
+不生成 zip。
+
+> **这份一键脚本不在版本库里**：`git` 只跟踪 `build\build.py` 与 `build\package.py`，
+> `build-win.ps1` 没有入库，而多机同步用的 Syncthing 忽略规则里带 `**/build`
+> （`zhenguojian\build\` 整目录都不传），所以 clone 或换机后这两样都会缺。
+> 缺了会有两种表现：`一键打包.bat` 直接报 `MISSING build-win.ps1`；`git status`
+> 把 `build\*.py` 显示成「已删除」。补的办法二选一：从主开发机手动拷
+> `build\build-win.ps1` 过来，或者跳过一键、直接按下面「手动步骤」走 / 用 CI 产物。
+
+### 手动步骤
+
 ```
 python build\build.py
 ```
