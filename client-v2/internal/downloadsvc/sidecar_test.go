@@ -333,9 +333,6 @@ func TestQueueSidecarsRetriesUntilFileLands(t *testing.T) {
 	root := h.tmp
 	mediaDir := filepath.Join(root, "jr")
 	media := filepath.Join(mediaDir, "media.mp4")
-	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
-		return map[string]any{"directory": root}, nil
-	}
 	h.core.handlers["resolve"] = func(map[string]any) (map[string]any, error) {
 		return map[string]any{"session": "s-retry", "danmakuId": "ep-retry"}, nil
 	}
@@ -345,13 +342,24 @@ func TestQueueSidecarsRetriesUntilFileLands(t *testing.T) {
 		}, "total": float64(1)}, nil
 	}
 
-	// 文件在第 3 次尝试前才落地（先没目录，再 0 字节，再有内容）
-	go func() {
-		_ = os.MkdirAll(mediaDir, 0o755)
-		_ = os.WriteFile(media, nil, 0o644)
-		time.Sleep(20 * time.Millisecond)
-		_ = os.WriteFile(media, []byte("media bytes"), 0o644)
-	}()
+	// 让"文件晚落地"这件事**确定性**发生，而不是靠 sleep 撞时序：
+	// 每次尝试都会先问一次 downloadDirectory，所以在那里数着——
+	// 第 1 次只建目录 + 0 字节文件（resolveEpisodeSource 会判"不完整"而失败），
+	// 第 2 次才写入内容（该成功）。
+	// 上一版我是开协程 sleep 20ms 再写内容，而 3 次尝试 × 5ms ≈ 10ms 就用尽了，
+	// CI 上稳定红在"重试之后该成功"——那种写法即使调大数字也还是碰运气。
+	var tries int
+	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
+		tries++
+		switch tries {
+		case 1:
+			_ = os.MkdirAll(mediaDir, 0o755)
+			_ = os.WriteFile(media, nil, 0o644)
+		case 2:
+			_ = os.WriteFile(media, []byte("media bytes"), 0o644)
+		}
+		return map[string]any{"directory": root}, nil
+	}
 
 	jobs := []map[string]any{jobRow("jr", "completed")}
 	prev := map[string]string{"jr": "downloading"}
@@ -369,6 +377,9 @@ func TestQueueSidecarsRetriesUntilFileLands(t *testing.T) {
 	}
 	if reps[0].Outcome != string(SidecarRan) {
 		t.Fatalf("重试之后该成功，得 %+v", reps[0])
+	}
+	if tries != 2 {
+		t.Fatalf("该正好在第 2 次尝试上成功（说明第 1 次确实撞空、第 2 次确实重试了），实得 tries=%d", tries)
 	}
 	ass, doc := danmaku.SidecarPaths(media)
 	for _, f := range []string{ass, doc} {
