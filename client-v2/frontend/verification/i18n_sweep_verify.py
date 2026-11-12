@@ -11,6 +11,9 @@ i18n_sweep_verify.py — L 表收敛进 i18n.ts 的验收脚本
      stores/calendar.ts 透传文案、DiscoverView 非 hero chrome、SourceSwitch）——
      属任务范围外，已在返报「未尽项」列明；数据节点（title 属性含 alt 除外）与
      日期数字不计。
+     v2-6-parity：PlayerView 模板内联 chrome（返回/播放器/示例数据/弹幕 N 条/已播完/
+     正在打开播放会话/本集已播完/重新播放/播放·暂停/倍速/音量/弹幕开关·开合/关闭/第 N 集）
+     已进 i18n，对应豁免已从 GLOBAL_ALLOW 撤除；.pl-group 不再整组豁免，title 一起扫。
   3) 截图 i18n-sweep-player.png / i18n-sweep-downloads.png（zh 默认态）。
 
 dev:mock 端口 5185 自管理（--strictPort），结束 kill 并删 pid 文件。
@@ -124,12 +127,9 @@ GLOBAL_ALLOW = [
     r"^\d+\s*集$", r"^更新至\d+集$", r"^共\d+集$",  # pg-badge / ep 数据透传
     r"^\d+[.]\d$", r"周[一二三四五六日天]$", r"今天",  # 日历数据（store 文案）
     r"今晚 \d+:\d+", r"今日 \d+:\d+",  # stores/calendar.ts publishText（未尽项）
-    r"^关闭$", r"^暂停$", r"^播放$", r"^倍速$", r"^音量$", r"^示例数据$",
-    r"^已播完$", r"^本集已播完$", r"^重新播放$", r"^正在打开播放会话…$",
-    r"^← 返回$", r"^播放器$", r"^弹幕 \d+ 条$",  # PlayerView 模板内联（未尽项，返报已列）
     r"热度$", r"已预约$",  # store normalize 尾缀（数据）
     r"加载中", r"加载失败", r"重试", r"复制失败", r"源列表获取失败", r"选择源",
-    r"源未接入", r"倍速", r"音量", r"弹幕", r"播放器", r"示例数据", r"已播完",
+    r"源未接入", r"弹幕",
     r"返回", r"重新播放", r"正在打开", r"演示模式", r"操作失败", r"跳转失败",
     r"待核心接线", r"已切换到", r"真人剧", r"漫剧", r"AI剧", r"^全部$",  # 非 hero chrome / store hints / FALLBACK_CHIPS
     r"找剧", r"追剧",  # DiscoverView 标题·日历行按钮组 store 侧变体（sweep 后应已英文化，仅兜底数据串）
@@ -192,6 +192,8 @@ async def main():
             zh_player = []
             for sel, want in [
                 (".pl-panel-title", "选集"),
+                (".pl-label", "倍速"),
+                (".pl-panel-cur", "第1集"),
                 (".pl-group:has(.quality)", "画质"),
                 (".pl-btn.ghost.ap", "连播开"),
                 (".pl-btn.nav.next-ep", ""),
@@ -200,7 +202,7 @@ async def main():
             ]:
                 got = await page.locator(sel).first.inner_text()
                 zh_player.append((sel, want, got))
-            check("zh|player 面板/条 6 处文案", all((w in g) if w else bool(g.strip()) for _, w, g in zh_player),
+            check("zh|player 面板/条 8 处文案（含 v2-6-parity chrome）", all((w in g) if w else bool(g.strip()) for _, w, g in zh_player),
                   str([x for x in zh_player if x[1] != x[2]]))
             qopt = await page.locator(".pl-select.quality option", has_text="自动").count()
             check("zh|player 画质 option「自动」", qopt >= 1)
@@ -265,7 +267,8 @@ async def main():
             await page.wait_for_timeout(800)
 
             en_spots = {
-                "/#/player?d=mock_drama_1&ep=1": (".pl-title", ["Episodes", "Quality", "Next episode", "Hotkey help", "Collapse episodes", "Autoplay on"],
+                "/#/player?d=mock_drama_1&ep=1": (".pl-title", ["Episodes", "Quality", "Next episode", "Hotkey help", "Collapse episodes", "Autoplay on",
+                                                 "Back", "Speed", "Volume", "Ep 1"],
                                                   [".pl-top", ".pl-title", ".pl-hint", ".pl-ended", ".pl-panel-cur", ".ep-btn", ".pl-toast", ".pl-label", ".dm", ".pl-badge"]),
                 "/#/": (".page-head", [],
                         [".hero-title", ".hero-desc", ".hero-tag", ".pg-title", ".pg-badge", ".banner", ".ss-name", ".chip", ".page-title", ".btn", ".rv-ep", ".toast"]),
@@ -286,8 +289,9 @@ async def main():
                     # 行内数据豁免太宽 → 行容器整体排除后仅扫 statbar
                     scope = ".stat-bar, [data-testid=source-select], .empty"
                 elif url.startswith("/#/player"):
+                    # v2-6-parity：chrome 已键化，不再整组豁免 .pl-group（title/弹幕按钮一起扫）
                     scope = ".pl-bar, .pl-panel"
-                    excludes = excludes + [".pl-bar .pl-group"]
+                    excludes = [x for x in excludes if x not in (".pl-label", ".pl-panel-cur", ".pl-badge")]
                 else:
                     scope = sel
                 sel_ex = ", ".join(excludes)
