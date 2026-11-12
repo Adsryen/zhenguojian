@@ -85,6 +85,23 @@ def git_revert_shots(files):
     return r.returncode == 0
 
 
+def parse_run(out, code, secs, name):
+    """把一次脚本运行拆成可报表的字段。**纯函数**，`--selftest` 钉住它。
+
+    为什么要单独抽出来：第十五轮之前 `run_all` 失败时只给 `exit/PASS/FAIL 计数`，
+    我于是又得手动把那个脚本单独跑一遍才看得到红的是哪条断言——
+    回归器最没用的形态就是"只告诉你红了"。
+    """
+    lines = (out or "").splitlines()
+    npass = sum(1 for l in lines if l.startswith(("[PASS]", "PASS ")))
+    fail_lines = [l.strip() for l in lines if l.startswith(("[FAIL]", "FAIL ", "FAILED"))]
+    summary = next((l for l in reversed(lines)
+                    if re.search(r"(ALL PASS|ALL PASSED|RESULT|=====|FAILURES)", l)),
+                   (lines[-1].strip() if lines else "(无输出)"))
+    return dict(name=name, code=code, passed=npass, failed=len(fail_lines),
+                fail_lines=fail_lines, secs=secs, summary=summary[:70])
+
+
 def run_script(name, timeout, no_audit):
     args = [sys.executable, "-u", name]
     if no_audit and name == "i18n_sweep_verify.py":
@@ -97,18 +114,14 @@ def run_script(name, timeout, no_audit):
     except subprocess.TimeoutExpired as exc:
         raw = exc.stdout if isinstance(exc.stdout, str) else (exc.stdout or b"").decode(errors="replace")
         out, code, err = raw, 124, f"TIMEOUT >{timeout}s"
-    lines = out.splitlines()
-    npass = sum(1 for l in lines if l.startswith(("[PASS]", "PASS ")))
-    nfail = sum(1 for l in lines if l.startswith(("[FAIL]", "FAIL ", "FAILED")))
-    summary = next((l for l in reversed(lines)
-                    if re.search(r"(ALL PASS|ALL PASSED|RESULT|=====|FAILURES)", l)),
-                   (lines[-1] if lines else "(无输出)"))
-    return dict(name=name, code=code, passed=npass, failed=nfail,
-                secs=round(time.time() - t0), summary=summary.strip()[:70],
-                err=(err or "").strip()[-200:])
+    res = parse_run(out, code, round(time.time() - t0), name)
+    res["err"] = (err or "").strip()[-200:]
+    return res
 
 
-def selftest():
+def selftest():  # 分母必须把两组用例都算进去——
+    # 第一版加 parse_run 用例时忘了改汇总，7/7 实际跑了 12 条：
+    # 这类"数字看着自洽其实没人核对"正是本任务一直在抓的东西。
     """表驱动钉住「哪些脏文件允许被还原」这条判据 —— 还原范围写宽过一次，
     把同目录未提交的代码改动整个吞掉（退出码 0、无提示），这就是那次的回归测试。"""
     cases = [
@@ -139,7 +152,24 @@ def selftest():
         if not ok:
             print(f"      shots={shots} 期望={want_shots} others={len(others)} 期望={want_others}")
             bad += 1
-    print(f"\n===== run_all --selftest: {len(cases) - bad}/{len(cases)} PASS =====")
+    out_cases = [
+        ("抓到红的那几条", "PASS A1 x\nFAIL A2 原因\n[FAIL] A3 又一条\nRESULT: 2 FAILED", 1, 1, 2),
+        ("全绿没有 FAIL 行", "PASS A1\n[PASS] A2\n===== 2/2 PASS =====", 0, 2, 0),
+        ("TIMEOUT 没有输出也不炸", "", 124, 0, 0),
+        ("FAILED 汇总行也计入失败行", "ALL CHECKS PASSED", 0, 0, 0),
+        ("FAILED: 3 check(s) 要被抓出来", "FAIL ⑦ x\nFAILED: 1 check(s)", 1, 0, 2),
+    ]
+    for name, out, code, want_pass, want_fail in out_cases:
+        r = parse_run(out, code, 0, "x_verify.py")
+        ok = r["passed"] == want_pass and r["failed"] == want_fail
+        print(f"{'PASS' if ok else 'FAIL'} parse_run：{name}")
+        if not ok:
+            print(f"      got passed={r['passed']} failed={r['failed']} "
+                  f"期望 {want_pass}/{want_fail} 行={out!r}")
+            bad += 1
+
+    total = len(cases) + len(out_cases)
+    print(f"\n===== run_all --selftest: {total - bad}/{total} PASS =====")
     return 1 if bad else 0
 
 
@@ -178,6 +208,11 @@ def main():
             bad.append(res)
         print(f"{res['name']:<36}{res['code']:>5}{res['passed']:>6}{res['failed']:>6}"
               f"{res['secs']:>5}  {(','.join(leftover) or '-'):<10} {res['summary']}")
+        if res["fail_lines"]:
+            for l in res["fail_lines"][:6]:
+                print(f"    ↳ {l[:150]}")
+            if len(res["fail_lines"]) > 6:
+                print(f"    ↳ …另有 {len(res['fail_lines']) - 6} 条 FAIL 行")
         if res["code"] != 0 and res["err"]:
             print(f"    ⚠ stderr: {res['err'][:160]}")
 
