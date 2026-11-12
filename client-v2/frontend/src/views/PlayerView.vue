@@ -35,7 +35,7 @@ import { api, embedApi } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
-import { t } from '@/services/i18n'
+import { t, tf } from '@/services/i18n'
 
 /* ── V2-F 文案已收敛至 i18n.ts player.*（原组件内 L 表）；t() 随 locale 响应 ── */
 const hotkeys = computed(() => [
@@ -351,20 +351,20 @@ onBeforeUnmount(() => {
 <template>
   <div class="player">
     <header class="pl-top" ref="topEl">
-      <button class="pl-btn ghost" type="button" @click="closePlayer">← 返回</button>
-      <h1 class="pl-title">{{ store.title || '播放器' }}</h1>
+      <button class="pl-btn ghost" type="button" @click="closePlayer">← {{ t('player.back') }}</button>
+      <h1 class="pl-title">{{ store.title || t('player.title') }}</h1>
       <div class="pl-badges">
-        <span v-if="store.demoMode" class="pl-badge demo">示例数据</span>
-        <span v-if="store.danmakuCount !== null" class="pl-badge">弹幕 {{ store.danmakuCount }} 条</span>
+        <span v-if="store.demoMode" class="pl-badge demo">{{ t('player.badgeDemo') }}</span>
+        <span v-if="store.danmakuCount !== null" class="pl-badge">{{ tf('player.badgeDanmakuCount', { n: store.danmakuCount }) }}</span>
         <span v-if="store.danmakuNote" class="pl-badge">{{ store.danmakuNote }}</span>
-        <span v-if="store.eof" class="pl-badge warn">已播完</span>
+        <span v-if="store.eof" class="pl-badge warn">{{ t('player.badgeEof') }}</span>
       </div>
     </header>
 
     <div class="pl-mid">
       <div class="pl-col">
         <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
-          <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
+          <div v-if="store.loading" class="pl-hint">{{ t('player.openingSession') }}</div>
           <div v-else-if="store.error" class="pl-hint err">
             {{ store.error }}
             <button class="pl-btn ghost sm" type="button" data-testid="player-retry" @click.stop="retryBoot">
@@ -376,7 +376,7 @@ onBeforeUnmount(() => {
               <span class="pl-disc-core" />
             </div>
             <div v-if="store.eof" class="pl-ended">
-              <span class="pl-ended-txt">本集已播完</span>
+              <span class="pl-ended-txt">{{ t('player.endedEpisode') }}</span>
               <button v-if="store.hasNextEpisode" class="pl-btn next" type="button" @click.stop="store.playNext()">
                 {{ t('player.nextEpisode') }}
               </button>
@@ -391,7 +391,7 @@ onBeforeUnmount(() => {
               >
                 {{ nextSeasonLabel }}
               </button>
-              <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">重新播放</button>
+              <button v-else class="pl-btn ghost" type="button" @click.stop="store.togglePlay()">{{ t('player.replay') }}</button>
             </div>
             <div v-else-if="store.paused && !store.loading" class="pl-bigplay">▶</div>
           </div>
@@ -412,7 +412,7 @@ onBeforeUnmount(() => {
             :title="t('player.nextEpisode')"
             @click="store.playNext()"
           >⏭</button>
-          <button class="pl-btn" type="button" :title="store.paused ? '播放' : '暂停'" @click="store.togglePlay()">
+          <button class="pl-btn" type="button" :title="store.paused ? t('player.play') : t('player.pause')" @click="store.togglePlay()">
             {{ store.paused ? '▶' : '⏸' }}
           </button>
           <span class="pl-time">{{ store.posLabel }} / {{ store.durLabel }}</span>
@@ -427,13 +427,13 @@ onBeforeUnmount(() => {
             @change="onDragEnd"
           />
           <label class="pl-group">
-            <span class="pl-label">倍速</span>
+            <span class="pl-label">{{ t('player.speed') }}</span>
             <select class="pl-select" :value="store.speed" @change="store.setSpeed(Number(($event.target as HTMLSelectElement).value))">
               <option v-for="sp in SPEED_CHOICES" :key="sp" :value="sp">{{ sp }}×</option>
             </select>
           </label>
           <label class="pl-group">
-            <span class="pl-label">音量</span>
+            <span class="pl-label">{{ t('player.volume') }}</span>
             <input
               class="pl-slider vol"
               type="range"
@@ -462,10 +462,10 @@ onBeforeUnmount(() => {
             class="pl-btn ghost dm"
             :class="{ off: !store.danmakuOn }"
             type="button"
-            title="弹幕开关"
+            :title="t('player.danmakuToggle')"
             @click="store.toggleDanmaku()"
           >
-            弹幕{{ store.danmakuOn ? '开' : '关' }}
+            {{ store.danmakuOn ? t('player.danmakuOn') : t('player.danmakuOff') }}
           </button>
           <button
             class="pl-btn ghost fs"
@@ -474,7 +474,7 @@ onBeforeUnmount(() => {
             @click="toggleFullscreen"
           >{{ isFullscreen ? t('player.exitFullscreen') : t('player.fullscreen') }}</button>
           <button class="pl-btn ghost hk" type="button" :title="t('player.help')" @click="helpOpen = !helpOpen">⌨</button>
-          <button class="pl-btn ghost close" type="button" @click="closePlayer">关闭</button>
+          <button class="pl-btn ghost close" type="button" @click="closePlayer">{{ t('player.close') }}</button>
         </footer>
 
         <div v-if="store.status" class="pl-status" :class="{ warn: store.demoMode }">{{ store.status }}</div>
@@ -483,7 +483,7 @@ onBeforeUnmount(() => {
       <aside class="pl-panel" :class="{ collapsed: !panelOpen }">
         <template v-if="panelOpen">
           <div class="pl-panel-head">
-            <span class="pl-panel-title">{{ t('player.episodes') }}<span v-if="store.episodeIndex" class="pl-panel-cur">· 第{{ store.episodeIndex }}集</span></span>
+            <span class="pl-panel-title">{{ t('player.episodes') }}<span v-if="store.episodeIndex" class="pl-panel-cur">{{ tf('player.panelEpisode', { n: store.episodeIndex }) }}</span></span>
             <button class="pl-btn ghost sm" type="button" :title="t('player.episodesCollapse')" @click="panelOpen = false">▸</button>
           </div>
           <div ref="panelBodyEl" class="pl-panel-body">
