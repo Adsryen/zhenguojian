@@ -307,6 +307,14 @@ async def main():
             chips = await page.locator("[data-testid=stat-chip]").count()
             check("zh|downloads stat chips 渲染", chips >= 5, f"n={chips}")
 
+            # ── R9c：站源备注（stores/app.ts SOURCE_NOTES 改为存 i18n 键）──
+            await settle(page, "/#/settings", "[data-testid=source-note]")
+            notes = await page.locator("[data-testid=source-note]").all_inner_texts()
+            joined = " / ".join(n.strip() for n in notes)
+            want = ["主源，恒可用。", "18+ 内容，出厂默认停用"]
+            miss = [w for w in want if w not in joined]
+            check("zh|settings 站源备注逐字", not miss, f"missing={miss} notes={joined[:160]}")
+
             # ═════ 2. en 无 CJK 残留（节点白名单） ═════
             await page.evaluate(LOCALE_JS % "en")
             await page.reload()
@@ -318,6 +326,8 @@ async def main():
                                                   [".pl-top", ".pl-title", ".pl-hint", ".pl-ended", ".pl-panel-cur", ".ep-btn", ".pl-toast", ".pl-label", ".dm", ".pl-badge"]),
                 # 提示句在 en 遍里可能被「最近搜索」块顶掉（zh 遍刚搜过东西，recents 已有值），
                 # 那句在 zh|search 里已逐字断言，这里不再重复要求
+                "/#/settings": ("[data-testid=source-note]", ["Primary source"],
+                               [".ss-name", ".sc-name"]),
                 "/#/search": (".search-bar", ["Search", "All sources"],
                              [".rec-label", ".chip", ".ss-name", ".banner", ".toast", "[data-testid=search-input]"]),
                 "/#/history": (".hist-list", ["History", "Clear history", "Today", "Ep 12", "watched"],
@@ -344,6 +354,9 @@ async def main():
                     # v2-6-parity：标题/刷新/横幅已键化 → scope 扩到 .banner，
                     # .chips 仍留在扫描面外（体裁名来自 browseFilters 核心数据，属透传）
                     scope = ".page-head, .banner"
+                elif url == "/#/settings":
+                    # 只扫备注节点：卡片名/开关文案另有各自覆盖面，站源 displayName 属数据
+                    scope = "[data-testid=source-note]"
                 elif url == "/#/search":
                     # .chip 是最近搜索词与源名（数据），不参与零 CJK 判定
                     scope = ".page-head, .search-bar, .state-block"

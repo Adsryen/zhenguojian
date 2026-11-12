@@ -23,7 +23,9 @@ const on = computed(() => props.source.enabled && props.source.implemented)
    全都没有才落 slug 自证。 */
 const note = computed(() =>
   props.source.note
-    ? props.source.note
+    // 自建备注表存的是 i18n 键；核心 registry note 是站源数据，
+    // t() 缺键时逐字回退（i18n.ts 的既定语义），所以这里统一过 t()
+    ? t(props.source.note)
     : !props.source.implemented
       ? t('settings.sources.notImplemented')
       : props.source.adult
@@ -45,7 +47,7 @@ function onClick() {
           {{ label }}
           <span v-if="source.adult" class="sc-adult">18+</span>
         </div>
-        <div class="sc-note" :title="note">{{ note }}</div>
+        <div class="sc-note" data-testid="source-note" :title="note">{{ note }}</div>
       </div>
       <button
         class="sc-switch"

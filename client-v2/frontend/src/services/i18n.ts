@@ -492,6 +492,12 @@ const zh: Record<string, string> = {
   'detail.posterNoSource': '没拿到这张海报的原图，请先在剧库里刷新一次',
   'detail.posterFail': '没能保存海报：{m}',
   // ── v2-6-parity：HistoryView（i18n_static_scan 基线 15 → 0）──
+  // 站源备注（v1 settings_panel.py FALLBACK_SOURCES 口径，展示于设置页站源卡片）
+  'source.note.hongguo': '主源，恒可用。',
+  'source.note.sorani': '播放需登录：设置 > 站源 > 站源账号。',
+  'source.note.dsd': '上游连通性不稳定，失败时稍后重试。',
+  'source.note.huangguo-video': '上游连通性不稳定，失败时稍后重试。',
+  'source.note.youzi': '18+ 内容，出厂默认停用，需手动打开。',
   'season.all': '全 {n} 季 ▾',
   'season.episodes': '{label} · {n} 集',
   'season.title': '同系列的其它季，点开直接切换',
@@ -1058,6 +1064,12 @@ const en: Record<string, string> = {
   'detail.posterNoSource': 'Could not fetch the original poster — refresh the library first',
   'detail.posterFail': 'Could not save poster: {m}',
   // ── v2-6-parity: HistoryView (i18n_static_scan baseline 15 → 0) ──
+  // Source notes (v1 settings_panel.py FALLBACK_SOURCES; shown on settings source cards)
+  'source.note.hongguo': 'Primary source, always available.',
+  'source.note.sorani': 'Playback requires sign-in: Settings > Sources > Source account.',
+  'source.note.dsd': 'Upstream connectivity is flaky; retry later on failure.',
+  'source.note.huangguo-video': 'Upstream connectivity is flaky; retry later on failure.',
+  'source.note.youzi': '18+ content; disabled by default, turn it on manually.',
   'season.all': 'All {n} seasons ▾',
   'season.episodes': '{label} · {n} eps',
   'season.title': 'Other seasons in this series — click to switch',

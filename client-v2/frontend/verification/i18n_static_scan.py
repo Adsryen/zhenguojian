@@ -136,7 +136,6 @@ TS_BASELINE = {
     "stores/watch.ts": 16,
     "services/api.ts": 13,
     "stores/calendar.ts": 12,
-    "stores/app.ts": 5,
     "services/covers.ts": 4,
     "services/coverSave.ts": 2,
     "stores/searchAll.ts": 2,

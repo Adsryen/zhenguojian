@@ -6,12 +6,14 @@ import type { SourceListItem } from '@/services/types'
 /* 站源备注表：核心 listSources 不带 note，v1 口径来自
    zhenguojian/app/zhenguojian/settings_panel.py FALLBACK_SOURCES
    （连通性观察/使用提示，展示于设置页站源卡片）。 */
+/* v2-6-parity：这里存的是 i18n 键而不是成品文案（渲染处 SourceCard 用 t() 取）。
+   核心 listSources 若自带 note，那是站源数据，t() 缺键时原样回退，两者不冲突。 */
 const SOURCE_NOTES: Record<string, string> = {
-  hongguo: '主源，恒可用。',
-  sorani: '播放需登录：设置 > 站源 > 站源账号。',
-  dsd: '上游连通性不稳定，失败时稍后重试。',
-  'huangguo-video': '上游连通性不稳定，失败时稍后重试。',
-  youzi: '18+ 内容，出厂默认停用，需手动打开。',
+  hongguo: 'source.note.hongguo',
+  sorani: 'source.note.sorani',
+  dsd: 'source.note.dsd',
+  'huangguo-video': 'source.note.huangguo-video',
+  youzi: 'source.note.youzi',
 }
 
 const STORE_KEY = 'zhenguojian.source'
