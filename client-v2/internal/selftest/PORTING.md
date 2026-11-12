@@ -64,6 +64,19 @@ PATH 兜底）、mpv 候选路径布局（同级 → `runtime\` → `mpv\`）、
 
 **仍然从未执行过的**：九步各自的**真实管线调用**——
 `native.Init` 之后的 1–6 步要连核心网络，第 7/9 步还要真实 ffmpeg 与打包布局。
+
+> 第二十八轮把这条边界又往里推了一格：`download` / `merge` 两步的**逻辑**
+> （入队载荷只取前 2 集、`source` 兜底、轮询到终态、部分完成要报错、
+> 合并结果的三种失败原因）现在用假核心在 CI 上真跑（run 43267567040：
+> `selftest 用例：执行 21 / 声明 21`，全 PASS）。
+> **执行过的仍然是逻辑，不是真下载**——真网络、真 ffmpeg、真落盘仍只在打包机上存在。
+>
+> 顺带这次抓到的是一个会在打包机上**白等 20 分钟再误报**的 bug：
+> `downloadsvc.payloadLocked` 返回的 `merges` 是 `[]*MergeEntry`，
+> 而 `mergeList` 原来只认 `[]map[string]any` 与 `[]any` →
+> 永远拿到空表 → `mergeSettled` 恒 false → 轮询到超时 →
+> 最后报一句误导的「合并没有返回产物路径」。
+> 只有把真类型接进测试才可能发现它——纯 review 时我读了三遍都没看出来。
 CI 的 ubuntu runner 不开核心网络、Windows job 只编译不跑，本机也没有 Go。
 所以首次在打包机上跑 `client-v2.exe --selftest` 时，请把 1–6 与 7/9 都当成"可能红"看待：
 - 1–6 红通常是网络/站点结构变化 → 看 detail 里的 count/hits/episodes；
