@@ -1,0 +1,12 @@
+# 本机构建产物与依赖环境，不入库（AI_BUILD：源码包不含运行库/构建产物）
+.venv-build/
+dist/
+runtime/
+真果鉴.zip
+build/package/
+build/真果鉴/
+build/core-overlay.json
+build/poster-provider_hongguo.go
+build/creator-provider_hongguo_detail.go
+build/真果鉴.spec
+__pycache__/
