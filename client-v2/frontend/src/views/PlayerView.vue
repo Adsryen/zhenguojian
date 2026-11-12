@@ -386,7 +386,9 @@ onBeforeUnmount(() => {
           <div v-if="store.loading" class="pl-hint">{{ t('player.openingSession') }}</div>
           <div v-else-if="store.error" class="pl-hint err">
             {{ store.error }}
-            <button class="pl-btn ghost sm" type="button" data-testid="player-retry" @click.stop="retryBoot">
+            <!-- 本地文件不在/越界时**不给「重试」**：重试只会拿到同一条错误，
+                 那是个看起来能点的死按钮。线上解析失败仍然给重试（R30 ⑧ 断言的就是那条）。 -->
+            <button v-if="!store.localFailed" class="pl-btn ghost sm" type="button" data-testid="player-retry" @click.stop="retryBoot">
               {{ t('player.retry') }}
             </button>
           </div>
@@ -523,7 +525,9 @@ onBeforeUnmount(() => {
         <div v-if="store.status" class="pl-status" :class="{ warn: store.demoMode }">{{ store.status }}</div>
       </div>
 
-      <aside class="pl-panel" :class="{ collapsed: !panelOpen }">
+      <!-- 本地成品没有"选集"可言（v1 main.py:2612-2618 直接清空选集条 + 关掉上下集），
+           所以整块侧栏不渲染，而不是渲染一个空网格。 -->
+      <aside v-if="!store.localPath" class="pl-panel" :class="{ collapsed: !panelOpen }">
         <template v-if="panelOpen">
           <div class="pl-panel-head">
             <span class="pl-panel-title">{{ t('player.episodes') }}<span v-if="store.episodeIndex" class="pl-panel-cur">{{ tf('player.panelEpisode', { n: store.episodeIndex }) }}</span></span>

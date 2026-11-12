@@ -159,6 +159,10 @@ TS_EXEMPT = {
         ("mock: 请先完成下载", DIAG_REASON),
         ("mock: zip 资产请手动解压", DIAG_REASON),
         ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
+        # mock 面照 Go 复刻的**日志串**：界面按 ApiError.code（local_missing/outside_root）
+        # 从 i18n 取句子，这两句中文永远只进 console/日志，不进 DOM。
+        ("本地文件已不存在", "mock 与 Go `PlayerOpenLocal` 同形的日志串；界面文案走 player.localMissing（按 code 取）"),
+        ("只允许播放下载目录下的成品文件", "同上，对应 Go 的 [outside_root]；界面走 player.localOutside"),
         ("mock detail 故障注入", "VITE_MOCK 专用的故障注入标记：只作为 throw 的 message 存在，"
                                "而 followCheck 的失败分支只统计条数、不把异常文案显示给用户（v1 也是"
                                "「失败不打扰用户」）；界面能看到的只有 i18n 里的「追剧检查：N 部暂时取不到更新」。"),

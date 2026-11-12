@@ -181,6 +181,12 @@ export interface PlayerSnapshot {
   volume: number
   danmaku: PlayerDanmakuState
   episode: PlayerEpisode
+  /** R22a：本地成品会话（Go `Snapshot.Local`，service.go 里由 plan.Local 落）。
+   *  ⚠ 前端**不能**再用 `!!episode.index` 去推断"会话是否已打开"：
+   *  本地文件没有集号（v1 open_local 同样清空选集条），那样会把本地会话读成没打开，
+   *  于是 running=false、进度节流落盘整条不触发——这个坑是 `history_local_play_verify` ⑤
+   *  实测出来的（等 7 秒，localStorage 里那条记录一个字段都没变）。 */
+  local?: boolean
   /**
    * mock 扩展位：本集播完标记（VITE_MOCK 轮询面无事件总线，靠它感知播完）。
    * 真实后端不发此字段，播完走 player:ended 事件。
@@ -283,6 +289,11 @@ export interface NativeApi {
   // ── V2-3c 播放桥（app.go「V2-3c 播放绑定」；事件 player:tick/ended/error + danmaku:stats，见 stores/player.ts）──
   /** 起播：drama/chapter 原样对象交给 Go，Go 内部走核心 resolve；index 1 起始；返回 Snapshot */
   playerOpen(drama: Drama, chapter: Chapter, index: number, quality?: string): Promise<PlayerSnapshot>
+  /** R22a：播一个下载根下的成品文件（Go `PlayerOpenLocal`，路径校验在核心侧）。
+   *  错误尾巴 `[local_missing]` / `[outside_root]` 由 callGoRaw 剥成 ApiError.code。 */
+  playerOpenLocal(path: string, resumeSeconds: number): Promise<PlayerSnapshot>
+  /** R22a 第①件：本地文件的进度写入（Go `SaveLocalWatch`；v1 save_local_watch 同义）。 */
+  saveLocalWatch(drama: Drama, path: string, position: number, duration: number, finished: boolean): Promise<{ ok: boolean }>
   playerPlay(): Promise<void>
   pauseVideo(): Promise<void>
   seekVideo(positionMs: number): Promise<void>

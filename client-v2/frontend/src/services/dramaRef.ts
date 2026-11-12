@@ -28,13 +28,17 @@ export function detailRoute(d: Drama): RouteLocationRaw {
   return { path: `/detail/${encodeURIComponent(d.id)}`, query: { d: JSON.stringify(compactDrama(d)) } }
 }
 
-export function playerRoute(d: Drama, episode: number, position = 0, chapter?: Chapter | null): RouteLocationRaw {
+/** `localPath` 非空 = 播本地成品（v1 历史/追剧面板的 local_path 分支），
+ *  播放器据此**不重开在线会话**、隐藏选集与上下集。
+ *  参数追加在最后一位且可选：老调用点一字不改（第 13 轮那条兼容教训）。 */
+export function playerRoute(d: Drama, episode: number, position = 0, chapter?: Chapter | null, localPath = ''): RouteLocationRaw {
   const query: Record<string, string> = {
     d: JSON.stringify(compactDrama(d)),
     ep: String(episode),
     pos: String(Math.floor(position))
   }
   if (chapter) query.c = JSON.stringify(chapter)
+  if (localPath) query.lp = localPath
   return { path: '/player', query }
 }
 

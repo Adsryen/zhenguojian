@@ -74,7 +74,11 @@ const buckets = computed(() =>
 )
 
 function goResume(r: HistoryRow) {
-  router.push(playerRoute(r.drama, r.episode, r.position))
+  // v1 的分支（watch.py:636-645）：历史行带 `local_path` 时**播本地成品**、
+  // 带的是当时的进度；文件不在则提示「本地文件已不存在：<文件名>」并且**不回落线上**。
+  // v2 的"文件在不在"由 Go 判（PlayerOpenLocal 里 os.Stat），前端不自己猜，
+  // 所以这里只把 lp 传进路由，失败文案/不回落都由播放器那条分支处理。
+  router.push(playerRoute(r.drama, r.episode, r.position, null, r.localPath ?? ''))
 }
 
 async function removeRow(r: HistoryRow) {

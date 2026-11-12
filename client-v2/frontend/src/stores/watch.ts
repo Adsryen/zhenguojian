@@ -86,7 +86,14 @@ function localHistoryRows(): HistoryRow[] {
       episode: e.episode,
       position: e.position,
       duration: e.duration,
-      updated: e.ts / 1000
+      updated: e.ts / 1000,
+      // R22a：本地成品的路径必须一起带出来——**没有它，历史行的「本地播放」分支永远进不去**
+      // （Go 侧 HistoryEntry.ToRowJSON 会带 localPath，store.go:395）。
+      // ⚠ 这里还留着一处结构性隐患：历史行的映射现在有**两份**
+      // （本函数与 `mockApi.historyList`，api.ts:750+），而 mock/降级面走的是本函数。
+      // 第三十四轮"预约刷新即丢"和本轮 localPath 丢失，都是同一份字段只补了另一份造成的。
+      // 该收成一处（由 local.ts 出唯一映射），但那是一次独立重构，不在本轮夹带。
+      localPath: e.localPath
     })
   }
   return rows.sort((a, b) => b.updated - a.updated)
@@ -122,7 +129,7 @@ function localRemoveFollow(id: string): void {
   if (isFollowedLocal(id)) toggleFollowLocal({ id } as Drama)
 }
 
-function localSaveWatch(drama: Drama, episode: number, position: number, duration: number): void {
+function localSaveWatch(drama: Drama, episode: number, position: number, duration: number, localPath = ''): void {
   const all = readHistory()
   all[historyKey(drama.id, episode)] = {
     title: drama.title,
@@ -131,7 +138,10 @@ function localSaveWatch(drama: Drama, episode: number, position: number, duratio
     duration,
     ts: Date.now(),
     dramaId: drama.id,
-    cover: drama.cover
+    cover: drama.cover,
+    // 本地会话必须把 localPath 也留住——否则"降级面写的进度"没有本地入口，
+    // 桥恢复后用户看不到「本地播放」，而 Go 面写的是有的：两处行为要一致。
+    ...(localPath ? { localPath } : {})
   }
   localStorage.setItem(HISTORY_KEY, JSON.stringify(all))
 }
@@ -449,6 +459,38 @@ export const useWatchStore = defineStore('watch', {
           () => api.saveWatch(drama, episode, position, duration, finished),
           () => {
             localSaveWatch(drama, episode, position, duration)
+            return { ok: true }
+          }
+        )
+      } catch (e) {
+        if (this.loaded) this.history = prev
+        throw e
+      }
+    },
+
+    /** R22a：本地成品文件的进度写入（v1 watchstore.save_local_watch；
+     *  绑定见 App.SaveLocalWatch；episode 恒 1 与 v1 同形，所以这里不接 ep 参数）。
+     *  与 saveWatch 的区别只在写入函数：乐观更新、失败回滚、错误出口完全共用，
+     *  免得同一条"进度没写进去"的故障在两条路上给出不同表现。 */
+    async saveLocalWatch(drama: Drama, path: string, position: number, duration: number, finished: boolean): Promise<void> {
+      if (!drama?.id || !path) return
+      const prev = this.history
+      const row: HistoryRow = {
+        drama: { ...drama },
+        episode: 1,
+        position,
+        duration,
+        updated: Date.now() / 1000,
+        localPath: path
+      }
+      if (this.loaded) {
+        this.history = [row, ...prev.filter((r) => r.drama.id !== drama.id)].sort((a, b) => b.updated - a.updated)
+      }
+      try {
+        await this.callBridge(
+          () => api.saveLocalWatch(drama, path, position, duration, finished),
+          () => {
+            localSaveWatch(drama, 1, position, duration, path)
             return { ok: true }
           }
         )

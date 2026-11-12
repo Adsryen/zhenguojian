@@ -125,6 +125,12 @@ export interface PlayerStoreState {
   /** 当前剧与集号：ended→下一集、重开都靠它 */
   drama: Drama | null
   episodeIndex: number
+  /** R22a：非空表示当前会话是**本地成品文件**（v1 playback["local_path"] 同义）。
+   *  有它：不写 saveWatch 而走 saveLocalWatch、隐藏选集条、上下集禁用
+   *  （v1 是靠清空选集条 + set_neighbours(False,False) 表达同一件事）。 */
+  localPath: string
+  /** 本地文件那条分支失败过（不在/越界）：此时「重试」是死按钮，不给 */
+  localFailed: boolean
   ticker?: number
   eventsBus?: EventsBus
   /** V2-F：播完自动连播开关（zgj.player.autoplay，默认开） */
@@ -171,6 +177,9 @@ export const usePlayerStore = defineStore('player', {
     loading: false,
     drama: null,
     episodeIndex: 0,
+    localPath: '',
+    /** 本地文件那条分支失败过（文件不在/越界）：此时「重试」是无意义按钮 */
+    localFailed: false,
     autoplay: localStorage.getItem(AUTOPLAY_KEY) !== '0', // 默认开（仅显式 '0' 关）
     quality: readQuality(),
     currentChapter: null as Chapter | null,
@@ -186,9 +195,10 @@ export const usePlayerStore = defineStore('player', {
     posLabel: (s) => fmtClock(s.position),
     durLabel: (s) => fmtClock(s.duration),
     /** 已知总集数且当前集非最后一集 → 播完出「下一集」按钮 */
-    hasNextEpisode: (s) => !!s.drama?.episodes && s.drama.episodes > 0 && s.episodeIndex < s.drama.episodes,
+    // 本地会话没有"下一集"可言（v1 直接把按钮关掉），所以 localPath 非空一律 false
+    hasNextEpisode: (s) => !s.localPath && !!s.drama?.episodes && s.drama.episodes > 0 && s.episodeIndex < s.drama.episodes,
     /** V2-F：⏮ 可用性（第一集禁用） */
-    hasPrevEpisode: (s) => !!s.drama && s.episodeIndex > 1
+    hasPrevEpisode: (s) => !s.localPath && !!s.drama && s.episodeIndex > 1,
   },
 
   actions: {
@@ -205,6 +215,25 @@ export const usePlayerStore = defineStore('player', {
       // V2-F 修正：playerRoute 约定参数名是 `d`（原只读 drama/id → d= 链接剧目 id 恒空，
       // PlayerOpen 必抛 bad_video，浏览器侧被下面的宽口 catch 吞成演示模式）
       const drama = dramaFromQuery(String(q.d ?? q.drama ?? q.id ?? ''), q as Record<string | number | symbol, unknown>)
+      // R22a：`lp` 非空 = 本地成品。这一支**完全不走 resolve**（v1 open_local 同义），
+      // 失败也不回落演示模式——文件不在就是不在，演一段假画面是骗人。
+      const lp = typeof q.lp === 'string' ? q.lp : ''
+      if (lp) {
+        try {
+          await this.openLocal(drama, lp, Math.max(0, Number(q.pos ?? 0) || 0))
+        } catch (err) {
+          const e = err as ApiError
+          const name = lp.split(/[\\/]/).pop() ?? ''
+          this.error = e?.code === 'outside_root'
+            ? t('player.localOutside')
+            : tf('player.localMissing', { name })
+          this.localPath = ''
+          this.localFailed = true
+        } finally {
+          this.loading = false
+        }
+        return
+      }
       const ep = Math.max(1, Number(q.ep ?? 1) || 1)
       const startPosSec = Math.max(0, Number(q.pos ?? 0) || 0)
       let chapter: Chapter | null = null
@@ -310,7 +339,9 @@ export const usePlayerStore = defineStore('player', {
     /** Snapshot（毫秒制）→ store（秒制）。eof 只在 mock 扩展位存在时同步；真实播完走 ended 事件 */
     applySnapshot(s: PlayerSnapshot) {
       if (!s || typeof s !== 'object') return
-      const openedNow = !!s.episode?.index
+      // 兼容两种真相来源：线上会话有集号；本地会话集号恒 0、靠 snapshot.local。
+      // （旧写法只有 `!!s.episode?.index`，本地会话因此被读成"没打开"——见 types.ts 的注释。）
+      const openedNow = !!s.episode?.index || !!s.local
       this.opened = openedNow
       this.running = openedNow
       this.paused = !s.playing
@@ -468,7 +499,8 @@ export const usePlayerStore = defineStore('player', {
 
     /** V2-F：节流落盘——播放中位移≥5s 或距上次≥5s 即写 saveWatch（未完成态） */
     maybePersistWatch() {
-      if (this.demoMode || !this.drama || this.episodeIndex <= 0) return
+      if (this.demoMode || !this.drama) return
+      if (this.episodeIndex <= 0 && !this.localPath) return
       if (!this.running || this.paused || this.eof) return
       if (this.duration <= 0 || this.position <= 0) return
       const moved = Math.abs(this.position - this.lastWatchPos)
@@ -476,8 +508,47 @@ export const usePlayerStore = defineStore('player', {
       void this.persistWatch(false)
     },
 
+    /** R22a：打开一个下载根下的成品文件（会话建立在这里，不在页面里拼参数）。 */
+    async openLocal(drama: Drama, path: string, resumeSec = 0) {
+      const name = path.split(/[\\/]/).pop() ?? path
+      const snap = await api.playerOpenLocal(path, resumeSec)
+      this.localFailed = false
+      this.drama = drama
+      this.localPath = path
+      this.episodeIndex = 0 // 本地文件不属于任何一集（与 Go 侧 OpenLocal 同形状）
+      this.currentChapter = null
+      this.title = tf('player.localTitle', { name })
+      this.eof = false
+      this.eofHandledAt = 0
+      this.nextSeason = null
+      this.status = ''
+      this.lastWatchAt = Date.now()
+      this.lastWatchPos = resumeSec
+      this.opened = true
+      this.running = true
+      this.paused = false
+      this.demoMode = false
+      this.applySnapshot(snap)
+      this.attach()
+    },
+
     /** V2-F：写观看进度（shutdown 与节流共用）；失败静默，不打断播放 */
     async persistWatch(finished: boolean) {
+      // 本地会话没有集号，走另一条写入（v1 save_local_watch；绑定见 App.SaveLocalWatch）
+      if (this.localPath) {
+        if (!this.drama || this.position <= 0) return
+        const pos = Math.floor(this.position)
+        const dur = Math.floor(this.duration)
+        this.lastWatchAt = Date.now()
+        this.lastWatchPos = pos
+        try {
+          const { useWatchStore } = await import('./watch')
+          await useWatchStore().saveLocalWatch(this.drama, this.localPath, pos, dur, finished)
+        } catch {
+          /* 进度写入失败静默（与线上一致） */
+        }
+        return
+      }
       if (!this.drama || this.episodeIndex <= 0 || this.position <= 0) return
       const pos = Math.floor(this.position)
       const dur = Math.floor(this.duration)

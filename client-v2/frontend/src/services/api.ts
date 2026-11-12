@@ -304,6 +304,10 @@ const realApi: NativeApi = {
   removeFollow: (id) => callGo<{ ok: boolean }>('RemoveFollow', id),
   saveWatch: (drama, ep, pos, dur, fin) =>
     callGo<{ ok: boolean }>('SaveWatch', JSON.stringify(drama), ep, pos, dur, fin),
+  playerOpenLocal: (path, resumeSeconds) =>
+    callGo<PlayerSnapshot>('PlayerOpenLocal', path, resumeSeconds),
+  saveLocalWatch: (drama, path, pos, dur, fin) =>
+    callGo<{ ok: boolean }>('SaveLocalWatch', JSON.stringify(drama), path, pos, dur, fin),
   removeHistory: (id) => callGo<{ ok: boolean }>('RemoveHistory', id),
   clearHistory: () => callGo<{ ok: boolean }>('ClearHistory'),
   // ── 看过标记：App.SeenList/ToggleSeen/ImportSeen（bindings_seen.go，值=epoch 秒）──
@@ -404,7 +408,9 @@ const mockSnap: PlayerSnapshot = {
   speed: 1,
   volume: 100,
   danmaku: { enabled: true, count: 0, note: '' },
-  episode: { dramaID: '', title: '', index: 0 }
+  episode: { dramaID: '', title: '', index: 0 },
+  // 与 Go `Snapshot.Local` 同形；线上会话每次 open 都会置 false（见 playerOpen）
+  local: false
 }
 const mockPlayer: { opened: boolean; eof: boolean; timer?: ReturnType<typeof setInterval>; lastTs: number } = {
   opened: false,
@@ -537,6 +543,7 @@ const mockApi: NativeApi = {
     mockSnap.posMs = 0
     mockSnap.durationMs = durSec > 0 ? durSec * 1000 : 180000
     mockSnap.episode = { dramaID: drama.id, title: drama.title ?? '', index }
+    mockSnap.local = false
     // 弹幕语义对齐 Go Service：开弹幕即有已抓计数（mock 铺满 80 条），关时保留计数只撤轨
     mockSnap.danmaku = {
       enabled: mockSnap.danmaku.enabled,
@@ -781,7 +788,11 @@ const mockApi: NativeApi = {
         episode: e.episode,
         position: e.position,
         duration: e.duration,
-        updated: e.ts / 1000
+        updated: e.ts / 1000,
+        // Go 侧 HistoryEntry.ToRowJSON 会带 localPath（store.go:395）；
+        // 这里不跟着带，mock 下"本地播放"入口就永远出不来 ——
+        // 那是证据装置缺字段，不是产品没做（history_local_play_verify ① 会直接红）。
+        localPath: e.localPath
       })
     }
     return rows.sort((a, b) => b.updated - a.updated)
@@ -804,6 +815,45 @@ const mockApi: NativeApi = {
   },
   removeFollow: async (id) => {
     if (isFollowed(id)) toggleFollow({ id } as Drama)
+    return { ok: true }
+  },
+  playerOpenLocal: async (path, resumeSeconds) => {
+    // mock 面没有真实文件，也不假装 stat 过：
+    // 「文件在不在」由 `__zgjLocalMissing` 这个测试缝决定（默认视为存在），
+    // 报出来的 code 与 Go 完全一致，前端那条错误分支因此在 mock 下也是**同一段代码**。
+    const missing = (window as any)?.__zgjLocalMissing as string[] | undefined
+    const name = String(path ?? '').split(/[\\/]/).pop() ?? ''
+    if (!path) throw new ApiError('empty path', 'bad_video')
+    if (Array.isArray(missing) && missing.includes(String(path))) {
+      throw new ApiError(`本地文件已不存在：${name}`, 'local_missing')
+    }
+    // 越界判定在 Go（checkLocalPlayable + 单测六种形状）。mock 面**没有真实目录**，
+    // 不去假装实现了那条规则：由 `__zgjLocalOutside` 这个测试缝决定报不报 outside_root，
+    // 本脚本 ⑦ 因此只验证"前端拿到这个 code 时说的是什么话"，不验证守卫本身。
+    const outside = (window as any)?.__zgjLocalOutside as string[] | undefined
+    if (Array.isArray(outside) && outside.includes(String(path))) {
+      throw new ApiError('只允许播放下载目录下的成品文件', 'outside_root')
+    }
+    mockSnap.playing = true
+    mockSnap.posMs = Math.max(0, Math.floor(Number(resumeSeconds || 0) * 1000))
+    mockSnap.durationMs = mockSnap.durationMs || 1800000
+    // 本地会话不属于任何一集：dramaID 空、index 0（与 Go 侧 OpenLocal 同形状）
+    mockSnap.episode = { dramaID: '', title: name, index: 0 }
+    // 会话是否"已打开"由这个字段说，不由集号猜（本地会话恒 index 0）
+    mockSnap.local = true
+    mockSnap.danmaku = { ...mockSnap.danmaku, count: 0, note: t('api.mockLocalNote') }
+    mockPlayer.opened = true
+    mockPlayer.eof = false
+    mockSimStart()
+    return mockSnapshotOut()
+  },
+  saveLocalWatch: async (drama, path, pos, dur) => {
+    const all = readHistory()
+    const key = historyKey(drama.id, 1) // v1：本地文件一律记 episode=1
+    all[key] = { ...(all[key] ?? {}), title: drama.title, episode: 1, position: pos,
+                 duration: dur || all[key]?.duration || 0, ts: Date.now(),
+                 dramaId: drama.id, cover: drama.cover, localPath: path }
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(all))
     return { ok: true }
   },
   saveWatch: async (drama, ep, pos, dur) => {

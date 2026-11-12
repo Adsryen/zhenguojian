@@ -476,6 +476,13 @@ const zh: Record<string, string> = {
   // ── R9c-2：stores/player.ts 的展示文案（zh 与收敛前逐字一致）──
   'player.demoTitle': '演示影片',
   'player.titleWithEpisode': '{title} · 第{n}集',
+  // R22a 本地成品播放。`player.localTitle` 是 v1 main.py:2634 的
+  // 「本地播放 %s」（basename）；下面两条错误句子与 Go 侧文案一致——
+  // Go 那句现在只进日志，界面按 ApiError.code（[local_missing]/[outside_root]）取这里的键，
+  // 否则英文界面会吐中文（i18n_sweep 的 en 整页审计会抓到）。
+  'player.localTitle': '本地播放 {name}',
+  'player.localMissing': '本地文件已不存在：{name}',
+  'player.localOutside': '只允许播放下载目录下的成品文件',
   'player.titleFallback': '影片',
   'player.playFailed': '播放失败',
   'player.playFailedMsg': '播放失败：{m}',
@@ -569,6 +576,7 @@ const zh: Record<string, string> = {
   'api.errBadEpisode': '集号无效',
   'api.errBadVideoParams': '播放参数解析失败',
   'api.mockDanmakuNote': 'VITE_MOCK 示例弹幕',
+  'api.mockLocalNote': 'VITE_MOCK 本地会话（不读真实文件）',
   'api.errLoginInput': '请输入用户名或邮箱',
   'api.errCaptcha': '安全验证未通过，请重新拖动滑块',
   'coverSave.errFetch': '读取海报失败（HTTP {code}）',
@@ -1140,6 +1148,9 @@ const en: Record<string, string> = {
   // ── R9c-2: player store display text (zh kept byte-identical to pre-convergence) ──
   'player.demoTitle': 'Demo clip',
   'player.titleWithEpisode': '{title} · Ep {n}',
+  'player.localTitle': 'Local playback: {name}',
+  'player.localMissing': 'Local file is gone: {name}',
+  'player.localOutside': 'Only files inside the downloads folder can be played',
   'player.titleFallback': 'Clip',
   'player.playFailed': 'Playback failed',
   'player.playFailedMsg': 'Playback failed: {m}',
@@ -1227,6 +1238,7 @@ const en: Record<string, string> = {
   'api.errBadEpisode': 'Invalid episode number',
   'api.errBadVideoParams': 'Could not parse playback parameters',
   'api.mockDanmakuNote': 'VITE_MOCK sample danmaku',
+  'api.mockLocalNote': 'VITE_MOCK local session (no real file read)',
   'api.errLoginInput': 'Enter a username or email',
   'api.errCaptcha': 'Verification failed — drag the slider again',
   'coverSave.errFetch': 'Failed to read poster (HTTP {code})',

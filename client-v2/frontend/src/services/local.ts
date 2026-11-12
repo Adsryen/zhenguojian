@@ -32,6 +32,9 @@ export interface HistoryEntry {
   dramaId?: string
   source?: string
   cover?: string
+  /** R22a：这条进度来自本地成品文件（v1 watchstore 行的 local_path 同义）。
+   *  有它 = 该行可以用「本地播放」重放；写入侧见 api.saveLocalWatch。 */
+  localPath?: string
 }
 
 export type HistoryMap = Record<string, HistoryEntry>
