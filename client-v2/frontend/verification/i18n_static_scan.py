@@ -300,6 +300,7 @@ def scan_file(path):
     in_template = False
     in_script = False
     in_html_comment = False
+    in_js_block = False   # <script> 里的多行 /* … */（本轮修的漏判，见下）
     tpl_depth = 0   # SFC 根 <template> 与组件内 <template v-if> 要区分：只有根区才算模板
     for i, raw in enumerate(lines, 1):
         st = raw.strip()
@@ -321,24 +322,46 @@ def scan_file(path):
         if st.startswith("</script>"):
             in_script = False
             continue
+        # 块注释状态机必须对**每一行**都跑，包括整行没有中文的那一行。
+        # 之前它写在 `if not CJK.search(raw): continue` 后面，于是
+        # 单独一行的 `/*`（没有中文）被短路跳过、in_js_block 永远开不起来，
+        # 注释**里面**的代码行就被当成代码报上来 —— 我用注入负例实测到了（bad3 假阳性）。
+        # 同理，`LINE_COMMENT` 会把跨行块注释的起始行整行放过，所以也必须排在它前面。
+        # HTML 注释状态机：和 JS 块注释同一个毛病——起始行 `<!--` 常常没有中文，
+        # 一旦排在 CJK 短路之后就永远开不起来，注释正文就被当成模板文案。
+        # （`--selftest` 第一条 FAIL 就是它，见下方形状用例。）
+        if in_template and not in_script:
+            if in_html_comment:
+                if "-->" in raw:
+                    in_html_comment = False
+                    raw = raw.split("-->", 1)[1]
+                else:
+                    continue
+            elif "<!--" in raw and "-->" not in raw:
+                in_html_comment = True
+                raw = raw.split("<!--", 1)[0]
+        if in_script:
+            if in_js_block:
+                if "*/" in raw:
+                    in_js_block = False
+                    raw = raw.split("*/", 1)[1]   # 注释结束后剩下的代码照常审
+                else:
+                    continue                       # 纯注释内容，不算界面文案
+            elif "/*" in raw and "*/" not in raw:
+                in_js_block = True
+                raw = raw.split("/*", 1)[0]       # 注释之前的那截仍要审
         if not CJK.search(raw):
             continue
         if LINE_COMMENT.match(raw):
             continue
         if in_template:
-            # 跨行 HTML 注释：进入 <!-- 后到 --> 之前的中文都是说明，不是界面
-            if in_html_comment:
-                if "-->" in raw:
-                    in_html_comment = False
-                continue
+            # 跨行注释的状态已在上面统一处理，这里只吃同行 <!--…-->
             stripped = re.sub(r"<!--.*?-->", "", raw)
-            if "<!--" in raw and "-->" not in raw:
-                in_html_comment = True
-                stripped = stripped.split("<!--")[0]   # 起始行的注释部分同样不算界面
             if not CJK.search(stripped):
                 continue
             kind = "template"
         elif in_script:
+            # 块注释状态已在上面处理完，这里只管单行：同行 /*…*/ 就地吃掉、去掉 // 之后
             body = JS_BLOCK_COMMENT.sub("", raw)
             if LINE_COMMENT.match(body.strip()):
                 continue
@@ -362,6 +385,69 @@ def scan_file(path):
     return out, devlog
 
 
+# ─────────────────────────── 扫描器自测 ───────────────────────────
+#
+# 为什么要有：本轮我把 <script> 的块注释处理**连错两次**——
+# 第一次只改 elif 分支没动判定顺序（假阳性照旧），第二次把状态机放进
+# `if not CJK.search(raw)` 之后（单行 `/*` 没有中文，被短路跳过，
+# 于是注释**内部**的代码行又被当成代码）。两次都是"改了但没验证到形状"。
+# 这类东西靠肉眼看 diff 是看不出来的，只能把形状做成用例。
+VUE_SHAPES = [
+    # (说明, 片段, 期望命中数)
+    ("模板里的中文 = 界面文案", '<template>\n  <div>加载中</div>\n</template>\n', 1),
+    ("跨行 HTML 注释里的中文不算", '<template>\n  <!--\n  说明：加载中\n  -->\n  <div>ok</div>\n</template>\n', 0),
+    ("<script> 里的字符串字面量算", '<script setup>\nconst a = \'加载中\'\n</script>\n', 1),
+    ("同行 /*…*/ 之后的字符串仍算", '<script setup>\nconst a = 0 /* 说明 */ \'加载中\'\n</script>\n', 1),
+    ("跨行块注释**内部**不算", '<script setup>\n/*\nconst a = \'加载中\'\n*/\n</script>\n', 0),
+    ("块注释结束后恢复审代码", '<script setup>\n/*\n说明\n*/\nconst a = \'加载中\'\n</script>\n', 1),
+    ("起始行没有中文也要开状态", '<script setup>\n/*\nconst a = \'加载中\'\n*/\nconst b = \'真的\'\n</script>\n', 1),
+    ("console 里的中文归开发者日志", '<script setup>\nconsole.warn(\'调试中文\')\n</script>\n', 0),
+]
+TS_SHAPES = [
+    ("ts：字符串字面量算", 'export const x = \'加载中\'\n', 1),
+    ("ts：跨行块注释内不算", '/*\nconst a = \'加载中\'\n*/\nexport const b = 1\n', 0),
+    ("ts：起始行无中文也要开状态", '/*\nconst a = \'加载中\'\n*/\nexport const b = \'真的\'\n', 1),
+]
+
+
+def selftest():
+    import tempfile
+
+    bad = 0
+    total = 0
+    for kind, shapes in (("vue", VUE_SHAPES), ("ts", TS_SHAPES)):
+        for desc, frag, want in shapes:
+            total += 1
+            with tempfile.TemporaryDirectory() as td:
+                fn = "a." + ("vue" if kind == "vue" else "ts")
+                path = os.path.join(td, fn)
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write(frag)
+                # .ts 走 scan_ts_file：scan_file 只认 SFC 的 template/script 区，
+                # 直接喂它 .ts 会命中 0 —— 那是测试用错函数，不是扫描器漏判
+                # （自测第一次跑就是这样报了 2 条假 FAIL）。
+                hits, devlog = (scan_file(path) if kind == "vue" else scan_ts_file(path))
+            if len(hits) != want:
+                print(f"FAIL {kind}：{desc}（命中 {len(hits)}，期望 {want}）{hits}")
+                bad += 1
+            else:
+                print(f"PASS {kind}：{desc}")
+    # console 那条除了不判红，还必须落进 devlog 计数
+    with tempfile.TemporaryDirectory() as td:
+        path = os.path.join(td, "a.vue")
+        open(path, "w", encoding="utf-8").write(
+            "<script setup>\nconsole.warn('调试中文')\n</script>\n")
+        hits, devlog = scan_file(path)
+        total += 1
+        if hits or len(devlog) != 1:
+            print(f"FAIL console 归类：hits={hits} devlog={devlog}")
+            bad += 1
+        else:
+            print("PASS console 归类：不判红，但计入开发者日志")
+    print(f"\n===== i18n_static_scan --selftest: {total - bad}/{total} PASS =====")
+    return 1 if bad else 0
+
+
 def main():
     _assert_no_duplicate_keys()
 
@@ -380,10 +466,14 @@ def main():
         return 1
 
     ap = argparse.ArgumentParser()
+    ap.add_argument("--selftest", action="store_true",
+                    help="跑内置形状用例（注释/模板/字符串各形状）")
     ap.add_argument("--list", action="store_true", help="逐条打印违规")
     ap.add_argument("--rebase", action="store_true",
                     help="按当前实测打印 BASELINE / TS_BASELINE 字典（还完债后粘贴回来）")
     args = ap.parse_args()
+    if args.selftest:
+        return selftest()
 
     all_rows = []
     dev_logs = []
