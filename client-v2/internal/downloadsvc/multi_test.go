@@ -199,8 +199,10 @@ func TestMergeStartMultiNeedsAtLeastTwoSeasons(t *testing.T) {
 		dramaOf("hongguo:2", "某剧 第二季"),
 	})
 	// v1 原话去掉"左侧"两个字，其余照抄
-	if err == nil || !strings.Contains(err.Error(), "至少两部要合并的剧集") {
-		t.Fatalf("该给 v1 那句提示，得 %v", err)
+	// 句子本体 + 错误码尾巴都要在：一个给日志，一个给界面（前端按 code 取 i18n）
+	if err == nil || !strings.Contains(err.Error(), "至少两部要合并的剧集") ||
+		!strings.Contains(err.Error(), "[multi_targets]") {
+		t.Fatalf("该给 v1 那句提示并带 [multi_targets]，得 %v", err)
 	}
 	if len(h.svc.merges) != 0 {
 		t.Fatal("整批不成立却排了任务")
@@ -245,8 +247,9 @@ func TestMergeStartMultiEmptySelection(t *testing.T) {
 	if _, err := h.svc.MergeStartMulti(nil); err == nil {
 		t.Fatal("没勾选该报错")
 	}
-	if _, err := h.svc.MergeStartMulti([]map[string]any{}); err == nil {
-		t.Fatal("空数组同样该报错")
+	if _, err := h.svc.MergeStartMulti([]map[string]any{}); err == nil ||
+		!strings.Contains(err.Error(), "[multi_none]") {
+		t.Fatalf("空数组该报 [multi_none]，得 %v", err)
 	}
 }
 
