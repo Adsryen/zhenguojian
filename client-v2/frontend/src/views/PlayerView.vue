@@ -329,8 +329,12 @@ onMounted(async () => {
   void reportBounds() // 隐藏态起手（running 尚未翻转，防陈旧矩形残留）
   window.addEventListener('keydown', onHotkey)
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
-  void reportBounds()
 })
+
+/* 播放失败重试：重放整条 boot 链（解析超时/网络抖动后可直接再试一次）。 */
+async function retryBoot() {
+  await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
+}
 
 onBeforeUnmount(() => {
   stageRO?.disconnect()
@@ -361,7 +365,12 @@ onBeforeUnmount(() => {
       <div class="pl-col">
         <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
           <div v-if="store.loading" class="pl-hint">正在打开播放会话…</div>
-          <div v-else-if="store.error" class="pl-hint err">{{ store.error }}</div>
+          <div v-else-if="store.error" class="pl-hint err">
+            {{ store.error }}
+            <button class="pl-btn ghost sm" type="button" data-testid="player-retry" @click.stop="retryBoot">
+              {{ t('player.retry') }}
+            </button>
+          </div>
           <div v-else class="pl-stage-inner">
             <div class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
               <span class="pl-disc-core" />
