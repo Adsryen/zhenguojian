@@ -66,11 +66,11 @@ async function copyCoverDiagnostics() {
       try {
         await app.ClipboardWrite(text)
       } catch (e: any) {
-        showToast(`复制失败：${e?.message ?? e}`)
+        showToast(tf('covers.banner.copyFailMsg', { m: e?.message ?? e }))
         return
       }
     } else {
-      showToast('复制失败：剪贴板不可用')
+      showToast(t('covers.banner.copyNoClipboard'))
       return
     }
   }
@@ -82,12 +82,16 @@ function dismissCoverBanner() {
   coverBanner.value = ''
 }
 
-const FALLBACK_CHIPS: Chip[] = [
-  { id: '', name: '全部' },
-  { id: 'short_play', name: '真人剧' },
-  { id: 'comic_series', name: '漫剧' },
-  { id: 'ai_series', name: 'AI剧' }
-]
+/* v2-6-parity：兜底芯片名改为函数式取 i18n（模块级常量会在加载时冻结 locale，
+   切语言不重绘）；真值仍来自 browseFilters 的 core 数据，只有兜底表是我们自己的文案。 */
+function fallbackChips(): Chip[] {
+  return [
+    { id: '', name: t('library.genre.all') },
+    { id: 'short_play', name: t('library.genre.short_play') },
+    { id: 'comic_series', name: t('library.genre.comic_series') },
+    { id: 'ai_series', name: t('library.genre.ai_series') }
+  ]
+}
 
 // 红果 genre 体裁组里的合法芯片 id（其余行如主题/时间不进芯片行）。
 const GENRE_TAB_IDS = new Set(['', 'short_play', 'comic_series', 'ai_series'])
@@ -137,13 +141,13 @@ async function loadChips(source: string) {
       const options = group.key === 'genre'
         ? group.options.filter((o) => GENRE_TAB_IDS.has(o.id))
         : group.options
-      chips.value = [{ id: '', name: '全部' }, ...options.map((o) => ({ id: o.id, name: o.name }))]
+      chips.value = [{ id: '', name: t('library.genre.all') }, ...options.map((o) => ({ id: o.id, name: o.name }))]
       return
     }
     throw new ApiError('无 genre/category 组', 'empty_filters')
   } catch (e: any) {
     console.info('browseFilters 兜底:', e?.code === 'discovery_unavailable' ? '构建通道缺 overlay' : e?.message ?? e)
-    chips.value = FALLBACK_CHIPS
+    chips.value = fallbackChips()
   }
 }
 
@@ -172,7 +176,7 @@ async function loadFirst(force = false) {
     items.value = injectCatalog(res.items ?? [], 1)
     page.value = 1
     hasMore.value = !!res.hasMore
-    warning.value = res.warning || (MOCK_MODE ? 'VITE_MOCK 示例数据，非真实引擎结果' : DEGRADED ? '原生桥不可用，当前显示本机缓存数据' : '')
+    warning.value = res.warning || (MOCK_MODE ? t('banner.mock') : DEGRADED ? t('banner.degraded') : '')
     if (!items.value.length && !res.warning) error.value = ''
   } catch (e: any) {
     if (seq !== requestSeq) return
@@ -205,7 +209,7 @@ async function loadMore() {
     if (seq !== requestSeq) return
     // 翻页失败：停 auto-load，保留已加载内容 + toast
     loadingMore.value = false
-    showToast(`加载失败：${e?.message ?? e}`)
+    showToast(tf('discover.loadFailedMsg', { m: e?.message ?? e }))
     hasMore.value = false
     return
   }
@@ -251,14 +255,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="page-head">
-    <h1 class="page-title">找剧</h1>
+    <h1 class="page-title">{{ t('nav.discover') }}</h1>
     <SourceSwitch :model-value="store.currentSlug" :sources="store.orderedSources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
     <div class="spacer" />
     <button class="btn" :disabled="loading" @click="loadFirst(true)">
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <path d="M21 12a9 9 0 1 1-2.64-6.36M21 3v6h-6" />
       </svg>
-      刷新
+      {{ t('discover.refresh') }}
     </button>
   </div>
 
@@ -299,15 +303,15 @@ onBeforeUnmount(() => {
   </div>
 
   <div v-if="store.sourcesError" class="state-block">
-    <div>源列表获取失败：{{ store.sourcesError }}</div>
-    <button class="btn" @click="store.loadSources(true)">重试</button>
+    <div>{{ tf('discover.sourceListFail', { m: store.sourcesError }) }}</div>
+    <button class="btn" @click="store.loadSources(true)">{{ t('discover.retry') }}</button>
   </div>
   <div v-else-if="error && !loading" class="state-block">
     <svg viewBox="0 0 24 24" width="36" height="36" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
       <circle cx="12" cy="12" r="9" /><path d="M12 8v5m0 3.5 0 0.01" />
     </svg>
     <div>{{ error }}</div>
-    <button class="btn" @click="loadFirst(true)">重试</button>
+    <button class="btn" @click="loadFirst(true)">{{ t('discover.retry') }}</button>
   </div>
   <div v-else class="grid-wrap">
     <PosterGrid

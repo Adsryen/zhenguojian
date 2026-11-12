@@ -453,6 +453,13 @@ const zh: Record<string, string> = {
   'player.danmakuOff': '弹幕关',
   'player.close': '关闭',
   'player.panelEpisode': '· 第{n}集',
+  // ── v2-6-parity：DiscoverView chrome 与兜底芯片（zh 与收敛前逐字一致）──
+  'discover.refresh': '刷新',
+  'discover.retry': '重试',
+  'discover.sourceListFail': '源列表获取失败：{m}',
+  'discover.loadFailedMsg': '加载失败：{m}',
+  'covers.banner.copyFailMsg': '复制失败：{m}',
+  'covers.banner.copyNoClipboard': '复制失败：剪贴板不可用',
   // PosterGrid
   'grid.epiTotal': '共{n}集',
   'grid.epiUpdate': '更新至{n}集',
@@ -930,6 +937,13 @@ const en: Record<string, string> = {
   'player.danmakuOff': 'Danmaku off',
   'player.close': 'Close',
   'player.panelEpisode': '· Ep {n}',
+  // ── v2-6-parity: DiscoverView chrome + fallback chips ──
+  'discover.refresh': 'Refresh',
+  'discover.retry': 'Retry',
+  'discover.sourceListFail': 'Source list failed: {m}',
+  'discover.loadFailedMsg': 'Load failed: {m}',
+  'covers.banner.copyFailMsg': 'Copy failed: {m}',
+  'covers.banner.copyNoClipboard': 'Copy failed: clipboard unavailable',
   // PosterGrid
   'grid.epiTotal': '{n} episodes',
   'grid.epiUpdate': 'Updated to ep. {n}',

@@ -3,7 +3,7 @@
 """
 i18n_sweep_verify.py — L 表收敛进 i18n.ts 的验收脚本
 
-覆盖 6 组收敛（player.* / grid.* / hero.* / reserve.* / calendar.* / downloads.statbar.*）：
+覆盖 7 组收敛（player.* / grid.* / hero.* / reserve.* / calendar.* / downloads.statbar.* / discover.*）：
   1) zh 默认态：逐页硬断言代表文案与收敛前组件内字符串【逐字一致】（≥12 处）；
      PlayerView 快捷键帮助浮层逐行断言 hotkeys 渲染不变形。
   2) 切 en 态：被扫组件内不得残留 CJK（节点级白名单法）。
@@ -128,10 +128,10 @@ GLOBAL_ALLOW = [
     r"^\d+[.]\d$", r"周[一二三四五六日天]$", r"今天",  # 日历数据（store 文案）
     r"今晚 \d+:\d+", r"今日 \d+:\d+",  # stores/calendar.ts publishText（未尽项）
     r"热度$", r"已预约$",  # store normalize 尾缀（数据）
-    r"加载中", r"加载失败", r"重试", r"复制失败", r"源列表获取失败", r"选择源",
+    r"加载中", r"加载失败", r"重试", r"选择源",
     r"源未接入", r"弹幕",
     r"返回", r"重新播放", r"正在打开", r"演示模式", r"操作失败", r"跳转失败",
-    r"待核心接线", r"已切换到", r"真人剧", r"漫剧", r"AI剧", r"^全部$",  # 非 hero chrome / store hints / FALLBACK_CHIPS
+    r"待核心接线", r"已切换到", r"真人剧", r"漫剧", r"AI剧", r"^全部$",  # 核心数据透传（FALLBACK_CHIPS 已进 i18n，此处仅剩 browseFilters 真名）
     r"找剧", r"追剧",  # DiscoverView 标题·日历行按钮组 store 侧变体（sweep 后应已英文化，仅兜底数据串）
 ]
 
@@ -222,6 +222,16 @@ async def main():
                           "打开 / 关闭本帮助", "8 秒后自动关闭 · 点遮罩或按 Esc 立即关闭"]
             miss = [l for l in help_lines if l not in hk]
             check("zh|player hotkeys 帮助浮层 10 行逐字", not miss, f"missing={miss}")
+
+            # ── v2-6-parity：DiscoverView chrome 逐字（标题/刷新按钮/首芯片/横幅）──
+            await settle(page, "/#/", ".page-title")
+            dz = []
+            dz.append(("标题", "找剧", await page.locator(".page-head .page-title").inner_text()))
+            dz.append(("刷新按钮", "刷新", (await page.locator(".page-head .btn").first.inner_text()).strip()))
+            dz.append(("首芯片", "全部", (await page.locator(".chips .chip").first.inner_text()).strip()))
+            ban_cnt = await page.locator(".banner").count()
+            dz.append(("横幅", "VITE_MOCK", (await page.locator(".banner").first.inner_text()) if ban_cnt else "(无横幅)"))
+            check("zh|discover 4 处逐字", all(w in g for _, w, g in dz), str(dz))
             await page.keyboard.press("Escape")
             await page.screenshot(path=SHOT_PLAYER, full_page=False)
 
@@ -270,8 +280,8 @@ async def main():
                 "/#/player?d=mock_drama_1&ep=1": (".pl-title", ["Episodes", "Quality", "Next episode", "Hotkey help", "Collapse episodes", "Autoplay on",
                                                  "Back", "Speed", "Volume", "Ep 1"],
                                                   [".pl-top", ".pl-title", ".pl-hint", ".pl-ended", ".pl-panel-cur", ".ep-btn", ".pl-toast", ".pl-label", ".dm", ".pl-badge"]),
-                "/#/": (".page-head", [],
-                        [".hero-title", ".hero-desc", ".hero-tag", ".pg-title", ".pg-badge", ".banner", ".ss-name", ".chip", ".page-title", ".btn", ".rv-ep", ".toast"]),
+                "/#/": (".page-head", ["Browse", "All", "Refresh", "VITE_MOCK"],
+                        [".hero-title", ".hero-desc", ".hero-tag", ".pg-title", ".pg-badge", ".ss-name", ".rv-ep", ".toast"]),
                 "/#/calendar": (".cal-page", ["Follow Calendar", "All", "Male", "Online", "Today", "Refresh"],
                                 [".date-cur", ".date-chips", ".cal-title", ".cal-desc", ".list-status", ".banner", ".cover-badge", ".chip.static", ".warn", ".cal-desc", ".cover"]),
                 "/#/reserve?tab=follow": (".page-title", ["Follow & Reserve", "Resume", "Mark seen", "Details", "Unfollow", "Seen to ep. 12"],
@@ -288,6 +298,10 @@ async def main():
                 if url.startswith("/#/downloads"):
                     # 行内数据豁免太宽 → 行容器整体排除后仅扫 statbar
                     scope = ".stat-bar, [data-testid=source-select], .empty"
+                elif url == "/#/":
+                    # v2-6-parity：标题/刷新/横幅已键化 → scope 扩到 .banner，
+                    # .chips 仍留在扫描面外（体裁名来自 browseFilters 核心数据，属透传）
+                    scope = ".page-head, .banner"
                 elif url.startswith("/#/player"):
                     # v2-6-parity：chrome 已键化，不再整组豁免 .pl-group（title/弹幕按钮一起扫）
                     scope = ".pl-bar, .pl-panel"
@@ -319,6 +333,11 @@ async def main():
                 )
                 bad = unexpected(nodes)
                 check(f"en|{url} 无未豁免 CJK", not bad, f"bad={json.dumps(bad[:4], ensure_ascii=False)}")
+                if url == "/#/":
+                    chip0 = (await page.locator(".chips .chip").first.inner_text()).strip()
+                    ttl = (await page.locator(".page-head .page-title").inner_text()).strip()
+                    check("en|discover 首芯片=All 且标题=Browse", chip0 == "All" and ttl == "Browse",
+                          f"chip0={chip0!r} title={ttl!r}")
                 # spots 存在性查整页（行内按钮不在扫描根内；title 属性并入，图标按钮文案在 title）
                 body_txt = await page.locator("#app").inner_text()
                 body_txt += "\n" + await page.evaluate(
