@@ -237,7 +237,7 @@ async function loadChapters() {
 const nextSeasonLabel = computed(() => {
   const n = store.nextSeason
   if (!n) return ''
-  return `去看 ${n.title || `第 ${n.season} ${n.unit}`} ▸`
+  return tf('player.nextSeasonGo', { t: n.title || tf('player.seasonFallback', { s: n.season, u: n.unit }) })
 })
 function goNextSeason() {
   const n = store.nextSeason

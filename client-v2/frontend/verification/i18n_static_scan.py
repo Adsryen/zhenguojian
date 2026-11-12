@@ -47,6 +47,20 @@ EXEMPT_FILES = {
 # 逐条豁免：path → [(子串, 原因)]。命中子串的行不算违规。
 # 只允许「核心数据透传」「开发者日志（不进 UI）」两类，新增必须写原因。
 EXEMPT_REASONS = {
+    "components/NavRail.vue": [
+        ('>真<', "品牌字标（logo 位），专有名不进字典"),
+        ('>真果鉴<', "产品专有名，同 SettingsView 的关于页一行"),
+    ],
+    "components/PosterGrid.vue": [
+        ("|| '剧'", "无标题时的首字占位，取的是数据串（v1 CoverLoader 同语义）"),
+    ],
+    "components/SearchGroups.vue": [
+        ("|| '剧'", "同上：首字占位兜底，不是文案"),
+    ],
+    "views/SettingsView.vue": [
+        ("label: '中文'", "语言选择项按惯例显示各自母语名（另一项是 English），切语言也不该翻"),
+        ('真果鉴 {{ appVersionText }}', "产品专有名 + 版本号，不进字典"),
+    ],
     "views/LibraryView.vue": [
         ("console.warn('rankingBoards 回退常量表", "开发者日志，不进 UI"),
         ("name: '总热播榜'", "桥接失败时的榜名回退表，逐字对齐 provider_rankings.go:23-37（核心数据）"),
@@ -79,15 +93,10 @@ EXEMPT_REASONS = {
 #   · 某文件违规数 > 基线 → 红（新代码不许再加硬编码中文）
 #   · 某文件违规数 < 基线 → 红（还了债就必须回来把数字调低，防止基线悄悄失真）
 # 还完一个文件就从表里删掉它。改动这张表的唯一合法时机是「顺手少了几处硬编码」。
-BASELINE = {
-    "views/SettingsView.vue": 5,
-    "components/SourceSwitch.vue": 4,
-    "components/SeasonMenu.vue": 3,
-    "components/NavRail.vue": 2,
-    "components/PosterGrid.vue": 2,
-    "views/PlayerView.vue": 2,
-    "components/SearchGroups.vue": 1,
-}
+# 2026-11-12 当晚：最后 7 个文件还清或归位完毕，基线整表清空。
+# 此后是硬门禁——新的界面中文必须进 services/i18n.ts；
+# 例外只能写进 EXEMPT_REASONS 并写明原因（品牌名、数据首字、语言母语名）。
+BASELINE: dict = {}
 
 
 def rel(path):
@@ -137,6 +146,7 @@ def scan_file(path):
             stripped = re.sub(r"<!--.*?-->", "", raw)
             if "<!--" in raw and "-->" not in raw:
                 in_html_comment = True
+                stripped = stripped.split("<!--")[0]   # 起始行的注释部分同样不算界面
             if not CJK.search(stripped):
                 continue
             kind = "template"
@@ -208,7 +218,7 @@ def main():
     if bad:
         return 1
     if not all_rows:
-        print("PASS 全仓界面中文已零硬编码，BASELINE 可以整表删除")
+        print("PASS 全仓界面中文零硬编码（BASELINE 为空表：此后新增任何一处都会直接红）")
         return 0
     print(f"PASS 未新增硬编码（剩余欠账 {len(all_rows)} 处，见上表）")
     return 0

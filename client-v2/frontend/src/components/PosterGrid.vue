@@ -360,7 +360,7 @@ function onContentClickCapture(e: MouseEvent) {
         <SkeletonCard v-for="n in 12" :key="n" :width="colW" />
       </div>
 
-      <div v-else-if="!items.length" class="pg-empty">没有内容</div>
+      <div v-else-if="!items.length" class="pg-empty">{{ t('grid.empty') }}</div>
 
       <div v-else ref="viewportEl" class="pg-viewport" :style="{ height: totalH + 'px' }">
         <div

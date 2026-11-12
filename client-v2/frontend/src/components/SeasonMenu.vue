@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t, tf } from '@/services/i18n'
 /* SeasonMenu —— 详情页「全 N 季 ▾」切换按钮（v1 main.py:241-270 set_seasons +
    1547-1586 后台系列查询 移植）。规则逐字对齐 v1：
    - 数据= catalog(query=base_title||title, lane="series:auto", page=1, source)
@@ -24,7 +25,7 @@ const cache = new Map<string, { at: number; rows: SeasonRow[] }>()
 let token = 0
 
 const visible = computed(() => rows.value.length > 1)
-const buttonLabel = computed(() => `全 ${rows.value.length} 季 ▾`) // v1 setText("全 %d 季 ▾")，单位固定「季」
+const buttonLabel = computed(() => tf('season.all', { n: rows.value.length })) // v1 setText("全 %d 季 ▾")，单位固定「季」
 
 async function lookup(drama: Drama | null) {
   const my = ++token
@@ -53,7 +54,7 @@ async function lookup(drama: Drama | null) {
 
 function rowLabel(row: SeasonRow): string {
   const label = seasonLabel(row.season, row.unit)
-  return row.episodes > 0 ? `${label} · ${row.episodes} 集` : label
+  return row.episodes > 0 ? tf('season.episodes', { label, n: row.episodes }) : label
 }
 
 function pick(row: SeasonRow) {
@@ -75,7 +76,7 @@ defineExpose({ lookup })
 
 <template>
   <div v-if="visible" class="season-root">
-    <button class="season-btn" type="button" title="同系列的其它季，点开直接切换" @click.stop="open = !open">
+    <button class="season-btn" type="button" :title="t('season.title')" @click.stop="open = !open">
       {{ buttonLabel }}
     </button>
     <div v-if="open" class="season-menu" role="menu">

@@ -399,10 +399,10 @@ onMounted(async () => {
     const bi = await api.buildInfo()
     appVersionText.value = bi.version && bi.version !== 'v0.0.0-dev' ? bi.version : t('update.devVersion')
     commitText.value = bi.revision && bi.revision !== 'unknown'
-      ? `${bi.revision.slice(0, 12)}${bi.commitTime ? ' · ' + bi.commitTime : ''}${bi.modified ? '（含未提交改动）' : ''}`
-      : '未知（构建未注入版本信息）'
+      ? `${bi.revision.slice(0, 12)}${bi.commitTime ? ' · ' + bi.commitTime : ''}${bi.modified ? t('settings.commitDirty') : ''}`
+      : t('settings.commitUnknown')
   } catch {
-    commitText.value = '未知'
+    commitText.value = t('settings.commitNone')
   }
 })
 </script>

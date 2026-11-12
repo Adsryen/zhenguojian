@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { t } from '@/services/i18n'
 /* SourceSwitch —— v1 listSources 下拉：
    displayName、implemented=false 置灰、adult 源「18+」红徽章、enabled 状态点 */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
@@ -35,7 +36,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
   <div ref="root" class="ss">
     <button class="ss-btn" :disabled="loading || !sources.length" @click="toggle">
       <span class="dot" :style="{ background: current?.enabled ? 'var(--guo-success)' : 'var(--muted-2)' }" />
-      <span class="ss-name">{{ current ? (current.displayName || current.name) : '选择源' }}</span>
+      <span class="ss-name">{{ current ? (current.displayName || current.name) : t('source.pick') }}</span>
       <span v-if="current?.adult" class="ss-adult">18+</span>
       <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
         <path :d="open ? 'm6 15 6-6 6 6' : 'm6 9 6 6 6-6'" />
@@ -43,7 +44,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
     </button>
 
     <div v-if="open" class="ss-panel card">
-      <div v-if="!sources.length" class="ss-empty">源列表加载中…</div>
+      <div v-if="!sources.length" class="ss-empty">{{ t('source.loading') }}</div>
       <button
         v-for="s in sources"
         :key="s.slug"
@@ -51,13 +52,13 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick, true))
         :data-slug="s.slug"
         :class="{ disabled: !s.implemented, active: s.slug === modelValue }"
         :disabled="!s.implemented"
-        :title="s.implemented ? '' : '源未接入，待 V2-x 实现'"
+        :title="s.implemented ? '' : t('source.notWiredTitle')"
         @click="pick(s)"
       >
         <span class="dot" :style="{ background: s.enabled ? 'var(--guo-success)' : 'var(--muted-2)' }" />
         <span class="ss-item-name">{{ s.displayName || s.name }}</span>
         <span v-if="s.adult" class="ss-adult">18+</span>
-        <span v-if="!s.implemented" class="ss-tag">未接入</span>
+        <span v-if="!s.implemented" class="ss-tag">{{ t('settings.sources.notImplemented') }}</span>
       </button>
     </div>
   </div>
