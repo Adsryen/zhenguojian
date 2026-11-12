@@ -27,14 +27,17 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          # go:embed all:frontend/dist 要求该目录非空，而 dist 是构建产物（仓库里只有占位）：
-          # 不先起 npm 的话根包会 `[setup failed]  main.go:13:12: pattern all:frontend/dist`。
-          # 这里只需要"有文件可嵌"，真实资源由 windows job 的 Frontend 步骤产出并打包。
-          mkdir -p frontend/dist
-          test -f frontend/dist/index.html || printf '<!doctype html>' > frontend/dist/index.html
           mkdir -p "$RUNNER_TEMP/ov"
           python3 scripts/make-overlay.py "$RUNNER_TEMP/ov/overlay.json"
-          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./...
+          # 只测 ./internal/...：根包在 linux 上**编不出来**，这是实测结论而非偷懒——
+          #   # github.com/wailsapp/wails/v2/internal/frontend/desktop/linux
+          #   browser.go:9:10: undefined: Frontend
+          #   single_instance.go:40:4: undefined: secondInstanceBuffer
+          # Wails v2 的 linux 桌面后端要 CGO + GTK/webkit2，而这里 CGO_ENABLED=0。
+          # 根包（main + app.go）的编译由 windows job 的 vet+build 覆盖，那边才是目标平台。
+          # 另外：早先 `go test ./...` 在 ubuntu 上也因为 go:embed all:frontend/dist
+          # 需要非空目录而 setup failed —— 那条现在不适用，因为不再构建根包。
+          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./internal/...
 
   windows:
     runs-on: windows-latest
