@@ -17,6 +17,7 @@ import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, DownloadEntry, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
 import { releaseStatusKey, t, tf } from '@/services/i18n'
+import { savePoster } from '@/services/coverSave'
 import { chapterEpisode, detailRoute, dramaFromQuery, playerRoute } from '@/services/dramaRef'
 import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -173,6 +174,32 @@ async function copySummary() {
     }
   }
   showToast(t('detail.copySummaryDone'))
+}
+
+/** v1 main.py:1485-1530 save_cover：单独去要原图 → 拿不到回落小图并说出来 →
+    转码落盘 → 回报像素尺寸（v1 走 ffprobe，这里走解码器，见 coverSave.imageSize）。 */
+const posterBusy = ref(false)
+async function onSavePoster() {
+  if (!meta.value.cover || posterBusy.value) return
+  posterBusy.value = true
+  showToast(t('detail.posterBusy'))
+  try {
+    const r = await savePoster(meta.value)
+    if (r.kind === 'saved') {
+      showToast(tf('detail.posterSaved', {
+        size: r.size || '?',
+        note: r.hires ? '' : t('detail.posterFallbackNote')
+      }))
+    } else if (r.kind === 'cancelled') {
+      showToast(t('detail.posterCancelled'))
+    } else if (r.kind === 'no-source') {
+      showToast(t('detail.posterNoSource'))
+    } else {
+      showToast(tf('detail.posterFail', { m: r.message }))
+    }
+  } finally {
+    posterBusy.value = false
+  }
 }
 
 /** DownloadStart quality：0=核心自动选最高档（与 resolve 阶梯的 quality=1 语义无关） */
@@ -532,6 +559,10 @@ watch(
         <button class="btn" :disabled="!meta.description" @click="copySummary">
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>
           {{ t('detail.copySummary') }}
+        </button>
+        <button class="btn" :disabled="!meta.cover || posterBusy" @click="onSavePoster">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v10m0 0 4-4m-4 4-4-4M4 19h16" /></svg>
+          {{ posterBusy ? t('detail.posterBusy') : t('detail.savePoster') }}
         </button>
       </div>
 
