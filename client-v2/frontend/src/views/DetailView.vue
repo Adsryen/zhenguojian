@@ -11,13 +11,14 @@
     v2-D（子代理 D）：页面自身作滚动容器（.shell-main 约定，见 style 注释）；更新状态 pill +
     集数/统计文案本地化（v1 main.py:229/472-485 规则，键在 i18n.ts）；简介下方「演职人员」横排条
     （App.DramaCreators → native dramaCreators，discovery 未接入/失败整条静默隐藏）。 */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, DownloadEntry, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
 import { releaseStatusKey, t, tf } from '@/services/i18n'
 import { savePoster } from '@/services/coverSave'
+import { anyModalOpen, clearEscLedger, escSawOverlay } from '@/services/overlays'
 import { chapterEpisode, detailRoute, dramaFromQuery, playerRoute } from '@/services/dramaRef'
 import { enqueueDownloads, queueLength } from '@/services/local'
 import { useWatchStore } from '@/stores/watch'
@@ -429,6 +430,33 @@ onMounted(() => {
   } else {
     error.value = t('detail.missingParam')
   }
+})
+
+/**
+ * v1 `main.py:1781 _on_main_esc`：主窗口这边按 Esc，**仅当详情覆盖页开着=返回**
+ * （播放器不参与，播放器自己有 `_on_playback_esc`）。
+ *
+ * v2 之前整条语义都不存在：详情页按 Esc 没有任何反应。
+ * 浮层优先——右键菜单/模态框开着时，这一次 Esc 归它们，
+ * 否则会出现"菜单关掉的同时页面也返回了"这种一次按键干两件事。
+ */
+function onGlobalEsc(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  // 两层判据都要：escSawOverlay() 看的是"按键那一刻"（浮层消费者可能已经把它关掉了），
+  // anyModalOpen() 看的是"现在"（浮层还开着就让位）。只留后者实测会双动作。
+  if (escSawOverlay() || anyModalOpen()) {
+    clearEscLedger()
+    return
+  }
+  clearEscLedger()
+  goBack()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onGlobalEsc)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalEsc)
 })
 
 function goBack() {

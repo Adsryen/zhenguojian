@@ -37,6 +37,7 @@ import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
 import { t, tf } from '@/services/i18n'
+import { anyModalOpen, clearEscLedger, escSawOverlay } from '@/services/overlays'
 
 /* ── V2-F 文案已收敛至 i18n.ts player.*（原组件内 L 表）；t() 随 locale 响应 ── */
 const hotkeys = computed(() => [
@@ -174,6 +175,12 @@ function onHotkey(e: KeyboardEvent) {
     // v1 次序：帮助浮层在最上 → Esc 先关浮层；无浮层时全屏态 Esc 退出全屏（main.py _on_playback_esc）
     if (helpOpen.value) helpOpen.value = false
     else if (isFullscreen.value) toggleFullscreen()
+    // v1 `_on_playback_esc` 的最后一支：**非全屏时 Esc 就是关窗**（关窗即停播）。
+    // v2 之前只做到"退全屏"就 return，等于少了一整条键位语义——
+    // 用户按 Esc 期待播放器关掉，结果什么都没发生。
+    // 有浮层压着时不关窗（浮层自己吃掉了这次 Esc），见 services/overlays.ts。
+    else if (!escSawOverlay() && !anyModalOpen()) void closePlayer()
+    clearEscLedger()
     return
   }
   if (isTypingTarget(e.target)) return
