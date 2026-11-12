@@ -48,6 +48,14 @@ func ShouldKeepSandbox(results []Result) bool {
 	return false
 }
 
+// 这两个 var 是**测试缝**：单测把它们换成假核心/假目录，
+// 于是 download 步的入队载荷、轮询、终态判断、cache_dir 都能在 CI 上真执行一遍
+// （以前只有编译，打包机才第一次跑）。生产路径仍然指真门面。
+var (
+	coreCall     = native.Call
+	coreDataDir  = native.DataDir
+)
+
 // sandboxReady 由 Prepare() 置真；download/merge 步据此拒绝在真库里跑。
 var sandboxReady bool
 
@@ -89,8 +97,8 @@ func newPipeline() (*pipeline, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	svc := downloadsvc.New(downloadsvc.Options{
-		Call:        native.Call,
-		DataDirFunc: native.DataDir,
+		Call:        coreCall,
+		DataDirFunc: coreDataDir,
 		EventsEmit:  func(string, ...any) {}, // 自检没有前端，事件丢掉
 	})
 	svc.OnStartup(ctx)
@@ -100,7 +108,7 @@ func newPipeline() (*pipeline, error) {
 // downloadRoot 走核心 `downloadDirectory` 动作（v2 的权威来源，
 // 见 internal/downloadsvc/merge.go:74 同款调用），不是拿 DataDir 猜一个。
 func downloadRoot() (string, error) {
-	data, err := native.Call("downloadDirectory", nil)
+	data, err := coreCall("downloadDirectory", nil)
 	if err != nil {
 		return "", err
 	}
@@ -128,6 +136,13 @@ func PipelineSteps(st map[string]any) []Step {
 			chapters := anySlice(st["chapters"])
 			if drama == nil || len(chapters) < 2 {
 				return nil, fmt.Errorf("前置条件不成立：需要 drama + 至少 2 个 chapter（detail 步先过）")
+			}
+			// Enqueue 会校验 id 与 source，缺一个整步直接红（service.go:351）。
+			// 核心 item 正常带 source，这里只是兜底并把它记进 detail——
+			// 打包机上红的时候能立刻看出"是入队校验没过，不是下载失败"。
+			if src, _ := drama["source"].(string); src == "" {
+				drama = copyMap(drama)
+				drama["source"] = "hongguo"
 			}
 			if p == nil {
 				np, err := newPipeline()
@@ -217,28 +232,13 @@ func PipelineSteps(st map[string]any) []Step {
 				time.Sleep(pollEvery)
 			}
 			// v1 在这里查 "merged file missing on disk" 与 "not playable on its own"；
-			// v2 的等价校验：done 状态的条目必须有真实存在且非空的 Output。
+			// v2 的等价校验交给 mergeOutcome（分开报三种原因，见该函数注释）。
 			// 合并内部还做了 ffprobe 全片校验（mergeVerify），失败会落 failed 状态。
-			var out string
-			for _, m := range merges {
-				state, _ := m["state"].(string)
-				if state != "done" {
-					detail, _ := m["detail"].(string)
-					return map[string]any{"merges": summarize(merges)},
-						fmt.Errorf("合并未成功：state=%s detail=%s", state, truncRunes(detail, 90))
-				}
-				out, _ = m["output"].(string)
-			}
-			if out == "" {
-				return nil, fmt.Errorf("合并没有返回产物路径")
-			}
-			fi, err := os.Stat(out)
+			out, err := mergeOutcome(merges)
 			if err != nil {
-				return nil, fmt.Errorf("合并产物文件不存在: %v", err)
+				return map[string]any{"merges": summarize(merges)}, err
 			}
-			if fi.Size() == 0 {
-				return nil, fmt.Errorf("合并产物为空文件: %s", filepath.Base(out))
-			}
+			fi, _ := os.Stat(out)
 			return map[string]any{"path": truncRunes(out, 90), "bytes": fi.Size(),
 				"episodes": []int{1, 2}, "insideSandbox": strings.HasPrefix(
 					filepath.Clean(out), filepath.Clean(os.Getenv("ZHENGUO_DATA")))}, nil
@@ -319,18 +319,69 @@ func jobList(snap map[string]any) []map[string]any {
 	return out
 }
 
+// mergeList 把快照里的合并表压成 map 形态。
+//
+// ⚠ 这里原本是个**会在打包机上白等 20 分钟的 bug**：
+// downloadsvc.payloadLocked 返回的 merges 是 `[]*MergeEntry`（不是 []map[string]any，
+// 也不是 JSON 的 []any），我原来两种都接不住 → 永远返回空 →
+// mergeSettled 恒 false → 一直轮询到 mergeWaitBudget 超时，
+// 最后报一句误导的"合并没有返回产物路径"。
+// 现在优先吃真类型，另外两种形状留着（它们分别对应直接构造的单测输入与 JSON 往返结果）。
 func mergeList(snap map[string]any) []map[string]any {
-	if typed, ok := snap["merges"].([]map[string]any); ok {
-		return typed
-	}
-	raw, _ := snap["merges"].([]any)
-	out := make([]map[string]any, 0, len(raw))
-	for _, it := range raw {
-		if m, ok := it.(map[string]any); ok {
-			out = append(out, m)
+	switch m := snap["merges"].(type) {
+	case []*downloadsvc.MergeEntry: // 真类型：Service 实际返回的就是它
+		out := make([]map[string]any, 0, len(m))
+		for _, e := range m {
+			if e == nil {
+				continue
+			}
+			out = append(out, map[string]any{
+				"id": e.ID, "state": e.State, "stage": e.Stage,
+				"detail": e.Detail, "output": e.Output, "count": e.Count,
+			})
 		}
+		return out
+	case []map[string]any:
+		return m
+	case []any:
+		out := make([]map[string]any, 0, len(m))
+		for _, it := range m {
+			if mm, ok := it.(map[string]any); ok {
+				out = append(out, mm)
+			}
+		}
+		return out
 	}
-	return out
+	return nil
+}
+
+// mergeOutcome 从落定的合并表里取产物路径，失败原因按三种真实情况分开报：
+// ① 合并本身没成功（ffmpeg/解码侧）② 没给路径 ③ 路径存在但是空/读不到。
+// 分开报是为了打包机上一眼看出该查哪一层，而不是只留一句"失败了"。
+func mergeOutcome(merges []map[string]any) (string, error) {
+	var out string
+	for _, m := range merges {
+		state, _ := m["state"].(string)
+		if state != "done" {
+			detail, _ := m["detail"].(string)
+			return "", fmt.Errorf("合并未成功：state=%s detail=%s", state, truncRunes(detail, 90))
+		}
+		out, _ = m["output"].(string)
+	}
+	if len(merges) == 0 {
+		return "", fmt.Errorf("合并表为空（轮询到超时也没出现任务）")
+	}
+	if out == "" {
+		return "", fmt.Errorf("合并没有返回产物路径")
+	}
+	fi, err := os.Stat(out)
+	if err != nil {
+		return "", fmt.Errorf("合并产物文件不存在: %v", err)
+	}
+	if fi.Size() == 0 {
+		return "", fmt.Errorf("合并产物为空文件: %s", filepath.Base(out))
+	}
+	return out, nil
 }
 
 func toObj(v any) map[string]any {
@@ -359,6 +410,15 @@ func summarize(rows []map[string]any) []string {
 	for _, r := range rows {
 		out = append(out, fmt.Sprintf("%v/%v/%v",
 			truncRunes(fmt.Sprint(r["id"]), 20), stateOf(r), truncRunes(fmt.Sprint(r["detail"]), 40)))
+	}
+	return out
+}
+
+// copyMap 避免污染前序步骤留在 state 里的原始对象。
+func copyMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m)+1)
+	for k, v := range m {
+		out[k] = v
 	}
 	return out
 }

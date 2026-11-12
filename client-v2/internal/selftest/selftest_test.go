@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
+	"zhenguojian/client-v2/internal/downloadsvc"
 	"zhenguojian/client-v2/internal/native"
 )
 
@@ -384,5 +386,168 @@ func TestRunSurvivesUnwritableReportDir(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "报告未落盘") {
 		t.Fatalf("写不出报告必须说出来：\n%s", buf.String())
+	}
+}
+
+// ── 第二十八轮：download / merge 两步的**逻辑**第一次在 CI 上真执行 ──
+// 以前的说法是"代码完成但从未执行"。可这两步的入队载荷、轮询、终态判断、
+// 产物校验并不依赖真网络与真 ffmpeg——只要把核心门面换成假的，它们就该被执行。
+// 于是本轮顺手抓出一个**会在打包机上白等 20 分钟**的 bug（见 mergeList 注释）。
+
+func useFakeCore(t *testing.T, handler func(action string, payload map[string]any) (map[string]any, error)) {
+	t.Helper()
+	origCall, origDir := coreCall, coreDataDir
+	coreCall, coreDataDir = handler, func() (string, error) { return t.TempDir(), nil }
+	t.Cleanup(func() { coreCall, coreDataDir = origCall, origDir })
+}
+
+func TestMergeListAcceptsRealServiceShape(t *testing.T) {
+	// 回归钉：Service 的 payloadLocked 返回 merges 是 []*MergeEntry，
+	// 以前 mergeList 只认 []map 与 []any → 永远空 → 合并步白等到超时还报错误原因。
+	snap := map[string]any{"merges": []*downloadsvc.MergeEntry{
+		{ID: "m1", State: "done", Output: "/x/y.mp4", Count: 2},
+	}}
+	got := mergeList(snap)
+	if len(got) != 1 || got[0]["state"] != "done" || got[0]["output"] != "/x/y.mp4" {
+		t.Fatalf("*MergeEntry 形状必须吃得下，得 %+v", got)
+	}
+	// 另两种形状也继续支持（单测构造 / JSON 往返）
+	if len(mergeList(map[string]any{"merges": []map[string]any{{"state": "done"}}})) != 1 {
+		t.Fatalf("[]map[string]any 形状丢了")
+	}
+	if len(mergeList(map[string]any{"merges": []any{map[string]any{"state": "done"}}})) != 1 {
+		t.Fatalf("[]any 形状丢了")
+	}
+}
+
+func TestMergeOutcomeSeparatesThreeFailureModes(t *testing.T) {
+	good := filepath.Join(t.TempDir(), "full.mp4")
+	if err := os.WriteFile(good, []byte("data"), 0o644); err != nil {
+		t.Fatalf("写桩: %v", err)
+	}
+	empty := filepath.Join(t.TempDir(), "empty.mp4")
+	if err := os.WriteFile(empty, nil, 0o644); err != nil {
+		t.Fatalf("写空桩: %v", err)
+	}
+	cases := []struct {
+		name   string
+		merges []map[string]any
+		want   string
+		wantOK bool
+	}{
+		{"成功", []map[string]any{{"state": "done", "output": good}}, good, true},
+		{"合并失败要带 state", []map[string]any{{"state": "failed", "detail": "音频规范化失败"}}, "合并未成功：state=failed", false},
+		{"没有表要说是空的", nil, "合并表为空", false},
+		{"done 但没路径", []map[string]any{{"state": "done"}}, "没有返回产物路径", false},
+		{"路径不存在", []map[string]any{{"state": "done", "output": filepath.Join(t.TempDir(), "nope.mp4")}}, "产物文件不存在", false},
+		{"产物是空文件", []map[string]any{{"state": "done", "output": empty}}, "产物为空文件", false},
+	}
+	for _, c := range cases {
+		got, err := mergeOutcome(c.merges)
+		if c.wantOK {
+			if err != nil || got != c.want {
+				t.Fatalf("%s：应成功返回 %q，得 %q err=%v", c.name, c.want, got, err)
+			}
+			continue
+		}
+		if err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Fatalf("%s：错误里要能看出『%s』，得 %v", c.name, c.want, err)
+		}
+	}
+}
+
+func TestDownloadStepRunsAgainstFakeCore(t *testing.T) {
+	var mu sync.Mutex
+	var enqueued []map[string]any
+	fake := func(action string, payload map[string]any) (map[string]any, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch action {
+		case "enqueueDownloads":
+			enqueued = append(enqueued, payload)
+			return map[string]any{"added": 2}, nil
+		case "downloads":
+			return map[string]any{"jobs": []any{
+				map[string]any{"id": "j1", "state": "completed", "bytes": float64(1024), "index": float64(1)},
+				map[string]any{"id": "j2", "state": "completed", "bytes": float64(2048), "index": float64(2)},
+			}}, nil
+		case "downloadDirectory":
+			return map[string]any{"directory": `D:\沙箱\下载`}, nil
+		}
+		return map[string]any{}, nil
+	}
+	useFakeCore(t, fake)
+
+	cleanup, err := Prepare()
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer cleanup()
+
+	st := map[string]any{
+		"drama":    map[string]any{"id": "hongguo:1", "title": "自检剧", "episodes": float64(5)},
+		"chapters": []any{map[string]any{"currentEpisode": float64(1)}, map[string]any{"currentEpisode": float64(2)}},
+	}
+	dl := PipelineSteps(st)[0]
+	detail, err := dl.Run()
+	if err != nil {
+		t.Fatalf("download 步在假核心下应该走通，得 %v", err)
+	}
+	if detail["completed"] != 2 || detail["cache_dir"] != `D:\沙箱\下载` {
+		t.Fatalf("结果不对：%+v", detail)
+	}
+	if detail["bytes"] != int64(3072) {
+		t.Fatalf("bytes 应累加两条任务，得 %v", detail["bytes"])
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(enqueued) != 1 {
+		t.Fatalf("应该只入队一次，得 %d 次", len(enqueued))
+	}
+	got, _ := enqueued[0]["entries"].([]downloadsvc.EpisodeEntry)
+	if len(got) != 2 || got[0].Index != 1 || got[1].Index != 2 {
+		t.Fatalf("必须只取前 2 集且 index 为 1/2，得 %+v", enqueued[0]["entries"])
+	}
+	d, _ := enqueued[0]["drama"].(map[string]any)
+	if src, _ := d["source"].(string); src != "hongguo" {
+		// Enqueue 会校验 source（service.go:351），缺了整步红——
+		// 所以这里必须看到兜底生效后的值，而不是原始 item 的空值。
+		t.Fatalf("drama.source 应被兜底成 hongguo，得 %q（drama=%+v）", src, d)
+	}
+}
+
+func TestDownloadStepReportsPartialCompletion(t *testing.T) {
+	fake := func(action string, payload map[string]any) (map[string]any, error) {
+		switch action {
+		case "enqueueDownloads":
+			return map[string]any{"added": 2}, nil
+		case "downloads":
+			return map[string]any{"jobs": []any{
+				map[string]any{"id": "j1", "state": "completed", "bytes": float64(10)},
+				map[string]any{"id": "j2", "state": "failed", "detail": "网络中断"},
+			}}, nil
+		case "downloadDirectory":
+			return map[string]any{"directory": "x"}, nil
+		}
+		return map[string]any{}, nil
+	}
+	useFakeCore(t, fake)
+	cleanup, err := Prepare()
+	if err != nil {
+		t.Fatalf("Prepare: %v", err)
+	}
+	defer cleanup()
+
+	st := map[string]any{
+		"drama":    map[string]any{"id": "hongguo:1", "source": "hongguo", "title": "自检剧"},
+		"chapters": []any{map[string]any{"currentEpisode": float64(1)}, map[string]any{"currentEpisode": float64(2)}},
+	}
+	detail, err := PipelineSteps(st)[0].Run()
+	if err == nil || !strings.Contains(err.Error(), "只有 1 集") {
+		t.Fatalf("一条失败必须报『只有 1 集完成』，得 err=%v detail=%+v", err, detail)
+	}
+	// 失败时 detail 里要带 jobs 摘要（打包机上没人想看一句光秃秃的"失败了"）
+	if got, _ := detail["jobs"].([]string); len(got) != 2 {
+		t.Fatalf("detail.jobs 应带两条摘要，得 %+v", detail["jobs"])
 	}
 }
