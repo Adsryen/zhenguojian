@@ -232,27 +232,38 @@ def _selftest():
         if not cond:
             fails.append(name)
 
-    base = ("生成时间：2026-11-13 02:00:00 +0000\n"
-            "| HEAD | `abc1234` | x |\n"
-            "| 工作区未提交条目 | 0 | y |\n"
-            "| 累计提交（相对 `base`） | **130** | z |\n"
-            "| 核心动作 | 生产 26 | w |\n")
-    moved = ("生成时间：2026-11-13 03:00:00 +0000\n"
-             "| HEAD | `def5678` | x |\n"
-             "| 工作区未提交条目 | 7 | y |\n"
-             "| 累计提交（相对 `base`） | **130** | z |\n"
-             "| 核心动作 | 生产 26 | w |\n")
+    # 假表由**同一份行模板**生成，只替换易变行——
+    # 第五十三轮 A1/A2b 假红过一次：我给 base 加了 i18n 行却忘了给 moved 加，
+    # 两个"只该差在易变行"的表实际上还差在结构行，于是比较器正确地报了不一致，
+    # 而错在我的测试数据。测试数据薄/歪导致的红，和红在判据上是两回事，得分清。
+    VOL = dict(time="2026-11-13 02:00:00 +0000", head="abc1234", dirty="0", commits="130")
+
+    def mk(**over):
+        v = dict(VOL)
+        v.update(over)
+        return ("生成时间：%s\n"
+                "| HEAD | `%s` | x |\n"
+                "| 工作区未提交条目 | %s | y |\n"
+                "| 累计提交（相对 `base`） | **%s** | z |\n"
+                "| 核心动作 | 生产 26 | w |\n"
+                "| i18n 键 | zh 613 / en 613 | v |\n"
+                % (v["time"], v["head"], v["dirty"], v["commits"]))
+
+    base = mk()
+    moved = mk(time="2026-11-13 03:00:00 +0000", head="def5678", dirty="7")
     t("A1 时间戳/HEAD/未提交条目变了 → 不算过期", norm(base) == norm(moved))
     drifted = moved.replace("| 核心动作 | 生产 26 | w |", "| 核心动作 | 生产 99 | w |")
     t("A2 结构性数字变了 → 必红（比较器不是摆设）", norm(base) != norm(drifted))
-    bumped = moved.replace("| 累计提交（相对 `base`） | **130** | z |",
-                           "| 累计提交（相对 `base`） | **131** | z |")
+    bumped = mk(time="2026-11-13 03:00:00 +0000", commits="131")
     t("A2b 提交数前进一格 → 不算过期（自指悖论：文件所在的那笔提交必然让它 +1）",
       norm(base) == norm(bumped), norm(base).splitlines())
     more = moved.replace("| 核心动作 | 生产 26 | w |", "| 核心动作 | 生产 27 | w |")
     t("A3 动作数变了 → 也必红", norm(base) != norm(more))
-    t("A4 norm 不会把整表抹平（保留的行数 > 2）",
+    t("A4 norm 保留全部结构性行而不抹平",
       len(norm(base).splitlines()) == 2, norm(base).splitlines())
+    more2 = moved.replace("| i18n 键 | zh 613 / en 613 | v |", "| i18n 键 | zh 613 / en 612 | v |")
+    t("A5 第二个结构性字段变了也必须红（判据不能只盯一个字段）",
+      norm(base) != norm(more2), norm(more2).splitlines()[-1])
     print("\n===== session_state --selftest: %d/%d PASS =====" % (counts[0] - len(fails), counts[0]))
     return 1 if fails else 0
 
