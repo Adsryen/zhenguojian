@@ -86,10 +86,10 @@ preload / setSourceEnabled / soraniAccount / suggestions）。
 
 | 包 | 范围 | 交付 |
 |---|---|---|
-| A | 搜索 / 找剧 / 剧库 三面的 v1↔v2 逐条对账 | `research/v1-v2-discover-search-parity.md` |
-| B | 播放器 + 弹幕（含快捷键逐键、清晰度切换、EOF 连播、danmakuAll 契约） | `research/v1-v2-player-parity.md` |
-| C | 创作者页对账 + 6 个未定义 token 的影响面与应取值 | `research/v1-v2-creator-and-tokens.md` |
-| D | 验收装置体检：无牙齿断言 / 条件式跳过 / 空过 / 解析器盲区 | `research/verification-weak-points.md` |
+| A | 搜索 / 找剧 / 剧库 三面 | **已交** `research/v1-v2-discover-search-parity.md` |
+| B | 播放器 + 弹幕 | **已交** `research/v1-v2-player-parity.md` |
+| C | 创作者页 + 未定义 token 影响面 | **已交** `research/v1-v2-creator-and-tokens.md` |
+| D | 验收装置体检 | **已交** `research/verification-weak-points.md` |
 
 对账规矩沿用前八面：每条带 `文件:行号`；**不许拿 v1 注释当规格**
 （本任务已两次因此写出假差异）；差异分"可直接修 / 需决定 / 平台不适用"三类。
@@ -130,3 +130,54 @@ PRD 里三条 `[ ]` 是**过期勾选**而不是未做：
   已改完代码、重跑验证、`--amend` 修正，现在那句是实测值。
 
 全量 `run_all` 29/29、失败 0、端口泄漏 0；`creator_verify` 23 条 ALL PASS。
+
+
+---
+
+## 六、四路全部回来后（第五十九轮收尾）
+
+### 已经修掉的（都做过反向验证）
+
+| # | 问题 | 严重性 | 提交 |
+|---|---|---|---|
+| 1 | `danmakuAll` 少发 `durationMs`，核心入口直接拒绝；而我的测试**禁止**该字段 | 真机必挂 + CI 只会绿 | `a9b7273` |
+| 2 | 浅色主题三处"引用未定义 token + 深色回退值"，季浮层 1.10:1 | 文字几乎不可见 | `8c9ca4d` |
+| 3 | i18n 键对账对**连字符键**隐形（`source.note.huangguo-video` 删英文也绿） | 硬门有形状盲区 | `b2aa55c` |
+| 4 | run_all 的"残留端口"列对 52xx 恒空集 | 一列假绿 | `b2aa55c` |
+| 5 | 搜索页是三个列表页里唯一不标"示例数据/降级"的；且不读核心 warning | 假数据当真结果 | `b2aa55c` |
+
+### 队列里剩下的（按"能骗过多久的绿"排序，均属可直接修）
+
+1. `player_verify:162` 用 `>=` 判恢复播放（时间停住也绿）、`:308-316` 的钳位断言打在
+   浏览器自钳上（store 钳位整删仍绿，注释与代码不符）；
+2. `sorani` M13 的点位上限输入不可达（删钳位仍绿）、M21b 的 `[340,350]` 区间仍包含坏值
+   —— 与第五十七轮我修掉的 M21 同族，**姊妹条没修**；
+3. `evidence_audit` 的"有 Go 单测"判据是全文 `\bName\b`，会命中结构体字段
+   （`App.Cover` 实际是被 `store_test.go` 里的 `e.Drama.Cover` 蹭到）→ "27 个桥接+Go单测"有水分；
+4. `hitbands_verify:64-70` 的 oracle 与 PlayerView 同公式（公式错两边同错）；
+5. `i18n_sweep:262-264` 整页 en 硬断言的"数据可解释"判据只 ≥1 字子串
+   （注释说 ≥3 字段，代码不是）；
+6. `detail_download:184` 判 `index>=1`（恒送末集也绿）、`downloads_archive ⑥b`
+   成功/失败 toast 都算过；
+7. `detail_reserve ⑦b` 注释承诺"改间隔不改文案会红"是**错的**（30 在 i18n 字面量里）；
+8. 约 20/30 只脚本没有 pageerror 守卫，`player_verify:107` 甚至把 console 监听写成空操作。
+
+### CI 结构性事实（这条改变我过去几轮的说法）
+
+`build-v2.yml` 只在 `workflow_dispatch` 与 tag `v2.*` 触发 ——
+**普通 push 什么都不跑**；且 Frontend 步骤只 `vite build`，仓里存在的 `typecheck` 脚本无人调用。
+所以我说"CI 绿"时，指的是**我手动 dispatch 的那几次**，不是每次提交都有门在守。
+这条我必须讲明，别让"CI"两个字显得比实际更强。
+30 只 Playwright 与 i18n_static_scan / palette_audit / exemption_probe 都没接进 CI（只在本机 run_all 里）。
+
+### 新增待决（子代理 A 报的 (b) 类，12 条里最重的三条）
+
+- **找剧多维筛选面板整体未移植**：v1 有 9 维服务器面板 + 摘要/重置/缓存
+  （browse_panel.py:311-416），v2 只有一排芯片；
+  Go 侧 `App.BrowseFiltered` 绑定**已存在**（app.go:248-260）而前端 0 处调用
+  —— 与 R24 那条"预留绑定"是同一件事的两面。
+- **剧库「全部」tab 跟随站源 vs v1 恒红果**：v2 自己的 Go 壳（library.go:74-85）
+  反而保留着 v1 语义，是前端绕开了它（LibraryView.vue:145/400-410）。
+- **剧库「换一批」未移植，且理由写错**：LibraryView.vue:13 称 v1"本页无此入口"，
+  实际入口就是 `main.py:1115-1117` 的「刷新推荐」按钮 ——
+  这次是 **v2 注释曲解 v1**（我这几轮一直在抓的方向反过来又出现一次）。
