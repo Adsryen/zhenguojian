@@ -54,7 +54,7 @@ func num(t *testing.T, m map[string]any, k string) float64 {
 // ---------------------------------------------------------------- 看过标记
 
 func TestAppToggleSeenRoundTrip(t *testing.T) {
-	app := newAppIn(t)
+	app, ok := newAppIn(t), okOf(t)
 
 	res := decodeMap(t, ok(app.ToggleSeen("hongguo:1")))
 	if res["on"] != true {
@@ -216,9 +216,13 @@ func TestAppObserveDramaReportsWhetherFollowRowExists(t *testing.T) {
 	if num(t, row, "known") != 10 {
 		t.Errorf("known 应跟到 10，得 %v", row["known"])
 	}
-	// 新集数：episodes(10) > known 时 newEpisodes = episodes - read（read 初值 0）
-	if num(t, row, "newEpisodes") != 10 {
-		t.Errorf("newEpisodes 应为 10（未读过），得 %v", row["newEpisodes"])
+	// 新集数是 **7 不是 10**：追剧行创建时 `known = drama.episodes`、
+	// 且 `known > 0` 时 `read = known`（store.go:982-990，照 v1），
+	// 所以这一次观察的 unread = 10 - 3 = 7。
+	// 我第一版按"read 初值 0"写成 10 —— 那是没读创建路径就写期望，
+	// 会在 CI 上红一条与产品无关的错。
+	if num(t, row, "newEpisodes") != 7 {
+		t.Errorf("newEpisodes 应为 7（10 集减去建行时已读的 3 集），得 %v", row["newEpisodes"])
 	}
 
 	// 同样的数据再观察一次：不该再有变化（后台每 30 分钟一轮，重复观察必须幂等）
