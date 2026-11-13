@@ -17,6 +17,7 @@
     关不掉就报错，让下一轮不会莫名变红。
 """
 import os
+import atexit
 import signal
 import socket
 import subprocess
@@ -52,6 +53,21 @@ def start_dev(front_dir, port, mock, out_dir, name="dev", ready_timeout=60):
         try:
             with urllib.request.urlopen(base + "/", timeout=2) as r:
                 if r.status == 200:
+                    # ⚠ 第五十六轮加的兜底：`start_dev` 成功返回后自己注册 atexit 收口。
+                    # 原因不是"有人手滑"，而是**实测反复踩到的**：
+                    # `sorani_verify.py` 与 `update_verify.py` 都没有 try/finally，
+                    # 中途抛异常（本轮就是 Playwright 超时）就留下孤儿 vite 占住端口，
+                    # 于是下一轮撞上「端口 5188 已被占用」，
+                    # 而 run_all 的泄漏检测又把残留监听**误归属**给别的脚本。
+                    # 更难看的是：sorani 自己的头部注释还写着「收口是 SIGTERM→wait→SIGKILL→回查端口」——
+                    # 声明了一个代码里不存在的保证，这正是本任务一直在抓的那类错，这次在我自己的验收装置里。
+                    #
+                    # 为什么修在 _devserver 而不是逐个脚本补 finally：
+                    # 靠"作者记得写"的规矩一定会再漏；注册在起服务器的那一刻才是结构性的。
+                    # stop_dev 对已停的进程是幂等的（内部异常都吞），所以脚本自己
+                    # 显式调 stop_dev 也不冲突。quiet_port=True：解释器退出阶段
+                    # 不该因为"端口没关干净"再抛一次异常把真正的失败信息盖掉。
+                    atexit.register(stop_dev, proc, port, name, True)
                     return proc
         except Exception:
             time.sleep(0.5)

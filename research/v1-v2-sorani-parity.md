@@ -65,10 +65,51 @@ v2 侧是 `components/SliderCaptcha.vue`（v1 `sorani_login.py:52-58` 常量同�
 5. **本轮开头我写"14 条里有 0 条钉 track 形状"** —— 翻 M8 才发现一直在钉。
    说"没测"和说"测了"一样需要证据。
 
-## 还剩什么（没测不等于没做，明说）
+## 第五十六轮：那五条错误路径也补完了（M14–M18b，22/22）
 
-`needTrack` / `needCreds` / `captchaFail` 回退 / `status_failure_shows_unknown` /
-`usable_accepts_account_only_core` 这五条 v1 有用例、v2 有实现，
-但 v2 侧没有对应断言。它们是错误路径与"只有账号没有密码"的可用性判据，
-补起来需要在 mock 里加失败注入（`window.__zgj` 那类缝，已有先例）。
-本轮补的是滑块几何与真人判定那一族（最容易在重构里被"顺手统一"掉的语义）。
+| v1 | v2 的做法 | 断言 |
+|---|---|---|
+| `:311` 无轨迹提交该退回滑块流程 | v2 的 creds 页**只能**由 `SliderCaptcha` emit solved 进入，且 `beginCaptcha()` 会把 `track` 置 null（SoraniLoginDialog.vue:53）—— 那个状态在 v2 **不可达**，我没有为了凑断言硬造它 | M14 改测同一保证的可达形式：没拖过滑块就看不到账密页 |
+| `:321` 空账密本地拦下、不打核心 | 已有 | M15 用 mock 侧 `__zgjSoraniCalls.login` **计数**（上一版只能靠时间差猜）；M15b 红字是本地化句子而非键名/裸 code；M15c 本地拦下不顺手重取验证码 |
+| `:328` 取验证码失败 → 回状态页 + 红字 | 已有 | M16 + M16b（新缝 `mockCaptchaFail`） |
+| `:404` 读状态失败 → 「未知」不谎报未登录 | 已有 | M17（新缝 `mockStatusFail`） |
+| `:411` 核心只给账号没有 name | 已有，但**数据源有两条** | M18（新缝 `mockSoraniNoName`，`soraniStatus` 与 `soraniLogin` 都要认） |
+
+三个注入缝的错误消息一律写成 **ASCII**：它们会作为 `{msg}` 嵌进
+`sorani.captchaFail`/`sorani.statusFail` 的句子，中文会在英文界面露出来
+（第 42 轮立的"话术按 code 组装、中文只进日志"）。不设缝时默认行为一字不变。
+
+**反向验证**：把三个注入条件临时改成 `false` → M16/M17/M18 全红，
+其中 M17 红成 `chip='未登录'` —— 正是这条断言要防的那种谎报。
+
+两个我自己的错值得记：
+1. M16 连错两版：先点 `sorani-creds-back`（只切页、**不重取验证码**），
+   再改点 `sorani-reverify-btn` 却以为它在滑块页（它在**账密页**，SoraniLoginDialog.vue:186）
+   → 等元素超时 30s。两次都是**按名字猜归属**，而不是读那段 `v-show` 在哪个块里。
+2. M18 第一版只在 `soraniStatus` 上打缝，而登录后徽标用的是 `soraniLogin` 的返回值 → 测不到。
+
+一条登记未动的观察：mock 里 `throw new ApiError(t('api.errCaptcha'), …)`
+是"抛的时候就把句子翻译好"，与"只带 code、由界面组装话术"的约定不一致 ——
+locale 变了这句不会跟着变。改动会牵动多处既有断言，登记着不夹带。
+
+## 顺带修的两个验收装置缺陷（第五十六轮）
+
+1. **`sorani_verify.py` / `update_verify.py` 根本没有 `try/finally`**：
+   中途抛异常（本轮就是 Playwright 超时）就留下孤儿 vite 占住端口，
+   下一轮撞「端口 5188 已被占用」，且 `run_all` 的泄漏检测会把残留监听
+   **误归属**给别的脚本。而 `sorani_verify.py` 头部注释还写着
+   「收口是 SIGTERM→wait→SIGKILL→回查端口」——
+   **声明了一个代码里并不存在的保证**，这正是我这几轮一直在抓的那类错，这次在我自己的装置里。
+2. 修法不是逐个脚本补 `finally`，而是在 `_devserver.start_dev()` 成功返回前
+   `atexit.register(stop_dev, proc, port, name, True)`：
+   靠"作者记得写"的规矩一定会再漏，注册在起服务器的那一刻才是结构性的。
+   `stop_dev` 本身幂等，脚本显式调用不冲突；`quiet_port=True` 是因为
+   解释器退出阶段不该因为"端口没关干净"再抛一次、把真正的失败信息盖掉。
+   实测：故意起一台 5215 然后抛异常 → 端口无监听、无残留进程；全量 29/29、0 泄漏。
+
+## 还剩什么
+
+v1 那 21 条里，`:168`（v1 图像编解码往返）与 `:425/:436`（Qt 装配/重复装配去重）
+在 v2 没有对应机制，不硬造成断言；其余都已有归属。
+滑块几何之外**真正还没覆盖**的只剩一条：`dispW/tplDispW` 随图片实际尺寸变化的
+换算（v1 `:188` 只测固定 300/55），需要 mock 给出非默认尺寸的验证码图。
