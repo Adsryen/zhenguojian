@@ -153,12 +153,39 @@ v1 真有、v2 当时缺的是另一件事：**双击合并队列里已完成的
    （断言没有任何 `m:` 组、剧名组 HasMerged/MergedCount/MergedBytes 正确、
    openPath 指向最新那份、`Episodes` 仍是 2 不被合并产物污染）。
 
-### 挂一笔技术债（本轮不夹带做）
+### 上一轮挂的"技术债"：前提核错了（第四十八轮）
 
-`第N季` 的识别现在有**两份实现**：`internal/watchstore/season.go` 的 `SeasonNumber`，
-和归档扫描里新加的 `stripSeasonSuffixLocal`（一个要序号、一个要去后缀）。
-我没给 watchstore 新开导出，因为那会让"归档扫描"耦合"追剧季号"两个子系统；
-但同一份中文规格写两遍就是会漂的地方，该收进一个独立 series 包统一实现。
+第四十七轮我写：「`第N季` 识别现在有两份实现（`watchstore.SeasonNumber` 与扫描里的
+`stripSeasonSuffixLocal`），同一份中文规格写两遍就是会漂，该收进独立 series 包统一实现」。
+
+去核 v1 之后，**这句话有两处错**：
+
+1. **那是两份不同的规格，不是同一件事写了两遍。**
+   - v1 `watchstore.py:31`：`第\s*([0-9０-９零〇一二两兩三四五六七八九十百]+)\s*[季部]` —— 宽，
+     认「第2部」和全角数字，服务追剧/预约的季号推断；
+   - v1 `downloads.py:250`：`第([0-9一二两三四五六七八九十]+)季` —— 窄，只认「第N季」，
+     服务合并产物命名与归档归组。
+   统一成一份 = 偷偷改变其中一个调用点的行为。
+   更细的一层：`downloads.py:277` 的 `season_of` 有 `[Ss](\d+)` 兜底，
+   `watchstore.py:52-58` 的 `season_number` **没有**，
+   所以 `某剧 S03` 两边分别是 3 和 1 —— 这是 v1 的既定行为，不是漂移。
+   （我第一版重构测试把 `某剧 S03` 放进"两边应一致"的表里，CI 当场红给我看。）
+2. **真该收拢的是 `downloadsvc` 内部**：`multi.go` 与 `archive_scan.go`
+   各抄了一遍 downloads.py 的窄规格，而且**已经漂了**——
+   扫描那份只做了 v1 `strip_season` 的第一刀，漏了第二刀 `[Ss]\d+$`，
+   于是 `测试剧 S02.mkv` 在 v1 归「测试剧」组，在 v2 留着 ` S02` 自成一派。
+
+本轮做的：`internal/downloadsvc/seasons.go` 成为本包对窄规格的**唯一实现**
+（`seasonOfTitle` / `stripSeasonTitle` / `cnNumberNarrow`），
+删掉两处局部拷贝、补上漏掉的那一刀；watchstore 那份不动。
+测试两条：`TestSeasonSpecsAreTwoDifferentSpecs`
+（交集只到「第N季」必须一致；**Sxx 上必须不同** —— 谁哪天"顺手统一"就红在这里）、
+`TestStripSeasonTitleMatchesV1`（两刀各自适用的形状）。
+CI run `43338136199` ✓，全量 Playwright 28/28 不变。
+
+**教训不是"少写重复代码"，而是"别把两份看着像的东西当成同一份"。**
+我看见两个相似的中文正则，就先入为主认定是漂移；
+实际是 v1 有意区分的两种规格。核 v1 这一步化掉了一次"重构出 bug"的机会。
 
 ## 第四十五轮（下半）：双击播放合并成品接通，并删掉一段照抄来的死代码
 
