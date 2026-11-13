@@ -395,6 +395,107 @@ export function mockCalendarPage(date = ''): CalendarPayload {
   }
 }
 
+/** 分页驱动用的日历 mock（第五十四轮新增，专供验收脚本）。
+ *
+ * ⚠ 为什么要有它：默认 `mockCalendarPage` 永远返回 `hasMore: false`，
+ * 于是 v1 用测试钉住的六条分页行为（首屏短自动补页、resize 重填、
+ * 重复页停止自动请求并可重试、快速切性别丢弃过期响应、
+ * 失败页同游标重试且不清空、首页不重复请求）**在这台机器上根本无法触发**——
+ * 不是 v2 实现对了所以没测，而是 mock 把那条路径堵死所以测不到。
+ * 这类"fixture 太配合，导致行为面永远走不到"我在第三十九轮（图片遮挡）
+ * 和第四十一轮（恒真断言）都记过，形状不同、根子相同。
+ *
+ * 因此这里按 `window.__zgjCalPaging` 这个测试缝造一个可控分页器：
+ *   pageSize   每页几条（默认 2）
+ *   total      真总条数（默认 12）
+ *   repeatFrom 从第几条起服务端只回重复内容（触发"连续多页没有新剧"）
+ *   failFrom   从第几条起抛错（触发失败重试）
+ *   slowMs     每页延迟（触发"快速切性别丢过期响应"）
+ *   gender     回显当次请求的频道，用于证明最终数据来自最后一次请求
+ * 默认不设这个变量时，分页器完全不参与（走原来的 mockCalendarPage）。
+ */
+export async function mockCalendarPagePaged(
+  date: string,
+  offset: number,
+  gender: number
+): Promise<CalendarPayload> {
+  void date // 分页 mock 不按日期切片（与 mockCalendarPage 的差别），参数只为签名一致
+  const cfg = ((globalThis as any).window ?? {}).__zgjCalPaging ?? {}
+  const size = Number(cfg.pageSize ?? 2)
+  const total = Number(cfg.total ?? 12)
+  const repeatFrom = cfg.repeatFrom === undefined ? null : Number(cfg.repeatFrom)
+  const failFrom = cfg.failFrom === undefined ? null : Number(cfg.failFrom)
+  const slowMs = Number(cfg.slowMs ?? 0)
+  const dates: string[] = []
+  const now = new Date()
+  const fmt = (d: Date) =>
+    `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`
+  for (let day = -2; day <= 4; day++) {
+    dates.push(fmt(new Date(now.getFullYear(), now.getMonth(), now.getDate() + day)))
+  }
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  const build = (): CalendarPayload => {
+    if (failFrom !== null && offset >= failFrom) {
+      throw new Error('mock 日历分页故意失败（offset=' + offset + '）')
+    }
+    // ⚠ 重复模式要**老实重复第一页的内容、同时把游标往前推**。
+    // 我第一版写成 `from = 0`（回退游标），结果 offset 在 2↔4 之间来回跳，
+    // 客户端每次都能拿到几条新剧 → 永远凑不出"连续多页没有新剧"，
+    // 于是 ⑤ 那组断言测的是一个被 mock 自己消解掉的场景。
+    // v1 的对应测试（test_calendar_panel.py:248）用的正是
+    // "不管 offset 多少都返回同一条 seriesId"，这里照那个语义做。
+    // 重复区是**有界的窗口**（repeatUntil 默认往后 3 页）：
+    // 真实服务端的"连续几页重复"是暂时的，窗口无限大的话
+    // 客户端的"重试能拿回新内容"这一条永远测不到。
+    const repeatUntil = repeatFrom === null ? null
+      : Number(cfg.repeatUntil ?? (repeatFrom + size * 3))
+    const repeating = repeatFrom !== null && offset >= repeatFrom && offset < (repeatUntil as number)
+    const from = repeating ? 0 : offset
+    const items: CalendarEntry[] = []
+    const take = repeating ? Math.min(size, repeatFrom ?? size) : size
+    for (let k = 0; k < take; k++) {
+      const i = repeating ? k : from + k
+      if (!repeating && i >= total) break
+      items.push({
+        seriesId: 'mock-cal-p' + i,
+        title: '分页剧' + String(i + 1) + (cfg.gender ? '[g' + gender + ']' : ''),
+        cover: '/posters/p' + (i % 4 + 1) + '.svg',
+        category: '分页',
+        tags: ['分页'],
+        episodeCnt: 10 + i,
+        isOnline: i % 2 === 0,
+        subscribed: false,
+        note: '分页 mock',
+        publishText: i % 2 === 0 ? (10 + i) + '集全' : '待上线'
+      })
+    }
+    const next = (repeating ? offset : from) + size
+    // 调用日志（只在这个测试缝里存在）：分页的判据要靠**实际序列**验证，
+    // 不能靠我脑补"第几次调用落在哪一区"——本轮就是靠它对出游标是 7 而不是我预期的 6。
+    try {
+      const w = (globalThis as any).window
+      if (w) {
+        w.__zgjCalLog = w.__zgjCalLog || []
+        w.__zgjCalLog.push({ offset, gender, items: items.length, next, repeating })
+      }
+    } catch { /* 非浏览器环境 */ }
+    return {
+      items,
+      dates,
+      defaultDate: fmt(now),
+      // 重复模式下 hasMore 保持 true：客户端必须**自己**发现"这几页没有新剧"并停下，
+      // 而不是靠服务端说没有更多（那正是 v1 那条测试钉的行为）
+      hasMore: repeating ? true : next < total,
+      nextOffset: next,
+      sessionId: 'mock-calendar-paged',
+      fetchedAt: new Date().toISOString()
+    }
+  }
+  if (slowMs > 0) await wait(slowMs)
+  return build()
+}
+
 /** Resolve 的 mock plan：与 Go 端 (string,error) JSON 形状一致 */
 export function mockResolvePlan(drama: Drama, chapter: Chapter, index: number): ResolvePlan {
   return {

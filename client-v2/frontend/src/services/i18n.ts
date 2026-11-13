@@ -616,6 +616,7 @@ const zh: Record<string, string> = {
   'calendar.statusEmptyDay': '这一天没有上新',
   'calendar.statusLoading': '加载中…',
   'calendar.statusNoMore': '没有更多了',
+  'calendar.statusStalled': '连续多页没有新剧（点此重试）',
   'detail.seenOn': '已标记看过',
   'detail.seenOff': '已取消看过标记',
   // 注意：与 reserve.watchedEp「看到第 {n}集」只差一个空格，v1 详情页锚点带空格，
@@ -1294,6 +1295,7 @@ const en: Record<string, string> = {
   'calendar.statusEmptyDay': 'No new releases that day',
   'calendar.statusLoading': 'Loading…',
   'calendar.statusNoMore': 'No more items',
+  'calendar.statusStalled': 'Several pages in a row had no new titles (click to retry)',
   'detail.seenOn': 'Marked as seen',
   'detail.seenOff': 'Seen mark removed',
   'detail.watchedUpTo': 'Watched up to ep {n}',

@@ -7,7 +7,7 @@
    条目点击 → 详情（detailRoute）；已上线行的「播放」→ playerRoute 第 1 集
    （PlayerView bootFromQuery 缺 c 时自取 detail 章节，安全）。
    分页：滚动到底 loadMore（v1 _calendar_scrolled）。 */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
 import { resolveCover } from '@/services/covers'
@@ -17,6 +17,8 @@ import { t, tf } from '@/services/i18n'
 
 const router = useRouter()
 const store = useCalendarStore()
+// 页内滚动容器（fillViewport 要知道内容有没有超过一屏）
+const scrollRef = ref<HTMLElement | null>(null)
 
 /** v1 calendar_panel.py CHIP_GENDERS：("2",全部) ("1",男频) ("0",女频)；文案走 i18n calendar.* */
 const GENDER_CHIPS = computed(() => [
@@ -86,12 +88,52 @@ function goPlay(row: CalendarRow) {
 function onScroll(e: Event) {
   const el = e.target as HTMLElement
   if (el && el.scrollHeight - el.scrollTop - el.clientHeight < 160) {
-    void store.loadMore()
+    void store.loadMore().then(() => fillViewport())
   }
 }
 
+function onStatusClick() {
+  if (!store.retryable) return
+  // 首屏就失败（一行都没有）→ 重试首屏；已有内容 → 重试**下一页**，
+  // 后者保留已加载项，正是 v1 `failed_page_retries_same_cursor_without_clearing_items`
+  void (store.rows.length ? store.retryLoadMore() : store.load(store.date))
+}
+
+/* v1 两条测试在这件事上有名有姓：
+ *   short_first_pages_fill_viewport_automatically —— 首屏比视口短时自动补一页；
+ *   resize_refills_visible_space —— 窗口拉高后剩余空白仍要填满。
+ * v2 之前两条都没有：短列表停在半屏，用户得自己滚一下才翻页。 */
+let fillQueued = false
+function fillViewport() {
+  if (fillQueued) return
+  fillQueued = true
+  requestAnimationFrame(async () => {
+    fillQueued = false
+    const el = scrollRef.value
+    if (!el || !store.hasMore || store.loading || store.stalled) return
+    // 只在"内容还没超过容器"时补，超过就交给滚动
+    if (el.scrollHeight <= el.clientHeight + 8) {
+      await store.loadMore()
+      // 补一页后若仍不满，下一轮 onMounted/watch 触发或用户滚动会继续；
+      // 这里不写递归 while，是为了避免服务端返回空页时把请求打满。
+      if (store.needsFill) fillViewport()
+    }
+  })
+}
+
+let ro: ResizeObserver | null = null
 onMounted(() => {
-  if (!store.loadedOnce) void store.load(store.date)
+  if (!store.loadedOnce) void store.load(store.date).then(() => fillViewport())
+  // 用 ResizeObserver 而不是 window resize：页内滚动容器的高度还会被
+  // 侧栏折叠、缩放等改变，那些情况 window 不一定发 resize。
+  if (typeof ResizeObserver !== 'undefined' && scrollRef.value) {
+    ro = new ResizeObserver(() => fillViewport())
+    ro.observe(scrollRef.value)
+  }
+})
+onBeforeUnmount(() => {
+  ro?.disconnect()
+  ro = null
 })
 </script>
 
@@ -113,7 +155,7 @@ onMounted(() => {
     <button class="btn" :disabled="store.loading" @click="store.load(store.date)">{{ t('calendar.refresh') }}</button>
   </div>
 
-  <div class="cal-scroll" @scroll.passive="onScroll">
+  <div ref="scrollRef" class="cal-scroll" @scroll.passive="onScroll">
   <div v-if="MOCK_MODE" class="banner">{{ t('banner.mock') }}</div>
 
   <div v-if="actionErrorText" class="banner warn">{{ actionErrorText }}</div>
@@ -211,7 +253,22 @@ onMounted(() => {
       <div v-if="!store.rows.length" class="state-block inline">
         <div>{{ t('calendar.emptyDay') }}</div>
       </div>
-      <div v-else-if="store.statusText" class="list-status text-muted">{{ store.statusText }}</div>
+      <!-- ⚠ 第五十四轮：这行原来是个**纯 div**，
+           而文案写的是「加载失败：…（点此重试）」——
+           也就是界面承诺了一个不存在的行为（与第三十四轮"预约提醒尚未接通"
+           那一族同形：话说出去了，事没做）。v1 `calendar_panel.py:165` 的注释
+           明确写着"底部状态行；失败时点一下重试"，所以这里补的是**对齐 v1**，
+           不是我新发明的交互。
+           停摆态（连续多页没有新剧）也走同一个入口：v1 `_retry_new()`
+           重试时请求的是**下一页**，不是原地重复。 -->
+      <button
+        v-else-if="store.statusText"
+        class="list-status text-muted"
+        :class="{ clickable: store.retryable }"
+        :disabled="!store.retryable"
+        data-testid="cal-status"
+        @click="onStatusClick"
+      >{{ store.statusText }}</button>
     </div>
   </template>
   </div>
@@ -403,6 +460,13 @@ onMounted(() => {
 }
 .state-block.clickable {
   cursor: pointer;
+}
+.list-status.clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+}
+.list-status:disabled {
+  cursor: default;
 }
 .list-status {
   text-align: center;

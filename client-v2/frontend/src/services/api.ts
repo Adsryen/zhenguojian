@@ -39,7 +39,7 @@ import type {
   UpdateStatus,
   WatchRow,
 } from './types'
-import { MOCK_SOURCES, mockArchiveScan, mockHongguoFilterGroups, mockSourceCategoryGroups, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockMergeStartMulti, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage } from './fixtures'
+import { MOCK_SOURCES, mockArchiveScan, mockHongguoFilterGroups, mockSourceCategoryGroups, mockCatalog, mockCreatorProfile, mockCreatorWorks, mockDanmakuAll, mockDetail, mockDramaCreators, mockDownloadControl, mockDownloadControlAll, mockDownloadDirectory, mockDownloadList, mockDownloadRemoveBatch, mockDownloadSettings, mockDownloadStart, mockMergeCancel, mockMergeStart, mockMergeStartMulti, mockResolvePlan, mockSaveDownloadSettings, mockCalendarPage, mockCalendarPagePaged } from './fixtures'
 import { mockLibraryRecommendations, mockLibraryPageReset } from './fixtures'
 import { mockRankingBoards, mockRankings } from './fixtures'
 import { mockSuggestions } from './fixtures'
@@ -902,7 +902,14 @@ const mockApi: NativeApi = {
     if (added) localStorage.setItem(WATCHED_KEY, JSON.stringify(cur))
     return { added }
   },
-  calendar: async (date) => mockCalendarPage(date || ''),
+  // ⚠ 第五十四轮：这里原来写死 `mockCalendarPage(date)`，**offset 与 gender 都被丢掉**，
+  // 所以分页与频道切换在这台机器上永远走不到（v1 用测试钉住的六条日历分页行为一条都测不了）。
+  // 只有设了测试缝 `window.__zgjCalPaging` 才走分页版；默认路径与原来完全一致，
+  // 不改变既有 16 条日历断言看到的数据。
+  calendar: (date, offset, gender) =>
+    (globalThis as any).window && (globalThis as any).window.__zgjCalPaging
+      ? mockCalendarPagePaged(date || '', Number(offset) || 0, Number(gender) || 0)
+      : Promise.resolve(mockCalendarPage(date || '')),
   dramaCreators: async (drama) => {
     await delay(120)
     return mockDramaCreators(drama)
