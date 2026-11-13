@@ -38,6 +38,9 @@ export const DM_DEMO_KEY = 'zgj.danmaku.demo'
 /** V2-F：连播开关（默认开）与画质偏好（v1 QUALITY_INDEX_SLUGS：auto/1080p/720p/540p → 档位序索引） */
 export const AUTOPLAY_KEY = 'zgj.player.autoplay'
 export const QUALITY_KEY = 'zgj.player.quality'
+/** 倍速偏好（v1：QSettings 变更即存、启动恢复；此前 v2 完全不持久，
+ *  每次重开播放器都回到 1.0 —— 发版前本机试跑发现的第一条） */
+export const SPEED_KEY = 'zgj.player.speed'
 /** 弹幕不透明度百分比 20–100（v1 app-settings 的 danmakuOpacity：同量纲、同默认 100） */
 export const DM_OPACITY_KEY = 'zgj.player.danmakuOpacity'
 export const QUALITY_CHOICES = ['auto', '1080', '720', '540'] as const
@@ -57,6 +60,13 @@ const DEMO_DURATION = 180
 function readQuality(): string {
   const q = localStorage.getItem(QUALITY_KEY)
   return q && (QUALITY_CHOICES as readonly string[]).includes(q) ? q : 'auto'
+}
+
+function readSpeed(): number {
+  // 只认档内值（与 readQuality 同规则）：脏数据一律回落到 1，
+  // 不做 clamp 到任意数——界面上根本没有那种档位。
+  const raw = Number(localStorage.getItem(SPEED_KEY))
+  return SPEED_CHOICES.includes(raw) ? raw : 1
 }
 
 function bridgeAvailable(): boolean {
@@ -163,7 +173,7 @@ export const usePlayerStore = defineStore('player', {
     paused: true,
     position: 0,
     duration: 0,
-    speed: 1,
+    speed: readSpeed(),
     volume: clampVolume(localStorage.getItem(VOLUME_KEY) ?? 100),
     eof: false,
     danmakuOn: true,
@@ -291,6 +301,14 @@ export const usePlayerStore = defineStore('player', {
       this.lastWatchAt = Date.now() // 节流基线随会话重置（v1 换集重计）
       this.lastWatchPos = startPosSec
       const snap = await api.playerOpen(drama, chapter, ep, this.quality)
+      /* ⚠ 发版前本机试跑补：倍速偏好要在这里**先读一次存住**。
+         上一版我把判断写成 `if (this.speed !== 1)`，而下一行
+         `applySnapshot(snap)` 会用核心回读的 speed（新会话固定 1.0）
+         把 store 里的偏好盖掉 —— 于是条件永远不成立，永远不推，
+         断言 ⑦s2 红在 `storeSpeed=1 / selectValue='1'`（实测值，不是我猜的）。
+         v1 的做法是每次新会话显式应用偏好（player.py:1668），
+         所以这里同样：以"存住的偏好"为准，而不是以被盖过的 state 为准。 */
+      const prefSpeed = readSpeed()
       this.opened = true
       this.running = true
       this.paused = false
@@ -299,6 +317,21 @@ export const usePlayerStore = defineStore('player', {
       this.attach()
       // 音量恢复（v1 变更即存 → 启动即取）
       await this.applyVolume(this.volume)
+      /* 倍速同样必须**推给核心**，只在 store 里初始化是不够的：
+         上一行 `applySnapshot(snap)` 会拿核心回读的 speed（1.0）把偏好盖掉。
+         v1 就是在每次新会话起点上显式应用（player.py:1668
+         "Keep the speed chosen before this launch across episodes"）。
+         ⚠ 我自己就是这么错过的：先只加了 `speed: readSpeed()`，
+         断言 ⑦s2 当场红（重载后 speed=1），才补上这一步。
+         失败静默（v1 同款：不把打开流程打断，也不假装已生效）。 */
+      if (prefSpeed !== 1) {
+        try {
+          await api.setSpeed(prefSpeed)
+          this.speed = prefSpeed // 推成功了才认，别让界面显示一个核心没有的档位
+        } catch {
+          /* 偏好保留在 LS，核心侧未生效——与 v1 一致不弹错误、也不假装已生效 */
+        }
+      }
       if (startPosSec > 0) await this.seek(startPosSec)
     },
 
@@ -464,6 +497,15 @@ export const usePlayerStore = defineStore('player', {
       this.eof = true
       this.paused = true
       this.running = true
+      /* v1 `_on_play_finished`（main.py:2511-2522）是在播完那一刻就落 finished，
+         而不是等 shutdown。原来的做法只有 `shutdown()` 里才算 final 态，
+         于是**自动连播时前面每一集的「已看」永远不会写**：
+         第 1 集播完→playNext 就地换集→最后只写了第 N 集。
+         v1 传的是 (duration, duration)：位置补到片尾，与下面赋值一致。 */
+      if (!this.demoMode && this.drama && (this.episodeIndex > 0 || this.localPath)) {
+        if (this.duration > 0) this.position = this.duration
+        void this.persistWatch(true)
+      }
       if (this.autoplay && !this.demoMode && this.hasNextEpisode) {
         this.status = t('player.endedAutoplay')
         void this.playNext()
@@ -609,11 +651,15 @@ export const usePlayerStore = defineStore('player', {
       const snapped = v < 0.5 ? 0.5 : v > 3 ? 3 : v
       if (this.demoMode) {
         this.speed = snapped
+        localStorage.setItem(SPEED_KEY, String(snapped))
         return
       }
       try {
         await api.setSpeed(snapped)
         this.speed = snapped
+        // v1 set_speed 里 QSettings.setValue 的等价位置：**成功后**才写，
+        // 失败不把错的档位留下来
+        localStorage.setItem(SPEED_KEY, String(snapped))
       } catch (e) {
         this.error = (e as ApiError)?.message ?? t('player.speedFailed')
       }

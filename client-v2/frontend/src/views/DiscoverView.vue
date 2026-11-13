@@ -26,6 +26,12 @@ const router = useRouter()
 const items = ref<Drama[]>([])
 const page = ref(0)
 const hasMore = ref(true)
+/* v1 的"连续空页才停"计数器（browse_panel.py:112 `self._empty_pages`，
+   :402-403 `empty_pages = empty_pages+1 if not added else 0;
+   if empty_pages>=2: has_more=False`）。
+   v2 原来是 `hasMore = res.hasMore && more.length` ——
+   只要某一页**全是重复**就当场停，用户点不到后面真正的新内容。 */
+const emptyPages = ref(0)
 const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
@@ -115,6 +121,9 @@ function injectCatalog(list: Drama[], page: number): Drama[] {
   if (!MOCK_MODE) return list
   const mode = (window as unknown as { __zgjDiscoverInjectCatalog?: string }).__zgjDiscoverInjectCatalog
   if (!mode) return list
+  // 'repeat'：翻页把**同一批**再给一遍——真实引擎的同推荐位重复就是这个形状
+  // （v1 靠 poster_wall.append_items 按 id 吃掉；这里给它一条可断言的入口）
+  if (mode === 'repeat') return list
   if (page > 1) return []
   if (mode === 'empty') return []
   if (mode === 'single') return list.slice(0, 1)
@@ -175,6 +184,7 @@ async function loadFirst(force = false) {
     if (seq !== requestSeq) return
     items.value = injectCatalog(res.items ?? [], 1)
     page.value = 1
+    emptyPages.value = 0 // v1 browse_panel.py:381 重置路径同款
     hasMore.value = !!res.hasMore
     warning.value = res.warning || (MOCK_MODE ? t('banner.mock') : DEGRADED ? t('banner.degraded') : '')
     if (!items.value.length && !res.warning) error.value = ''
@@ -200,11 +210,26 @@ async function loadMore() {
       lane: 'discover'
     })
     if (seq !== requestSeq) return
-    // 真实引擎 id 在翻页会重复（同推荐位），页内按 id#page 去重即可
-    const more = injectCatalog(res.items ?? [], page.value + 1)
-    items.value = items.value.concat(more)
+    /* ⚠ 上一行原来那句注释写的是「页内按 id#page 去重即可」——
+       那个 `id#i` 是 **PosterGrid 的渲染 :key**（components/PosterGrid.vue:377），
+       它只让 Vue 不报重复 key，**根本不去掉重复内容**：
+       同一个推荐位翻页重复给出时，页面上就是两张一模一样的卡片。
+       v1 在数据层去重（poster_wall.py:650-662 `append_items`：
+       按 drama.id 比对已有集合，重复不收；batch 为空整页不追加），
+       并把停止条件设为"连续 2 页无新增"（browse_panel.py:402-403）。
+       这两半是同一条规则，这里一起照 v1 做。 */
+    const raw = injectCatalog(res.items ?? [], page.value + 1)
+    const seen = new Set(items.value.map((d) => d.id))
+    const more: Drama[] = []
+    for (const d of raw) {
+      if (!d.id || seen.has(d.id)) continue
+      seen.add(d.id)
+      more.push(d)
+    }
+    if (more.length) items.value = items.value.concat(more)
+    emptyPages.value = more.length ? 0 : emptyPages.value + 1
     page.value += 1
-    hasMore.value = !!res.hasMore && !!more.length
+    hasMore.value = !!res.hasMore && emptyPages.value < 2
   } catch (e: any) {
     if (seq !== requestSeq) return
     // 翻页失败：停 auto-load，保留已加载内容 + toast

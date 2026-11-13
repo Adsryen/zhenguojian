@@ -35,6 +35,12 @@ export interface HistoryEntry {
   /** R22a：这条进度来自本地成品文件（v1 watchstore 行的 local_path 同义）。
    *  有它 = 该行可以用「本地播放」重放；写入侧见 api.saveLocalWatch。 */
   localPath?: string
+  /** 发版前本机试跑补的字段：`finished` 在真实链路由 Go 侧消化
+   *  （`Store.SaveWatch` 用它推进 known/「已看」，store.go:1327-1376），
+   *  **Go 返回的 history 行里并没有这个键**（store.go:392-393），
+   *  所以它只属于本地降级层的"如实留痕"，界面不得依赖它判状态——
+   *  判状态的真值来源仍然只有 Go 的 known/position。 */
+  finished?: boolean
 }
 
 export type HistoryMap = Record<string, HistoryEntry>

@@ -252,6 +252,17 @@ def main():
             check("⑥ 播完自动连播下一集（ep3→ep4）", ok,
                   f"st={json.dumps(st, ensure_ascii=False)}")
 
+            # ── ⑥a2 播完那一刻就把 finished 落下去（v1 main.py:2511-2522） ──
+            # 断言打在**调用参数**上，不是打在 mock 的状态上：
+            # Go 的 history 行里根本没有 finished 字段（store.go:392-393），
+            # 它只在 Store.SaveWatch 内部推进 known/「已看」（store.go:1327-1376）。
+            # 让 mock 复刻这套规则就是造第二个真相，所以 mock 只如实记入参
+            # （window.__zgjLastSaveWatch），这里判"有没有带 finished=true 调过"。
+            sw = page.evaluate("() => window.__zgjLastSaveWatch || null")
+            check("⑥a2 播完时以 finished=true 落过进度（连播不吞掉上一集的「已看」）",
+                  bool(sw) and sw.get("finished") is True,
+                  f"last saveWatch={json.dumps(sw, ensure_ascii=False)}")
+
             # ── ⑥b 连播开关持久化 ──
             ap = page.locator(".pl-btn.ap")
             ap.click()
@@ -283,6 +294,35 @@ def main():
             # 画质已接核心 resolve：dev:mock 走「已切换到720P」实链分支；无桥/演示态出占位提示
             check("⑦ 画质切换提示文案出现", ok7 and ("已切换到720P，从原位置继续播放" in toast
                                  or "演示模式或未载入剧目" in toast), f"toast={toast}")
+
+            # ── ⑦s 倍速持久化（发版前本机试跑补；v1 QSettings 变更即存+启动恢复）──
+            # 说明：这组断言在 `settings_storage_verify.py` 的表格里有行、
+            # 却**一条都没有**（该脚本 grep speed 零命中），所以那句"倍速 ✅ 有"
+            # 是没有证据的声明，实际 v2 此前完全不持久化倍速。
+            page.select_option("select.pl-label + *, .pl-select:has(option[value='1.5'])", "1.5")
+            page.wait_for_timeout(400)
+            ls_sp = page.evaluate("() => localStorage.getItem('zgj.player.speed')")
+            sp_val = page.evaluate(
+                "() => { const el = [...document.querySelectorAll('select')]"
+                ".find(x => [...x.options].some(o => o.value === '1.5'));"
+                " return el ? el.value : null; }")
+            check("⑦s 倍速选 1.5 写 LS 且下拉跟手",
+                  ls_sp == "1.5" and sp_val == "1.5", f"ls={ls_sp} value={sp_val}")
+            boot(page)
+            sp_after = page.evaluate(
+                "() => document.querySelector('#app').__vue_app__"
+                ".config.globalProperties.$pinia.state.value.player.speed")
+            check("⑦s2 重载后 store.speed 从 LS 恢复为 1.5（v1 启动恢复同款）",
+                  sp_after == 1.5, f"speed={sp_after}")
+            # 脏值必须回落 1，而不是 clamp 到界面根本不存在的档位
+            page.evaluate("() => localStorage.setItem('zgj.player.speed', '2.7')")
+            boot(page)
+            sp_dirty = page.evaluate(
+                "() => document.querySelector('#app').__vue_app__"
+                ".config.globalProperties.$pinia.state.value.player.speed")
+            check("⑦s3 LS 里是档外脏值时回落 1（与 readQuality 同规则，不 clamp）",
+                  sp_dirty == 1, f"speed={sp_dirty}")
+            page.evaluate("() => localStorage.removeItem('zgj.player.speed')")
 
             # ── ⑧ 弹幕不透明度控件（R4-2；v1「透明 NN%」竖向滑条对端）──
             op_btn = page.locator("[data-testid=dm-opacity-btn]")

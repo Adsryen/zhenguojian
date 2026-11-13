@@ -489,6 +489,17 @@ const mockApi: NativeApi = {
     if (s) s.enabled = enabled
   },
   catalog: async (p: CatalogParams) => {
+    // 调用计数缝：用来证明"翻页真的发生过"。
+    // 第五十九轮的教训：A5b 第一版把滚动打在 `.pg-viewport` 上，
+    // 而真正的触底监听在 `.pg-scroller`（PosterGrid.vue:153-158），
+    // 于是 loadMore 一次都没跑，"卡片数没变"就"通过"了去重断言 ——
+    // 空判据。有这个计数才能先断言"确实请求过第 2 页"。
+    if (typeof window !== 'undefined') {
+      const w = window as unknown as { __zgjCatalogCalls?: Record<string, number> }
+      w.__zgjCatalogCalls = w.__zgjCatalogCalls || {}
+      const lane = String(p.lane || '')
+      w.__zgjCatalogCalls[lane] = (w.__zgjCatalogCalls[lane] || 0) + 1
+    }
     await delay(300 + Math.random() * 350)
     return mockCatalog(p.source, p.query ?? '', p.page ?? 1)
   },
@@ -853,7 +864,11 @@ const mockApi: NativeApi = {
     mockSimStart()
     return mockSnapshotOut()
   },
-  saveLocalWatch: async (drama, path, pos, dur) => {
+  saveLocalWatch: async (drama, path, pos, dur, fin) => {
+    // 同上：如实记入参，不复刻 Go 规则
+    if (typeof window !== 'undefined') {
+      ;(window as any).__zgjLastSaveWatch = { localPath: path, position: pos, duration: dur, finished: fin }
+    }
     const all = readHistory()
     const key = historyKey(drama.id, 1) // v1：本地文件一律记 episode=1
     all[key] = { ...(all[key] ?? {}), title: drama.title, episode: 1, position: pos,
@@ -862,7 +877,21 @@ const mockApi: NativeApi = {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(all))
     return { ok: true }
   },
-  saveWatch: async (drama, ep, pos, dur) => {
+  saveWatch: async (drama, ep, pos, dur, fin) => {
+    /* ⚠ 发版前本机试跑时发现（我没写轮次号 —— 上次凭记忆写轮次号写错过，
+       这里原来签名只到 `dur`，第 5 个实参 `finished` 被**默默丢掉**。而真实链路是
+       `api.saveWatch(..., finished)` → `App.SaveWatch(..., finished bool)`
+       → `Store.SaveWatch` 用它推进 known/「已看」（store.go:1327-1376）。
+       也就是说 mock 面上这条语义完全不可见 —— 所以"播完不落 finished"
+       这种 bug 在 28 只 Playwright 全绿下潜伏了很多轮。
+
+       修法只做一件诚实的事：**如实记下入参**（下面的测试缝），
+       不复刻 Go 的里程碑规则——Go 的 history 行里也没有 finished 字段
+       （store.go:392-393），复刻就等于造第二个真相。
+       断言因此打在"有没有带着 finished=true 调用过"，而不是打在 mock 的状态上。 */
+    if (typeof window !== 'undefined') {
+      ;(window as any).__zgjLastSaveWatch = { episode: ep, position: pos, duration: dur, finished: fin }
+    }
     const all = readHistory()
     all[historyKey(drama.id, ep)] = {
       title: drama.title, episode: ep, position: pos, duration: dur,

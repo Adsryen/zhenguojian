@@ -91,6 +91,22 @@ async () => {
 """
 
 # 当前 DOM 里的网格卡片：标题 + 右下集数徽标 + 左上 VIP/18+
+CARD_IDS_JS = r"""
+() => {
+  // 从 Vue 的渲染 key（`d.id + '#' + i`，PosterGrid.vue:377）反推 id 更稳；
+  // 拿不到就退化为按 DOM 顺序计数，并在 detail 里说明是退化值。
+  const nodes = [...document.querySelectorAll('.pg-viewport .poster')];
+  const ids = nodes.map((el) => {
+    const vnode = el.__vueParentComponent;
+    try {
+      const d = vnode?.props?.drama || vnode?.props?.item;
+      return d && d.id ? String(d.id) : null;
+    } catch (e) { return null; }
+  });
+  return ids.filter(Boolean);
+}
+"""
+
 CARDS_JS = r"""
 () => [...document.querySelectorAll('.pg-viewport .poster')].map((el) => ({
   title: (el.querySelector('.title')?.textContent || '').trim(),
@@ -241,6 +257,24 @@ async def main():
                 f"cards={len(single)} 例={single[:1]}",
             )
 
+            # ---------------- A5b：撤掉，登记为"还钉不住"（第五十九轮） ----------------
+            # 产品侧的去重与"连续 2 页无新增才停"照 v1 改好了
+            # （DiscoverView：按 drama.id 去重 + emptyPages<2，
+            #   对齐 poster_wall.py:650-662 与 browse_panel.py:402-403），
+            #   但我**没法在这里断言它**，原因两条都是我自己的判据错前提：
+            #  1) 卡片数不能当数据量：PosterGrid 是虚拟渲染，
+            #     DOM 里只有当前窗口，实测滚一滚就从 21 变 15——
+            #     "卡数没变"其实是"窗口大小没变"，与去重无关；
+            #  2) 触底请求没发生：调用计数实测 7→7，说明我打的滚动
+            #     （.pg-scroller.scrollTop=scrollHeight）并没有走到
+            #     PosterGrid.vue:153-158 的 emit 条件（它要 local+vh ≥ total-1.5行）。
+            # 要钉住这条得先有一个**数据层的可观察量**——
+            # 恰好就是子代理 A 报的另一条 (a) 类差距：
+            # v1 找剧页有"已加载 N 部·…"状态行（browse_panel 那侧），v2 没有。
+            # 补上那行就能直接断言 N 不因重复而增长。已登记进 GAPS 队列，
+            # 下一轮做；不在这里留一条看起来通过、实际什么都没看的断言。
+
+            await page.evaluate("() => { delete window.__zgjDiscoverInjectCatalog }")
             await page.evaluate("() => { delete window.__zgjDiscoverInjectCatalog }")
             await force_refresh(page)
 

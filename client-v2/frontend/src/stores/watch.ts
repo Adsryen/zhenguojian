@@ -129,13 +129,30 @@ function localRemoveFollow(id: string): void {
   if (isFollowedLocal(id)) toggleFollowLocal({ id } as Drama)
 }
 
-function localSaveWatch(drama: Drama, episode: number, position: number, duration: number, localPath = ''): void {
+function localSaveWatch(
+  drama: Drama, episode: number, position: number, duration: number,
+  localPath = '', finished = false
+): void {
+  /* ⚠ 发版前本机试跑发现的第二个洞：`finished` 在这里**根本没有参数位**，
+     上面两处调用（saveWatch / saveLocalWatch 的降级分支）把它直接丢了。
+     而 mock/无桥环境走的就是这条本地层（`callBridge` 里
+     `if (this.useLocalLayer()) return local()`，watch.ts:273），
+     所以我先把验证缝打在 `api.saveWatch` 上时，那是一条**死路径**、
+     断言读出 null —— 缝要打在这条真正被走的路径上才对。
+     这里只做两件不失真的事：如实保存入参 + 记一笔调用观测。
+     **不复刻 Go 的里程碑规则**（store.go:1327-1376 用 finished 推进 known/已看），
+     复刻就是造第二个真相；要判 Go 那套规则请写 Go 单测。 */
+  if (typeof window !== 'undefined') {
+    ;(window as unknown as { __zgjLastSaveWatch?: unknown }).__zgjLastSaveWatch =
+      { episode, position, duration, finished, localPath: localPath || undefined }
+  }
   const all = readHistory()
   all[historyKey(drama.id, episode)] = {
     title: drama.title,
     episode,
     position,
     duration,
+    finished,
     ts: Date.now(),
     dramaId: drama.id,
     cover: drama.cover,
@@ -458,7 +475,7 @@ export const useWatchStore = defineStore('watch', {
         await this.callBridge(
           () => api.saveWatch(drama, episode, position, duration, finished),
           () => {
-            localSaveWatch(drama, episode, position, duration)
+            localSaveWatch(drama, episode, position, duration, '', finished)
             return { ok: true }
           }
         )
@@ -490,7 +507,7 @@ export const useWatchStore = defineStore('watch', {
         await this.callBridge(
           () => api.saveLocalWatch(drama, path, position, duration, finished),
           () => {
-            localSaveWatch(drama, 1, position, duration, path)
+            localSaveWatch(drama, 1, position, duration, path, finished)
             return { ok: true }
           }
         )
