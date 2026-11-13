@@ -284,6 +284,14 @@ def main():
         print("FAIL 核心动作对账判据执行失败：%r" % (exc,))
         return 1
 
+    # 会话状态文件的对账：里面的数字只能由脚本产生。
+    # 我在这个任务里六次凭记忆写错提交数，所以把它做成文件 + 比较器，
+    # 而不是继续对自己说"以后现测"。
+    import session_state
+    _rc = session_state.main(["--check"])
+    if _rc != 0:
+        print("（不影响回归结果，但报告里的数字请以重新生成后的 SESSION-STATE.md 为准）")
+
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
     if not scripts:
