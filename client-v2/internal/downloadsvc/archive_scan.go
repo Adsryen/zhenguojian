@@ -19,6 +19,7 @@ package downloadsvc
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -36,6 +37,36 @@ const (
 	// mergeNameInfix 合并产物名剧名/集号分隔（merge.go :195 fmt）。
 	mergeNameInfix = " 全"
 )
+
+// archiveDramaKey 是 v1 `_archive_drama_key`（downloads.py:89-95）的端口：
+// 合并成品文件名 → 剧名分组键。剥掉集数范围 / SxxExx / 结尾数字，再去季号；
+// 全剥空了就退回原 stem，再空给「合集」（v1 同一串 `or`）。
+var (
+	archiveRangeRe  = regexp.MustCompile(`\s*全\s*[0-9]+\s*-\s*[0-9]+\s*集.*$`)
+	archiveSeRe     = regexp.MustCompile(`\s*[Ss][0-9]{1,2}[Ee][0-9]{1,4}.*$`)
+	archiveTrailNum = regexp.MustCompile(`\s+[0-9]{1,4}$`)
+)
+
+func archiveDramaKey(stem string) string {
+	stem = archiveRangeRe.ReplaceAllString(stem, "")
+	stem = archiveSeRe.ReplaceAllString(stem, "")
+	stem = archiveTrailNum.ReplaceAllString(stem, "")
+	stem = strings.TrimSpace(stem)
+	// v1 的 `strip_season` 那一步（downloads.py:283-288）在 watchstore 包里也有近似实现
+	// （SeasonNumber 用同一套"第N季"识别），但**没有导出的去后缀函数**。
+	// 这里就地写一份而不是给 watchstore 新开一个导出：
+	// 跨包加导出会让"扫描归组"依赖"追剧季号"两个子系统耦合，
+	// 而这两处的需求其实不同（一个要序号、一个要去后缀）。
+	// ⚠ 这条确实是同一规格的第二次实现——它值一次独立的小重构（收进一个 series 包），
+	// 但不该夹带在这笔修 bug 里做；已在 notes 里挂号。
+	if stripped := stripSeasonSuffixLocal(stem); stripped != "" {
+		return stripped
+	}
+	if stem != "" {
+		return stem
+	}
+	return "合集"
+}
 
 // ArchiveGroup 扫描分组条目（前端 types.ArchiveGroupRow 对齐）。
 type ArchiveGroup struct {
@@ -176,10 +207,13 @@ func (s *Service) ScanArchiveRoot() (map[string]any, error) {
 				continue
 			}
 			stem := strings.TrimSuffix(strings.TrimSuffix(e.Name(), ext), unverifiedSuffix)
-			prefix := stem
-			if i := strings.LastIndex(stem, mergeNameInfix); i > 0 {
-				prefix = stem[:i]
-			}
+			// 归组键按 v1 `_archive_drama_key`（downloads.py:89-95）算：
+			// 它要剥三种形状 —— `全NNN-NNN集…`、`SxxExx…`、结尾纯数字 —— 再去季号。
+			// v2 原来只切 ` 全` 那一种中缀，于是「按季合并选中」产出的
+			// `剧名 S01E01.mkv` 会自成一组 `m:剧名 S01E01`，
+			// 而不是回到剧名组里带「含合并」徽标（这是上一笔命名接通后**新暴露**的问题，
+			// 不是我一开始就写错的归档：以前磁盘上只有 `全NNN-NNN集` 那一种名字）。
+			prefix := archiveDramaKey(stem)
 			key, ok := byTitle[prefix]
 			if !ok {
 				key = "m:" + prefix
@@ -286,4 +320,14 @@ func archiveScanWantedDir(name string) bool {
 
 func archiveMediaExt(ext string) bool {
 	return ext == ".mp4" || ext == ".mkv"
+}
+
+// stripSeasonSuffixLocal 去掉结尾的「第N季」标记（v1 strip_season 的去后缀那一步）。
+// 不锚 `$`：v1 是 `_SEASON_RE.sub("", title)`（出现在任何位置都剥），
+// 我第一版写成只剥结尾，遇到「第二季 测试剧」这种就漏。照 v1 放宽。
+var seasonReLocal = regexp.MustCompile(`第[0-9一二两三四五六七八九十]+季`)
+
+func stripSeasonSuffixLocal(title string) string {
+	clean := strings.Trim(seasonReLocal.ReplaceAllString(strings.TrimSpace(title), ""), " 　-·~～")
+	return clean
 }

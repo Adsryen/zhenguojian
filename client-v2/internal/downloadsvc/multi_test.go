@@ -435,6 +435,39 @@ func TestMergeStartMultiFieldSplit(t *testing.T) {
 	}
 }
 
+// TestArchiveDramaKey 钉住归档归组键的解析（v1 downloads.py:89-95）。
+// 上一笔接通 SxxExx 命名后才发现的问题：v2 扫描原来只切 `" 全"` 一种中缀，
+// 于是按季合并产出的 `剧名 S01E01.mkv` 会自成一组 `m:剧名 S01E01`，
+// 剧名组反而丢掉「含合并」徽标——**同一个文件在 v1/v2 归档页归属不同**。
+func TestArchiveDramaKey(t *testing.T) {
+	cases := []struct {
+		stem, want string
+	}{
+		// v1 那三种剥法 + 去季号
+		{"测试剧 全001-002集", "测试剧"},
+		{"测试剧 全001-004集（未完整校验）", "测试剧"}, // 中缀之后还有尾巴也一起剥
+		{"测试剧 S01E01", "测试剧"},
+		{"测试剧 S02E007", "测试剧"},
+		{"测试剧 007", "测试剧"},        // 结尾纯数字
+		{"测试剧 第二季", "测试剧"},      // 只有季号：去季后留剧名
+		{"第二季 测试剧", "测试剧"},      // 季号在前也要剥（v1 的 sub 不锚结尾）
+		{"无名", "无名"},
+		{"   ", "合集"},                // 剥空给「合集」（v1 最后一道 or）
+		{"S01E01", "合集"},
+		// ⚠ 这一条我原本期望写成 "S01E01"，理由是 v1 那句
+		// `strip_season(stem.strip()) or stem.strip() or "合集"` 里"退回原 stem"。
+		// 但 v1 的 `strip_season` 自己在空时就已经返回「合集」
+		// （downloads.py:283-288 最后一行 `return title or "合集"`），
+		// 所以中间那道 `or stem.strip()` 是**永远走不到的死分支**。
+		// 一个纯集号的文件名（只有 S01E01、没有剧名）在 v1 就归进「合集」组。
+	}
+	for _, c := range cases {
+		if got := archiveDramaKey(c.stem); got != c.want {
+			t.Errorf("archiveDramaKey(%q) = %q，期望 %q", c.stem, got, c.want)
+		}
+	}
+}
+
 func intsToStrings(xs []int) []string {
 	out := make([]string, 0, len(xs))
 	for _, x := range xs {
