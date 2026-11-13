@@ -181,3 +181,56 @@ PRD 里三条 `[ ]` 是**过期勾选**而不是未做：
 - **剧库「换一批」未移植，且理由写错**：LibraryView.vue:13 称 v1"本页无此入口"，
   实际入口就是 `main.py:1115-1117` 的「刷新推荐」按钮 ——
   这次是 **v2 注释曲解 v1**（我这几轮一直在抓的方向反过来又出现一次）。
+
+
+---
+
+## 七、发版前本机试跑（第五十九轮续）
+
+### 工具链实情（先说结论，别说半截话）
+
+- 本机**没有 Go**，也没有 pkg-config/GTK/webkit → **Linux GUI 版本机编不出来**，
+  而且那本来不是发货物（发版目标是 Windows exe）。
+- 我在 `~/.local/go` 装了用户级 Go 1.24.6：`go list ./internal/...` 通、依赖拉得动，
+  但**连 hello world 都编不过**，失败在 stdlib 汇编
+  （`internal/runtime/syscall/linux/asm_linux_amd64.s:27
+  ABI selector only permitted when compiling runtime`）。
+- 判定链已查清（`cmd/asm/internal/asm/parse.go:893` 的 `p.allowABI` ←
+  `objabi.LookupPkgSpecial(...).AllowAsmABI`，表里只有父包没有 `.../linux` 子包），
+  但**原因未查明**。我一度断言"镜像给的文件不自洽"，随后用两个独立来源
+  各下一次、sha256 完全相同 → 那个指控是错的，已 `--amend` 更正
+  （这与我这几轮一直抓的"把对自己现象的解释当成已验证事实"是同一个错）。
+- 下一轮的具体实验：换 Go 版本（1.23 / 1.25）或装发行版 `golang-go`，看现象是否消失。
+  在此之前，**Go 侧的唯一门仍是 CI**。
+
+### 本轮改掉三条 v1 差距
+
+| 条目 | v1 依据 | v2 之前的实情 | 证据 |
+|---|---|---|---|
+| 播完那一刻落 finished | `main.py:2511-2522` | 只有 `shutdown()` 才算终态 → 连播时**每一集的「已看」都不落** | ⑥a2 正反都验（撤掉后红在 `{ep:1, finished:false}`，正是 bug 形状） |
+| 倍速持久化 | QSettings 变更即存 + `player.py:1668` 每次新会话显式应用 | 完全不存；而 `settings_storage_verify.py` 表里写着「倍速 ✅ 有」，**一条断言都没有** | ⑦s/⑦s2/⑦s3 |
+| 找剧翻页去重 + 连续 2 页才停 | `poster_wall.py:650-662` + `browse_panel.py:402-403` | 裸 concat；注释把 PosterGrid 的**渲染 :key** 当成内容去重 | 改了，但**没钉住**（见下） |
+
+顺带修的两个 mock 洞：`api.ts` 的 mock `saveWatch` 丢掉第 5 个实参；
+而 mock 环境实际走的是**本地层**（`watch.ts:273 useLocalLayer()`），
+`localSaveWatch` 连 `finished` 参数位都没有 —— 我第一版把观测缝打在
+`api.saveWatch` 上，那是死路径，断言读出 null 才追到这里。
+
+### 新登记两条（都是"我没测到"而不是"我测过了"）
+
+- **G-a 找剧去重缺一个数据层可观察量**：我为它写的两版判据都倒在错前提上
+  —— ① 判"标题互不相同"（fixtures 本来有同名剧）；② 判"DOM 卡片数不变"
+  （`PosterGrid` 是虚拟渲染，实测滚一下 21→15，那测的是窗口不是数据）；
+  ③ 用新加的 catalog 调用计数一验，**7→7**：我打的滚动根本没满足
+  `PosterGrid.vue:153-158` 的 emit 条件，"卡数没变"其实是"什么都没发生"。
+  要钉住它，正好需要先补上子代理 A 报的另一条 (a) 类差距：
+  **v1 找剧页有「已加载 N 部·…」状态行，v2 没有**。补上那行才能断言 N 不涨。
+  断言已撤回，不留一条"看起来过了、其实什么都没看"的绿。
+- **G-b `discover_hero_verify.py` A2 抖动**：本轮三次运行红两次
+  （失败时 URL 停在 `/#/discover`），它在本人改动之前就执行、与改动无关，
+  判为用例自身时序抖动。**不接受"重跑就好"**，下一轮给它加稳定等待条件。
+
+### 门禁（现算）
+
+全量 `run_all` **30/30、失败 0、端口泄漏 0**；`player_verify` 33 项 ALL PASS；
+`discover_hero_verify` 回到 15/15；typecheck 0、build ✓；累计 **156 笔**。
