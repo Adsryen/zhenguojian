@@ -5,6 +5,7 @@
 package downloadsvc
 
 import (
+	"strings"
 	"os"
 	"path/filepath"
 	"testing"
@@ -153,6 +154,54 @@ func TestArchiveScanMergedGrouping(t *testing.T) {
 	other := groupOf(t, res, "孤儿剧")
 	if !other.HasMerged || other.Episodes != 0 || other.Indexed || other.OpenPath != "合并/孤儿剧 全001-003集.mkv" {
 		t.Fatalf("仅合并组异常: %+v", other)
+	}
+}
+
+func TestArchiveScanMergedSeasonNamedFile(t *testing.T) {
+	// 「按季合并选中」的产物名是 `剧名 S01E01.mkv`（上一笔接通的命名）。
+	// 这条测的不是那个纯解析函数，而是**整条扫描链路**：
+	// 它必须回到剧名组里、带「含合并」徽标，而不是自己另成一组
+	// `m:剧名 S01E01`（改之前就是这个结果，同一个文件在 v1/v2 归属不同）。
+	h := newHarness(t)
+	root := filepath.Join(h.tmp, "dl")
+	base := time.Unix(1730000000, 0)
+	writeFileTimed(t, root+"/xh/j1/media.mp4", 300, base)
+	writeFileTimed(t, root+"/xh/j2/media.mp4", 300, base)
+	writeFileTimed(t, root+"/合并/测试剧 S01E01.mkv", 900, base.Add(time.Hour))
+	writeFileTimed(t, root+"/合并/测试剧 S02E01.mkv", 800, base.Add(2*time.Hour))
+	// 第二季的剧名组：索引里存在但分集目录没有（只靠合并产物回接）
+	h.core.handlers["downloadDirectory"] = func(map[string]any) (map[string]any, error) {
+		return map[string]any{"directory": root}, nil
+	}
+	h.core.handlers["downloads"] = func(map[string]any) (map[string]any, error) {
+		return jobsResult(
+			archJob("j1", "xh/j1", "d1", "测试剧", 1, false),
+			archJob("j2", "xh/j2", "d1", "测试剧", 2, false),
+		), nil
+	}
+
+	res, err := h.svc.ScanArchiveRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := res["groups"].([]ArchiveGroup)
+	// 只该有一组（剧名"测试剧"）：两季合并产物都归进去
+	for _, g := range groups {
+		if strings.HasPrefix(g.Name, "m:") || g.Name == "测试剧 S01E01" {
+			t.Fatalf("SxxExx 命名被甩成独立组了：%+v", groups)
+		}
+	}
+	ce := groupOf(t, res, "测试剧")
+	if !ce.HasMerged || ce.MergedCount != 2 || ce.MergedBytes != 1700 {
+		t.Fatalf("两季合并产物都该归到剧名组: %+v", ce)
+	}
+	// openPath 取**最新**那份（S02 那份 mtime 更新）
+	if ce.OpenPath != "合并/测试剧 S02E01.mkv" {
+		t.Fatalf("openPath 应指向最新合并产物，得 %v", ce.OpenPath)
+	}
+	// 分集计数不受影响：合并/ 里的文件不进 Episodes
+	if ce.Episodes != 2 {
+		t.Fatalf("合并产物不该计入分集: %+v", ce)
 	}
 }
 
