@@ -51,7 +51,13 @@ SRC = os.path.join(FRONTEND, "src")
 I18N = os.path.join(SRC, "services", "i18n.ts")
 
 DICT_RE = r"^const %s: Record<string, string> = \{\n(?P<body>.*?)\n\}$"
-KEY_DEF_RE = re.compile(r"(?m)^\s{2}'([\w.]+)'\s*:")
+# ⚠ 第五十九轮修（子代理 D 报出、我复核确认）：字符类原来只有 `[\w.]`，**不含连字符**。
+# 仓里就有活键 `source.note.huangguo-video`（i18n.ts:580 中文、:1259 英文，
+# 经 components/settings/SourceCard.vue 动态取键），它既不进 zh_set/en_set、
+# 也不算"用到/未用"。后果不是名单少一项，而是
+# **把英文那条删掉，这道门照样全绿** —— 英文界面直接把键名显示给用户，
+# 正是第 52 轮立这道门要拦的事故形，换个键名形状就绕过去了。
+KEY_DEF_RE = re.compile(r"(?m)^\s{2}'([\w.\-]+)'\s*:")
 LINE_COMMENT_RE = re.compile(r"(?m)^\s*//.*$")
 
 # ⚠ 取键这件事**不能用一条正则搞定**，第一版就是栽在这里：
@@ -66,9 +72,9 @@ LINE_COMMENT_RE = re.compile(r"(?m)^\s*//.*$")
 #   字面量 + 拼接/三元等 → 动态键（能拿到前缀就记前缀）
 #   变量/模板串/表达式   → 动态键
 CALL_HEAD_RE = re.compile(r"(?<![\w$.])(?:tf|t)\(")
-PURE_LITERAL_RE = re.compile(r"^['\"]([\w.]+)['\"]$")
-CONCAT_PREFIX_RE = re.compile(r"^['\"]([\w.]+)['\"]\s*[+]")
-QUOTED_ANY_RE = re.compile(r"^['\"]([\w.]*)['\"]")
+PURE_LITERAL_RE = re.compile(r"^['\"]([\w.\-]+)['\"]$")
+CONCAT_PREFIX_RE = re.compile(r"^['\"]([\w.\-]+)['\"]\s*[+]")
+QUOTED_ANY_RE = re.compile(r"^['\"]([\w.\-]*)['\"]")
 
 
 def _first_arg(text, i):

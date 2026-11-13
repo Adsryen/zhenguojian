@@ -33,12 +33,16 @@ DEFAULT_TIMEOUT = 340
 def declared_ports(script_path):
     """脚本里出现过的 51xx 端口（含注释里的历史端口，宁可多报不可漏报）。"""
     text = open(script_path, encoding="utf-8").read()
-    return {p for p in re.findall(r"\b(51\d{2})\b", text)}
+    # ⚠ 第五十九轮修：这里只认 `51xx`，而 ports_audit 早就是 `5[12]\d{2}`。
+    #   5200 段从第 44 轮起一路用到 5212，于是这些脚本的 declared_ports **全是空集**，
+    #   "残留端口"那一列对它们恒显示 `-` —— 不是"没泄漏"，是**看不见**。
+    #   一列恒显示"没问题"的门禁，比没有这列更危险。
+    return {p for p in re.findall(r"\b(5[12]\d{2})\b", text)}
 
 
 def listening_ports():
     out = subprocess.run(["ss", "-ltn"], capture_output=True, text=True).stdout
-    return set(re.findall(r":(51\d{2})\b", out))
+    return set(re.findall(r":(5[12]\d{2})\b", out))
 
 
 def split_porcelain(lines):

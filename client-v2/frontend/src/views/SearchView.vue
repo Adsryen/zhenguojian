@@ -7,7 +7,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
-import { api } from '@/services/api'
+import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
 import { t, tf } from '@/services/i18n'
@@ -35,6 +35,17 @@ const hasMore = ref(false)
 const loading = ref(false)
 const loadingMore = ref(false)
 const error = ref('')
+/* ⚠ 第五十九轮补（子代理 A 报出，我 grep 复核确认）：
+   这个文件原来对 banner / MOCK_MODE / DEGRADED / warning **一处都没有**，
+   而找剧页（DiscoverView.vue:179）与剧库页（LibraryView.vue:81）都有。
+   api.ts 在无桥时把整个 api 落到 mock 面（api.ts:1065-1067），
+   所以真机上只要桥没起来，搜索页就把**示例数据当真实结果**显示，
+   而隔壁两页都会挂「示例数据 / 降级」横幅 ——
+   同一件事三个页面只做两个，剩下那个不是设计选择，是漏。
+   顺带接上 v1 的另一半：v1 空结果时用核心的 warning 当空态文案
+   （main.py:1453-1455，含红果「使用更完整的剧名…」提示），v2 之前不读 res.warning。
+   位置与 v1 不同（v1 在空态区、v2 走横幅），这条差异如实写在这里。 */
+const banner = ref('')
 const searched = ref(false)
 let requestSeq = 0
 
@@ -223,7 +234,13 @@ async function doSearch(q?: string) {
   error.value = ''
   searched.value = true
   items.value = []
+  banner.value = ''
   if (searchAll.value) {
+    // 「全部来源」是 v2 新增面（v1 搜索永远单源），但它一样在 mock/降级面上出结果，
+    // 所以必须挂同一条标注——不能因为"v1 没这个功能"就省掉。
+    if (MOCK_MODE || DEGRADED) {
+      banner.value = MOCK_MODE ? t('banner.mock') : t('banner.degraded')
+    }
     await doSearchAll(term, seq)
     if (seq !== requestSeq) return
     loading.value = false
@@ -237,6 +254,9 @@ async function doSearch(q?: string) {
     items.value = res.items ?? []
     page.value = 1
     hasMore.value = !!res.hasMore
+    // v1：核心的 warning 要显示（main.py:1453-1455 拿它当空态文案）
+    banner.value = res.warning
+      || (MOCK_MODE ? t('banner.mock') : DEGRADED ? t('banner.degraded') : '')
   } catch (e: any) {
     if (seq !== requestSeq) return
     error.value = e?.message ?? String(e)
@@ -273,6 +293,7 @@ async function retryGroup(slug: string) {
 function clearSearch() {
   searched.value = false
   items.value = []
+  banner.value = ''
   groups.value = []
   active.value = ''
   error.value = ''
@@ -304,6 +325,14 @@ onMounted(async () => {
     <h1 class="page-title">{{ t('search.title') }}</h1>
     <SourceSwitch :model-value="store.currentSlug" :sources="store.orderedSources" :loading="store.sourcesLoading" @update:model-value="store.setSource($event)" />
   </div>
+
+  <!-- 与 DiscoverView/LibraryView 同一条全局 .banner（base.css:148），
+       示例数据与降级都必须标出来，见上面 banner 的注释 -->
+  <div
+    v-if="banner"
+    class="banner"
+    data-testid="search-banner"
+  >{{ banner }}</div>
 
   <div class="search-bar">
     <div ref="suggestWrap" class="input-wrap suggest-wrap">

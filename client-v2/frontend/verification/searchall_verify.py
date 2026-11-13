@@ -148,6 +148,13 @@ def main():
                   page.locator(".sa-group").count() == 0 and n_poster > 0,
                   f"cards={n_poster}")
 
+            # A1b 第五十九轮补：mock 面必须标"示例数据"（子代理 A 报出搜索页缺标注）
+            # 单源与「全部来源」两条分支都要有；这里先钉单源那条。
+            bnr = page.locator("[data-testid=search-banner]")
+            btxt = bnr.first.inner_text().strip() if bnr.count() else ""
+            check("A1b mock 面搜索页挂出「示例数据」横幅（此前搜索页是唯一没标的页面）",
+                  bnr.count() >= 1 and "示例数据" in btxt, f"banner={btxt!r}")
+
             # A2/A6 勾选扇出 + 流式组头先渲染
             page.click("[data-testid=search-all]")
             do_search(page)
@@ -162,6 +169,12 @@ def main():
             slugs = group_slugs(page)
             check("A2 勾选扇出=4 组且排除未接入源 tianyuan",
                   slugs == EXPECTED_GROUPS, ",".join(slugs))
+            # A2b 「全部来源」是 v2 新增面（v1 永远单源），但它同样在 mock 上出结果，
+            # 标注不能因为"v1 没这功能"就省掉。
+            bnr2 = page.locator("[data-testid=search-banner]")
+            btxt2 = bnr2.first.inner_text().strip() if bnr2.count() else ""
+            check("A2b 扇出分支也挂「示例数据」横幅（v2 新增面不能免标）",
+                  bnr2.count() >= 1 and "示例数据" in btxt2, f"banner={btxt2!r}")
             check("A6 流式：组头/骨架先渲染不等齐（早期即有骨架）", bool(early))
 
             # A3 组头名 + 18+ 徽章
