@@ -1004,14 +1004,21 @@ const mockApi: NativeApi = {
       throw new ApiError('mock captcha image fetch failed', 'captcha_fail')
     }
     soraniMock.seq += 1
+    // ⚠ 第五十六轮我写下"真正还没覆盖的只剩 :188 的变尺寸换算"，
+    // 因为这里把 600/360/110/360 写死了 —— v1 `test_display_geometry`
+    // 测的正是"显示空间与原图空间是两套数"。现在给一个尺寸注入缝（默认不变）：
+    //   __zgj.mockCaptchaSize = [背景宽, 背景高, 模板宽, 模板高]
+    const cs = (w?.__zgj?.mockCaptchaSize || (w as any)?.mockCaptchaSize) as
+      | [number, number, number, number] | undefined
+    const [bgW, bgH, tplW, tplH] = cs && cs.length === 4 ? cs : [600, 360, 110, 360]
     return {
       id: `mock-captcha-${soraniMock.seq}`,
       backgroundImage: MOCK_SORANI_BG,
       templateImage: MOCK_SORANI_TPL,
-      backgroundWidth: 600,
-      backgroundHeight: 360,
-      templateWidth: 110,
-      templateHeight: 360
+      backgroundWidth: bgW,
+      backgroundHeight: bgH,
+      templateWidth: tplW,
+      templateHeight: tplH
     }
   },
   soraniLogin: async (identifier, password, captchaId, track) => {

@@ -395,6 +395,116 @@ async def main():
                   False, "拖了 600 步却没进账密页")
 
 
+        # ============ M19–M21 变尺寸换算（v1 :188 test_display_geometry） ============
+        # v1 那条测的是"显示空间 300×180 / 模板 55 / limit=245"这组**换算**，
+        # 而 v2 的 mock 把 600/360/110 写死了，所以只测过一种尺寸。
+        # 现在换个尺寸进来，测同一套换算还成不成立：
+        #   背景 400×200、模板 50×200 →
+        #     显示宽 = min(300, 400) = 300
+        #     显示高 = round(200 * 300 / 400) = 150
+        #     模板显示宽 = round(50 * 300 / 400) = 38
+        #     limit(显示) = 300 - 38 = 262
+        #     原图空间 x 上限 = 400 - 50 = 350
+        mg = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await mg.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        await mg.add_init_script("window.__zgj = { mockCaptchaSize: [400, 200, 50, 200] }")
+        pg = await mg.new_page()
+        await pg.goto(f"{BASE}/#/settings")
+        await pg.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pg.click("[data-testid='sorani-login-btn']")
+        await pg.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        await pg.click("[data-testid='sorani-start-btn']")
+        # ⚠ 必须等**背景图**，不能等 `sorani-slider`：那个容器在
+        #   "验证码加载中"分支里也存在（SliderCaptcha.vue:142 的 v-if 是套在 .sc 内部的），
+        #   所以我第一版读到的 tplW/bgW/bgH 全是 None —— 不是产品没换算，
+        #   是断言跑在加载态上。等真正渲染出图的那个 testid 才对。
+        await pg.wait_for_selector("[data-testid='sorani-bg-img']", timeout=10000)
+        geo = await pg.evaluate("""() => {
+          const s = document.querySelector('[data-testid=sorani-slider]');
+          const t = document.querySelector('[data-testid=sorani-tpl-img]');
+          const b = document.querySelector('[data-testid=sorani-bg-img]');
+          const num = (el) => (el ? Math.round(parseFloat(getComputedStyle(el).width)) : null);
+          const box = (el) => (el ? { w: Math.round(el.getBoundingClientRect().width),
+                                      h: Math.round(el.getBoundingClientRect().height) } : null);
+          const st = document.querySelector('.sc-stage');
+          return { sliderW: num(s),
+                   stageW: st ? Math.round(parseFloat(st.style.width)) : null,
+                   stageH: st ? Math.round(parseFloat(st.style.height)) : null,
+                   tpl: box(t), bg: box(b) };
+        }""")
+        check("M19 变尺寸下显示空间仍夹到 300 宽（v1 :188 的 dispW 换算）",
+              geo.get("sliderW") == 300 and geo.get("stageW") == 300
+              and (geo.get("bg") or {}).get("w") == 300,
+              str(geo))
+        check("M20 显示高与模板显示宽按同一比例换算（400×200→300×150、模板 50→38）",
+              geo.get("stageH") == 150 and (geo.get("tpl") or {}).get("w") == 38,
+              str(geo))
+        # 拖到最右：原图 x 上限该是 400-50=350，而不是默认的 490
+        await pg.evaluate("() => { window.__zgjSoraniLastLogin = null }")
+        # ⚠ 拖 600px 在这一组尺寸下会**越过轨道本身**
+        #   （显示空间 300、limitDisp = 300-38 = 262），指针跑到容器外事件就断了，
+        #   于是 creds 永远不出现 —— 我第一版把它当成"钳位没生效"，其实是拖出轨道。
+        #   改成拖 250px：仍在轨道内，但对原图空间来说已经越过 350 的上限，
+        #   正好检验的是"钳的是这一组的 350，不是默认的 490"。
+        await real_drag(pg, "[data-testid='sorani-handle']", 250, steps=24)
+        await pg.wait_for_selector("[data-testid='sorani-page-creds']:visible", timeout=8000)
+        await pg.fill("[data-testid='sorani-identifier']", "geo")
+        await pg.fill("[data-testid='sorani-password']", "pw")
+        await pg.click("[data-testid='sorani-submit-btn']")
+        await pg.wait_for_function("() => window.__zgjSoraniLastLogin", timeout=8000)
+        t21 = await pg.evaluate("() => window.__zgjSoraniLastLogin")
+        tr21 = (t21 or {}).get("track") or {}
+        xs21 = [q["x"] for q in (tr21.get("trackList") or [])]
+        # ⚠ 这条断言我第一版写成 `300 < max x <= 350`，**太松**：
+        #   把 scale 写死成 2（= 默认 600/300 的比例，也就是换算坏了）时，
+        #   x 会被钳到 350，而 350 照样落在我给的区间里 → 25/25 全绿。
+        #   反向验证（临时把 scale 写死）才把这条"近恒真"的断言抓出来 ——
+        #   判据不能把"撞上限"和"按正确比例算出来"混为一案，那正好是坏实现的表现。
+        #   现在判的是**期望的按比例值**（250 显示 px × 400/300 ≈ 333，容差 ±6），
+        #   并且明确要求 max x **没有**撞上 350 上限。
+        exp_x = round(250 * 400 / 300)  # 333
+        check("M21 x 按这一组的比例算出 ~333（而不是被钳到上限 350；换尺寸不换钳位规则）",
+              tr21.get("bgImageWidth") == 400 and tr21.get("templateImageWidth") == 50
+              and bool(xs21) and abs(max(xs21) - exp_x) <= 6 and max(xs21) < 350,
+              f"bg={tr21.get('bgImageWidth')} tpl={tr21.get('templateImageWidth')} "
+              f"max x={max(xs21) if xs21 else None} 期望≈{exp_x}")
+        # 上限本身也单独钉一次：拖到轨道尽头（limitDisp = 300-38 = 262 显示 px）时，
+        # 原图 x 该被钳在 350 以内，且不越界不为负。
+        # ⚠ 上一版这里点 `sorani-reverify-btn` 想"再来一次"，
+        #   但 M21 那一次提交成功后**对话框已经关了**（mock 返回成功 → emit close），
+        #   按钮早就不在页面上 → 等元素超时。
+        #   另外也别学第一版拖 600px：那会拖出轨道、solve 不成立。
+        #   改成独立开一个上下文，拖 265px（刚好越过 262 的上限）。
+        mg2 = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await mg2.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        await mg2.add_init_script("window.__zgj = { mockCaptchaSize: [400, 200, 50, 200] }")
+        pg2 = await mg2.new_page()
+        await pg2.goto(f"{BASE}/#/settings")
+        await pg2.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pg2.click("[data-testid='sorani-login-btn']")
+        await pg2.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        await pg2.click("[data-testid='sorani-start-btn']")
+        await pg2.wait_for_selector("[data-testid='sorani-bg-img']", timeout=10000)
+        await real_drag(pg2, "[data-testid='sorani-handle']", 265, steps=26, dy_jitter=0)
+        try:
+            await pg2.wait_for_selector("[data-testid='sorani-page-creds']:visible", timeout=8000)
+            await pg2.fill("[data-testid='sorani-identifier']", "clamp")
+            await pg2.fill("[data-testid='sorani-password']", "pw")
+            await pg2.click("[data-testid='sorani-submit-btn']")
+            await pg2.wait_for_function("() => window.__zgjSoraniLastLogin", timeout=8000)
+            t21b = await pg2.evaluate("() => window.__zgjSoraniLastLogin")
+            xs21b = [q["x"] for q in ((t21b or {}).get("track") or {}).get("trackList") or []]
+            # 262 显示 px × 400/300 = 349（上限 350 之内、且确实撞到了钳位边界）
+            check("M21b 拖过轨道上限时 x 撞在钳位边界（≈349 ≤ 350），不为负也不越界",
+                  bool(xs21b) and min(xs21b) >= 0 and max(xs21b) <= 350 and max(xs21b) >= 340,
+                  f"min={min(xs21b) if xs21b else None} max={max(xs21b) if xs21b else None}")
+        except Exception as exc:
+            check("M21b 拖过轨道上限时 x 撞在钳位边界（≈349 ≤ 350），不为负也不越界",
+                  False, repr(exc)[:120])
+        await mg2.close()
+
+        await mg.close()
+
         # ============ M14–M18：v1 另外五条错误路径（:311/:321/:328/:404/:411） ============
         # v1 的写法是直接把 Qt 的 stack 跳到某页 / 换一个残缺的 core 对象。
         # v2 里没有"强行跳页"的入口，我**不硬造那个状态**（造出来测的是我自己），
