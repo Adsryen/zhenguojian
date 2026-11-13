@@ -141,9 +141,14 @@ jobs:
             # 而 `go test -v` 的输出是按用例顺序铺开的，
             # 靠后的失败用例（本轮就是 TestAppObserveDrama）整条被截掉，
             # 只剩一行 `--- FAIL:` —— 等于装了门却看不见门为什么响。
-            Write-Host "----- 每条 FAIL 的断言原文（含后 8 行）-----"
-            Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' -Context 0,8 |
-              ForEach-Object { $_.Line; $_.Context.PostContext }
+            # 上一版我取的是 FAIL 行**之后** 8 行 —— 方向错了：
+            # `go test -v` 里断言原文（`xxx_test.go:NN: ...`）打在 `=== RUN` 与 `--- FAIL` **之间**，
+            # FAIL 行后面跟的是下一个用例。所以那一次打印等于什么都没打，
+            # 我因此白跑了一轮 CI 才看见自己的诊断是瞎的。
+            # 根包输出量很小（这次 36 条结果行），失败时整份倒出来最可靠，
+            # 不再靠猜窗口大小。
+            Write-Host "----- root-v.txt 全文 -----"
+            Get-Content "$env:RUNNER_TEMP/root-v.txt"
             throw "根包测试没全绿或没全执行（执行数≠声明数就是有用例没被跑到）"
           }
 
