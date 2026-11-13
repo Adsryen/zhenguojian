@@ -34,32 +34,64 @@ jobs:
           #   browser.go:9:10: undefined: Frontend
           #   single_instance.go:40:4: undefined: secondInstanceBuffer
           # Wails v2 的 linux 桌面后端要 CGO + GTK/webkit2，而这里 CGO_ENABLED=0。
-          # 根包（main + app.go）的编译由 windows job 的 vet+build 覆盖，那边才是目标平台。
+          # 根包（main + app.go）由 windows job **真跑测试**（第五十轮起，那边才是目标平台）；
+          # 之前它只有 vet+build，vet 会编译测试文件但一条用例都不执行。
           # 另外：早先 `go test ./...` 在 ubuntu 上也因为 go:embed all:frontend/dist
           # 需要非空目录而 setup failed —— 那条现在不适用，因为不再构建根包。
-          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s ./internal/...
-          # 上一版这里用手写 `-run 'TestA|TestB|…'` 过滤器来"逐条留名"，
-          # 结果它**静默漏掉了 2 个用例**（TestRunAllOK、TestRunFailureSetsExitOneAndKeepsDetail
-          # 不在任何一条 alternative 里）：CI 打印 15 条 PASS 看着很齐，实际声明的是 17 个。
-          # 手写过滤器就是这种"看起来在管覆盖，其实在管名字"的东西。
-          # 换成硬门禁：**执行到的顶层用例数必须等于源码里声明的 `func Test*` 数**，
-          # 不符就红——新增用例不需要再改过滤器，漏跑反而会立刻暴露。
-          set +e
-          go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" -count=1 -v ./internal/selftest/ > "$RUNNER_TEMP/st-v.txt" 2>&1
-          rc=$?
-          set -e
-          ran=$(grep -cE '^--- (PASS|FAIL|SKIP): Test' "$RUNNER_TEMP/st-v.txt")
-          declared=$(grep -hoE '^func Test[A-Za-z0-9_]+' internal/selftest/*_test.go | sort -u | wc -l)
-          echo "selftest 用例：执行 $ran / 声明 $declared"
-          grep -E '^--- (PASS|FAIL|SKIP): Test' "$RUNNER_TEMP/st-v.txt" | sed 's/ (.*)//'
-          if [ "$ran" -ne "$declared" ]; then
-            echo "::error title=selftest 覆盖对不上::执行 $ran ≠ 声明 $declared，有测试没被跑到（或包被跳过）"
-            tail -n 30 "$RUNNER_TEMP/st-v.txt"
+          #
+          # 【第五十一轮改造】原来这里是**不带 -v 的一句** `go test ./internal/...`，
+          # 日志只有 9 行 `ok`：这 9 个包里声明了 228 条顶层用例，
+          # 而日志里一条名字都看不见，也没人核对"执行到的"是否等于"声明的"。
+          # 只有 selftest 那一个包带了计入门（因为它出过事：
+          # 手写 `-run 'TestA|TestB'` 过滤器静默漏掉 2 个用例，CI 打 15 条 PASS 看着很齐）。
+          # 上一轮我给根包装计入门时当场逼出一个真产品错
+          # （`ObserveDrama` 的 changed 其实是在赌时钟分辨率），
+          # 这证明"包级 ok"在本仓确实会掩盖问题：
+          # **ok 只说明执行到的都过了，不说明该执行的都执行了。**
+          # 现在逐包跑：唯一执行数必须等于该包声明的顶层 `func Test*` 数，
+          # 不符就点名差在哪个用例（做集合差，不再只报一个数字让人自己数）。
+          # `t.Skip` 计入"执行到"（`--- SKIP` 也是结果行），本轮 grep 过：
+          # 无 TestMain、无按 build tag 屏蔽的测试文件，所以这条判据现在是干净的。
+          set -u
+          total_ran=0
+          total_declared=0
+          gate_fail=0
+          for pkg in $(go list ./internal/...); do
+            dir="${pkg#zhenguojian/client-v2/}"
+            declared=$(grep -hoE '^func Test[A-Za-z0-9_]+' "$dir"/*_test.go 2>/dev/null | sort -u | wc -l)
+            go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" \
+              -count=1 -timeout 300s -v "$pkg" > "$RUNNER_TEMP/pkg-v.txt" 2>&1
+            rc=$?
+            executed=$(grep -oE '^--- (PASS|FAIL|SKIP): Test[A-Za-z0-9_]+' "$RUNNER_TEMP/pkg-v.txt" | sed 's/^--- [A-Z]*: //' | sort -u)
+            # 两侧都按**唯一名**计数。上一版右边用 `grep -c`（总行数）、左边用 `sort -u | wc -l`
+            # （唯一数），判据不对称：只要谁把这里改成 `-count=2`（根包门就是这个形状），
+            # 结果行会翻倍，这道门立刻假红 —— 那属于"改了设计没同步改判据"，我自己前天刚犯过。
+            ran=$(printf '%s\n' "$executed" | grep -c 'Test' || true)
+            wanted=$(grep -hoE '^func Test[A-Za-z0-9_]+' "$dir"/*_test.go 2>/dev/null | sed 's/^func //' | sort -u)
+            total_ran=$((total_ran + ran))
+            total_declared=$((total_declared + declared))
+            printf '%-30s 执行 %3s / 声明 %3s  exit %s\n' "$dir" "$ran" "$declared" "$rc"
+            if [ "$rc" -ne 0 ]; then
+              echo "::error title=$pkg 有失败用例::exit $rc"
+              grep -E '^--- FAIL: Test' -A 6 "$RUNNER_TEMP/pkg-v.txt" | head -40
+              gate_fail=1
+            fi
+            if [ "$ran" -ne "$declared" ]; then
+              echo "::error title=$pkg 覆盖对不上::执行 $ran ≠ 声明 $declared，有用例没被跑到"
+              comm -23 <(printf '%s\n' "$wanted") <(printf '%s\n' "$executed") | sed 's/^/    没被执行: /'
+              comm -13 <(printf '%s\n' "$wanted") <(printf '%s\n' "$executed") | sed 's/^/    跑了但源码里找不到: /'
+              gate_fail=1
+            fi
+            # 用例名默认只打失败与跳过；带 VERBOSE_TESTS=1 的 dispatch 打全名单。
+            if [ "${VERBOSE_TESTS:-0}" = "1" ]; then
+              grep -E '^--- (PASS|FAIL|SKIP): Test' "$RUNNER_TEMP/pkg-v.txt" | sed 's/ (.*)//; s/^/    /'
+            else
+              grep -E '^--- (FAIL|SKIP): Test' "$RUNNER_TEMP/pkg-v.txt" | sed 's/ (.*)//; s/^/    /'
+            fi
+          done
+          echo "internal 合计：执行 $total_ran / 声明 $total_declared"
+          if [ "$gate_fail" -ne 0 ]; then
             exit 1
-          fi
-          if [ "$rc" -ne 0 ]; then
-            tail -n 40 "$RUNNER_TEMP/st-v.txt"
-            exit "$rc"
           fi
 
   windows:
