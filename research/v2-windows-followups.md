@@ -245,3 +245,33 @@ player/selftest/tray/updater/watchstore）。**但它们全都没有碰过真实
   （`--selftest` 那一步在真机上是第一次）；
 - 弹幕保存/挂载涉及真实文件读写，只有真机能证明文件名口径和 v1 一致。
 所以第 8–12 节哪怕本机全绿，也要按"没验过"对待。
+
+
+---
+
+## 已发布 `v2.0.0-alpha.26`（第五十九轮，供 Windows 真机测试）
+
+- 发布页：https://github.com/Adsryen/zhenguojian/releases/tag/v2.0.0-alpha.26
+- 构建提交：`d557157`（代码）／tag 打在 `af004a4`；CI run `43396255620` 两 job ✓
+- 资产：`zhenGuoJian-v2.exe` 20.9MB、`zhenGuoJian-v2-app.zip` 8.4MB（内含 真果鉴.exe）、
+  `zhenGuoJian-v2-runtime.zip` 138.5MB（mpv/ffmpeg，首次装一次）、`build-info.json`
+- 发布前门禁实测：`run_all` 30/30、失败 0、端口泄漏 0；typecheck 0；build ✓；
+  CI 的 `go vet` + internal 全量 Go 单测 ✓
+- ⚠ 这个 alpha 的**目的就是真机验证**：真核心 / 真 mpv / WebView2 的行为
+  在此之前从未在真机执行过。下列每一项都还是"待执行"，不是"已验证"。
+
+### 请优先跑（按能定多少东西排序）
+
+1. **`zhenGuoJian-v2.exe --selftest`** —— 把输出整段贴回来。
+   其中 1 步是有意标注的未对齐项（`decrypt`：v2 无独立解密子系统），那不是失败。
+2. **下载一集并勾选「保存弹幕」** —— 本轮修了 `danmakuAll` 契约
+   （核心要求 `durationMs>0`，v2 以前不发；`app_danmaku_all.go:180-181`）。
+   真机上要确认的是：`.ass` 是否旁挂到成品旁、条数是否与实际一致、
+   以及 `total` 的口径。修之前是"必然失败"，修之后**未经真机确认**。
+3. **播放本地成品文件**（下载页 → 本地成品 → 播放）：旁挂 `.ass` 是否挂载、
+   退出后会话是否归还（`release`/`cancelRead` 在 v2 仍**零调用**，见 R26）。
+4. **多季剧按季合并 + SxxExx 命名**（第 47/48 轮补的，只在 CI 上验过纯函数与单测）。
+5. 设置页「打包提交」应显示哈希（需把 `build-info.json` 放 exe 同级）。
+6. 排错用：**Ctrl+Shift+F12** 开 Chromium DevTools（单按 F12 无效）。
+
+跑完把 1、2 的输出贴回来，我按结果决定 R26（要不要补 `release`）和余下的队列。
