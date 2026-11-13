@@ -488,7 +488,7 @@ func TestSeasonSpecsAreTwoDifferentSpecs(t *testing.T) {
 		t.Errorf("窄规格不该认「第2部」，实得 %d", got)
 	}
 	if got := seasonOfTitle("某剧 第２季"); got != 1 {
-		t	t.Errorf("窄规格不该认全角数字，实得 %d", got)
+		t.Errorf("窄规格不该认全角数字，实得 %d", got)
 	}
 	// watchstore.py:31 的宽规格：认「第N部」与全角。
 	if got := watchstore.SeasonNumber("某剧 第2部"); got != 2 {
