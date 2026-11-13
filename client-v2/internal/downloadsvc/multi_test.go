@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"zhenguojian/client-v2/internal/watchstore"
 )
 
 func multiJob(id, dramaID, dramaTitle string, index int, state string) map[string]any {
@@ -454,6 +456,15 @@ func TestArchiveDramaKey(t *testing.T) {
 		{"无名", "无名"},
 		{"   ", "合集"},                // 剥空给「合集」（v1 最后一道 or）
 		{"S01E01", "合集"},
+		{"第3季", "合集"},
+		// ⚠ 上一版我把 archiveDramaKey 写成"绕过 strip_season 的空返回"
+		// （`if stripped != "" && stripped != "合集" { … }`），
+		// 那条 `or stem` 在 v1 是**死分支**（strip_season 空时已返回「合集」），
+		// 绕过它就把死分支变活了：`第3季` 会被归成 `第3季` 而不是「合集」。
+		{"测试剧 S02", "测试剧"},
+		// v1 strip_season 的第二刀（`[Ss]\d+$`）。
+		// archive_scan 就地写过一份窄实现，漏的正是这一刀——
+		// `测试剧 S02.mkv` 在 v1 归「测试剧」，那版会留着 ` S02` 自成一派。
 		// ⚠ 这一条我原本期望写成 "S01E01"，理由是 v1 那句
 		// `strip_season(stem.strip()) or stem.strip() or "合集"` 里"退回原 stem"。
 		// 但 v1 的 `strip_season` 自己在空时就已经返回「合集」
@@ -464,6 +475,50 @@ func TestArchiveDramaKey(t *testing.T) {
 	for _, c := range cases {
 		if got := archiveDramaKey(c.stem); got != c.want {
 			t.Errorf("archiveDramaKey(%q) = %q，期望 %q", c.stem, got, c.want)
+		}
+	}
+}
+
+// TestSeasonSpecsAreTwoDifferentSpecs 钉住一件容易做错的事：
+// 本包的季号解析与 `internal/watchstore` 的那份**不是重复实现，是 v1 的两份不同规格**。
+// 谁哪天"顺手重构合成一个函数"，下面这几条会立刻红。
+func TestSeasonSpecsAreTwoDifferentSpecs(t *testing.T) {
+	// downloads.py:250 的窄规格：只认「第N季」。
+	if got := seasonOfTitle("某剧 第2部"); got != 1 {
+		t.Errorf("窄规格不该认「第2部」，实得 %d", got)
+	}
+	if got := seasonOfTitle("某剧 第２季"); got != 1 {
+		t	t.Errorf("窄规格不该认全角数字，实得 %d", got)
+	}
+	// watchstore.py:31 的宽规格：认「第N部」与全角。
+	if got := watchstore.SeasonNumber("某剧 第2部"); got != 2 {
+		t.Errorf("宽规格该认「第2部」，实得 %d", got)
+	}
+	if got := watchstore.SeasonNumber("某剧 第２季"); got != 2 {
+		t.Errorf("宽规格该认全角数字，实得 %d", got)
+	}
+	// 两者对普通「第N季」结论一致（不一致才叫真漂了）
+	for _, title := range []string{"某剧 第三季", "某剧 第12季", "某剧 S03"} {
+		if a, b := seasonOfTitle(title), watchstore.SeasonNumber(title); a != b {
+			t.Errorf("%q 两份实现给出不同结果：窄 %d / 宽 %d", title, a, b)
+		}
+	}
+}
+
+// TestStripSeasonTitleMatchesV1 是本包 strip 那一步的规格表。
+func TestStripSeasonTitleMatchesV1(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"测试剧 第二季", "测试剧"},
+		{"第二季 测试剧", "测试剧"},  // 不锚位置（v1 用 sub）
+		{"测试剧 - 第3季 ", "测试剧"}, // 两端连字符一起吃
+		{"测试剧 S02", "测试剧"},     // 第二刀：结尾 Sxx
+		{"测试剧 S02E01", "测试剧 S02E01"}, // 第二刀只切结尾 `S\d+`，E 尾巴不归它管
+		{"第3季", "合集"},
+		{"   ", "合集"},
+	}
+	for _, c := range cases {
+		if got := stripSeasonTitle(c.in); got != c.want {
+			t.Errorf("stripSeasonTitle(%q) = %q，期望 %q", c.in, got, c.want)
 		}
 	}
 }

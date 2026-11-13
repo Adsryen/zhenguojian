@@ -52,19 +52,14 @@ func archiveDramaKey(stem string) string {
 	stem = archiveSeRe.ReplaceAllString(stem, "")
 	stem = archiveTrailNum.ReplaceAllString(stem, "")
 	stem = strings.TrimSpace(stem)
-	// v1 的 `strip_season` 那一步（downloads.py:283-288）在 watchstore 包里也有近似实现
-	// （SeasonNumber 用同一套"第N季"识别），但**没有导出的去后缀函数**。
-	// 这里就地写一份而不是给 watchstore 新开一个导出：
-	// 跨包加导出会让"扫描归组"依赖"追剧季号"两个子系统耦合，
-	// 而这两处的需求其实不同（一个要序号、一个要去后缀）。
-	// ⚠ 这条确实是同一规格的第二次实现——它值一次独立的小重构（收进一个 series 包），
-	// 但不该夹带在这笔修 bug 里做；已在 notes 里挂号。
-	if stripped := stripSeasonSuffixLocal(stem); stripped != "" {
-		return stripped
-	}
-	if stem != "" {
-		return stem
-	}
+	// v1 的 `_archive_drama_key` 最后一步是 `strip_season(stem) or stem or "合集"`。
+	// ⚠ 中间那道 `or stem` 在 v1 里是**永远走不到的死分支**
+	// （downloads.py:283-288 的 strip_season 自己在剥空时已经返回「合集」）。
+	// 第四十八轮我第一版这里写成 `if stripped != "" && stripped != "合集"` 去"绕过"它，
+	// 结果把死分支变成活的：`第3季.mkv` 这种只有季号的标题，
+	// v1 归「合集」，我那版会归成 `第3季`。现在照 v1 的实际行为写，
+	// 并在 multi_test 里用 `第3季` 这条用例把差异钉住。
+	return stripSeasonTitle(stem)
 	return "合集"
 }
 
@@ -322,12 +317,3 @@ func archiveMediaExt(ext string) bool {
 	return ext == ".mp4" || ext == ".mkv"
 }
 
-// stripSeasonSuffixLocal 去掉结尾的「第N季」标记（v1 strip_season 的去后缀那一步）。
-// 不锚 `$`：v1 是 `_SEASON_RE.sub("", title)`（出现在任何位置都剥），
-// 我第一版写成只剥结尾，遇到「第二季 测试剧」这种就漏。照 v1 放宽。
-var seasonReLocal = regexp.MustCompile(`第[0-9一二两三四五六七八九十]+季`)
-
-func stripSeasonSuffixLocal(title string) string {
-	clean := strings.Trim(seasonReLocal.ReplaceAllString(strings.TrimSpace(title), ""), " 　-·~～")
-	return clean
-}
