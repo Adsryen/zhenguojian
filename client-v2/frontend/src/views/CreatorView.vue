@@ -387,7 +387,7 @@ watch(() => route.query.u, () => void boot())
   margin: 0;
 }
 .btn {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
   border-radius: 8px;
@@ -408,9 +408,9 @@ watch(() => route.query.u, () => void boot())
   cursor: default;
 }
 .card {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: 12px;
-  background: var(--surface-1);
+  background: var(--surface);
   padding: 14px;
   margin-bottom: 14px;
 }
@@ -507,7 +507,7 @@ watch(() => route.query.u, () => void boot())
   gap: 6px;
 }
 .tool select {
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   border-radius: 6px;
   background: var(--surface-2);
   color: var(--text);
@@ -540,7 +540,7 @@ watch(() => route.query.u, () => void boot())
   bottom: 26px;
   transform: translateX(-50%);
   background: var(--surface-3);
-  border: 1px solid var(--line);
+  border: 1px solid var(--border);
   color: var(--text);
   border-radius: 10px;
   padding: 8px 14px;

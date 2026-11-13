@@ -228,6 +228,48 @@ def main():
             check("C8a 空分类文案出现", no_works)
             check("C8b 未发起 works 请求", works_calls(page) == c_before, f"calls={works_calls(page)}")
 
+            # ---------- T 组：设计 token 真的生效（第五十九轮修的静默失效） ----------
+            # CreatorView 曾引用 `var(--line)` / `var(--surface-1)`，而这两个名字
+            # 在 tokens.css 里没有定义、也没写回退值。CSS 变量找不到定义时
+            # **整条声明被丢弃**（不报错也不警告）：按钮一直没描边、卡片没有底色。
+            # 静态审计改完必须在这里量一次**计算值** ——
+            # "token 名字存在"不等于"声明生效"，只有计算值能证明生效。
+            tok = page.evaluate("""() => {
+              const pick = (sel) => {
+                const el = document.querySelector(sel);
+                if (!el) return null;
+                const cs = getComputedStyle(el);
+                return { w: cs.borderTopWidth, c: cs.borderTopColor, bg: cs.backgroundColor };
+              };
+              // ⚠ 第一版取的是 `.btn`，而创作者页第一个 .btn 是返回键
+              //   （CreatorView.vue:283 是 `class="btn ghost"`，它按设计就该 transparent 描边），
+              //   于是 T1 红成"修了也没生效"——那是探针挑错元素，不是产品问题。
+              //   这里显式排掉 ghost，并如实说明为什么第一个不算。
+              const plain = [...document.querySelectorAll('.btn')].find(
+                (el) => !el.classList.contains('ghost'));
+              const cs2 = plain ? getComputedStyle(plain) : null;
+              return {
+                btn: cs2 ? { w: cs2.borderTopWidth, c: cs2.borderTopColor, bg: cs2.backgroundColor } : null,
+                card: pick('.card'),
+              };
+            }""")
+            btn = (tok or {}).get("btn") or {}
+            tok_note = "取的是第一个非 ghost 的 .btn（页首 .btn 是返回键，按设计无描边）"
+            card = (tok or {}).get("card") or {}
+
+            def px(v):
+                try:
+                    return float(str(v).replace("px", "").strip())
+                except Exception:
+                    return 0.0
+
+            check("T1 按钮有真实描边（用未定义的 --line 时这条声明被浏览器丢掉）",
+                  px(btn.get("w")) >= 1 and "rgba(0, 0, 0, 0)" not in str(btn.get("c")),
+                  f"{btn} · {tok_note}")
+            check("T2 卡片既有描边也有底色（用未定义的 --surface-1 时底色是透明的）",
+                  px(card.get("w")) >= 1 and "rgba(0, 0, 0, 0)" not in str(card.get("bg")),
+                  str(card))
+
             # ---------- C9 无未捕获 JS 错误 ----------
             check("C9 无 pageerror", len(pageerrors) == 0, f"errors={pageerrors[:2]}")
         finally:
