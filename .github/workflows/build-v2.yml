@@ -128,8 +128,13 @@ jobs:
           Write-Host "根包用例：执行 $ran / 声明 $declared（exit $rootRc）"
           Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' | ForEach-Object { Write-Host $_.Line }
           if ($rootRc -ne 0 -or $ran -ne $declared) {
-            Write-Host "----- 失败详情（前 60 行）-----"
-            Get-Content "$env:RUNNER_TEMP/root-v.txt" | Select-Object -First 60
+            # 诊断要能指向失败原因本身。上一版这里打印"前 60 行"，
+            # 而 `go test -v` 的输出是按用例顺序铺开的，
+            # 靠后的失败用例（本轮就是 TestAppObserveDrama）整条被截掉，
+            # 只剩一行 `--- FAIL:` —— 等于装了门却看不见门为什么响。
+            Write-Host "----- 每条 FAIL 的断言原文（含后 8 行）-----"
+            Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' -Context 0,8 |
+              ForEach-Object { $_.Line; $_.Context.PostContext }
             throw "根包测试没全绿或没全执行（执行数≠声明数就是有用例没被跑到）"
           }
 
