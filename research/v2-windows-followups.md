@@ -187,6 +187,55 @@ client-v2.exe --selftest
       真机上要看到的是字幕实际变淡/变浓，而不是只改了设置值）。
 - [ ] 刷新页面后滑条与弹幕实际观感要一致（`zgj.player.danmakuOpacity` → `SetDanmakuOpacity` → 重渲染）。
 
+## 14. 核心动作覆盖对账（第 53 轮由 `core_action_audit.py` 现算，不再手写）
+
+跑法：`python3 client-v2/frontend/verification/core_action_audit.py`
+（也每次全量回归自动打一行；D 方向与"判据被 mpv 污染"硬拦）。
+本轮实测：**生产用到 26 个核心动作，假核心覆盖 11 个，剩下 15 个只有真实核心才会第一次执行**：
+
+```
+browseFiltered  browseFilters  calendar  catalog  creatorProfile  creatorWorks
+danmaku  detail  dramaCreators  initialize  listSources  preload
+setSourceEnabled  soraniAccount  suggestions
+```
+
+这 15 个里包含几个本轮才看清的东西（**别当成"已验证过逻辑所以没问题"**）：
+上新日历、同系列 browseFilters、创作者/演职员、搜索建议 preload、
+Sorani 账号、以及核心的 `initialize` —— 它们只在本机的 mock 面与 Playwright 里绿过。
+
+## 15. 一条需要你决定的真缺口：v2 从不归还核心会话（`release` / `cancelRead`）
+
+追第 53 轮对账时撞出来的。`internal/native/engine.go:64-67` 那张
+"不带 session 的豁免名单"里，`cancelRead`、`release`、`cancelPlayback`、
+`controlDownloadBatch` 四个动作**在 v2 生产代码里没有任何调用点**
+（本轮 grep 过：除了那张表本身，一处都没有）。
+
+前两个不是死条目 —— **v1 真的在用**：
+
+| 动作 | v1 调用点 | 用在什么时候 |
+|---|---|---|
+| `release` | `core_client.py:499`（包装成 `release(session)`），调用方 5 处：`main.py:2120/2379/2490`、`detail_episodes.py:586`、`library.py:483` | 播放拆除、选集池关闭、**弹幕保存 finally 里**（就是我第 41-44 轮移植的那条 sidecar 链） |
+| `cancelRead` | `core_client.py:530`（`cancel(scope, sequence)`） | 取消同一 session 的更早读 |
+
+而 v2 这边 `engine.go:148-150` 会**自动给每个非豁免动作补上 `session = owner + ":" + action`**，
+也就是说 v2 确实在核心侧注册了会话，只是从来没有一次 `release`。
+
+后果我现在**无法判定**，因为本机没有真实核心：
+- 乐观情况：session 按动作固定，核心"同 session 的更早读会被取消"
+  （`engine.go:54` 那条注释描述的正是这个语义），所以占用是有界的、会被覆盖的；
+- 悲观情况：核心为每个 session 持有 reader/文件句柄，
+  v2 长时间运行会累积，或者播放拆除后核心侧仍以为在读。
+
+所以我没有直接照 v1 补一次 `release`：在没跑过真实核心的机器上
+往拆除路径加清理调用，属于"看起来对齐、实际可能引入新 bug"的那类改动。
+**需要你一句话**（或等真机跑一轮再定）：
+1. 先按 v1 补 `native.Release(session)` 并在与 v1 相同的 5 个位置调用（错误吞掉，v1 就是 `cleanup only`）；
+2. 还是等真机观察"长时间运行/反复播放"后核心侧表现再决定。
+
+另外 `cancelPlayback` / `controlDownloadBatch` 连 v1 也只是写在豁免名单里
+（`core_client.py:240-241`），全仓没有调用点 —— **这两个是 v1 自己的死条目**，
+我照搬进表里是对的，不用补实现。
+
 ## 13. 一句提醒
 
 上面这些的**逻辑**都在 CI（ubuntu + windows）与本机 Playwright 里绿过：

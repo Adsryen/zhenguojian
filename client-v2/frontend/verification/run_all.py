@@ -264,6 +264,26 @@ def main():
         print("FAIL i18n 键对账判据失效：%s" % str(e)[:160])
         return 1
 
+    # 核心动作覆盖对账：D（假核心桩了生产不调用的动作）与"判据被 mpv 命令污染"是真错，硬拦；
+    # C（只有真实核心才会第一次执行的动作）只报数——那是真机清单的机器生成版，不是缺陷。
+    try:
+        import core_action_audit
+        _ca = core_action_audit.audit()
+        print("核心动作对账：生产 %d 个，假核心覆盖 %d，"
+              "只有真机会第一次执行 %d；路由表内抓不到 %d（变量传参，不判死）"
+              % (len(_ca["used"]), len(_ca["fake_covered"]), len(_ca["only_real_core"]),
+                 len(_ca["table_only_unseen"])))
+        if _ca["stale_fakes"]:
+            print("FAIL 假核心桩了生产代码不调用的动作（测试在桩一个不存在的需求）：%s"
+                  % ", ".join(_ca["stale_fakes"]))
+            return 1
+        if _ca["contaminated"]:
+            print("FAIL 核心动作名单被 mpv IPC 命令污染：%s" % ", ".join(_ca["contaminated"]))
+            return 1
+    except Exception as exc:  # 判据失效必须响，不能静默通过
+        print("FAIL 核心动作对账判据执行失败：%r" % (exc,))
+        return 1
+
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
     if not scripts:
