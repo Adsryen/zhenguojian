@@ -144,13 +144,15 @@ func (a *App) ObserveDrama(dramaJSON string) (string, error) {
 		return nil
 	}
 	before := rowOf(d.ID)
-	s.ObserveDrama(d)
+	// changed 用 Store 的返回值，不再拿前后整行快照自己比：
+	// 行里有 lastChecked/updateAt，每次观察都会刷新，自己比就等于"时钟有没有走"。
+	changed := s.ObserveDrama(d)
 	after := rowOf(d.ID)
 	return marshalJSON(map[string]any{
 		// v1：observe_drama 对没追的剧直接 return（连 emit 都不发）。
 		// 这里把"有没有这条追剧记录"如实报出去，前端据此不再瞎猜有没有生效。
 		"observed": before != nil && after != nil,
-		"changed":  !jsonObjectsEqual(before, after),
+		"changed":  changed,
 		"row":      after,
 	})
 }
@@ -359,20 +361,8 @@ func (a *App) ClearHistory() (string, error) {
 // Calendar（追剧日历）已迁至 bindings_calendar.go：日历属独立功能域，
 // 且原实现把 gender 以 number 传核心（string 字段）会整请求失败，见该文件头注释。
 
-// jsonObjectsEqual 只用于"观察前后行有没有变"的判断：
-// 行本身就是要序列化给前端的 map，直接比 JSON 形态最省事，
-// 也避免为了比较去手写一串字段白名单（那种清单一旦加字段就漏）。
-func jsonObjectsEqual(a, b map[string]any) bool {
-	if (a == nil) != (b == nil) {
-		return false
-	}
-	if a == nil {
-		return true
-	}
-	ja, e1 := marshalJSON(a)
-	jb, e2 := marshalJSON(b)
-	if e1 != nil || e2 != nil {
-		return false
-	}
-	return ja == jb
-}
+// （这里原本有个 jsonObjectsEqual，给 ObserveDrama 绑定比较"观察前后整行"用。
+// 第五十轮删掉：那种比较把 lastChecked/updateAt 也算成变化，
+// 语义是"时钟有没有走"而不是"数据有没有变"；现在改用 Store 的返回值，
+// 这份helper 就是死代码。删函数时顺手 grep 过：全仓 0 处其他引用。）
+

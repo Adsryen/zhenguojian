@@ -1125,7 +1125,13 @@ func TestObserveDrama(t *testing.T) {
 			s.mu.Unlock()
 			var fired int
 			s.OnChanged(func() { fired++ })
-			s.ObserveDrama(tc.drama)
+			gotChanged := s.ObserveDrama(tc.drama)
+			// 返回值与 emit 必须是同一件事的两种说法（壳层绑定就靠它决定要不要提示用户）。
+			// 上一版这里丢弃返回值，壳层只能在旁边自己比较整行快照 ——
+			// 那比较里含每次都会刷新的 lastChecked，于是"changed"几乎恒真。
+			if gotChanged != tc.wantEmit {
+				t.Fatalf("changed=%v wantEmit=%v（返回值与 emit 必须同源）", gotChanged, tc.wantEmit)
+			}
 			if err := tc.want(row); err != nil {
 				t.Fatalf("post-state: %v", err)
 			}
@@ -1138,7 +1144,9 @@ func TestObserveDrama(t *testing.T) {
 	s, _, _ := newStore(t)
 	var fired int
 	s.OnChanged(func() { fired++ })
-	s.ObserveDrama(Drama{ID: "nobody:here", Title: "T", Episodes: 5})
+	if got := s.ObserveDrama(Drama{ID: "nobody:here", Title: "T", Episodes: 5}); got {
+		t.Fatal("没追的剧不该报 changed")
+	}
 	if fired != 0 {
 		t.Fatal("observe of unfollowed drama must not emit")
 	}

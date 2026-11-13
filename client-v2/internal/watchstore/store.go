@@ -1173,13 +1173,20 @@ func (s *Store) MarkWatched(dramaID string) {
 // merges new drama data into the follow row, flips reservation arrivals, and
 // bumps known/newEpisodes/newSeason counters.  Callers must pass a complete
 // Drama (v1 passed the full API dict; see PORTING.md).
-func (s *Store) ObserveDrama(drama Drama) {
+// ObserveDrama 返回"这次观察有没有真的改动数据"。
+// ⚠ 这个返回值是第五十轮加上的：Store 内部本来就为了"要不要 touch/emit"
+// 算好了 changed，但壳层绑定没用它，而是自己拿观察前后的**整行快照**做比较 ——
+// 行里带着每次观察都会刷新的 lastChecked/updateAt，
+// 于是那个"changed"几乎恒为真，只有在两次时钟恰好落在同一个浮点刻度上时才为假。
+// （实测：go test -count=1 绿、-count=2 红，红在 idempotency 断言。）
+// 现在只留一份真相：壳层用这个返回值，不再自己推断。
+func (s *Store) ObserveDrama(drama Drama) bool {
 	var changed bool
 	s.mu.Lock()
 	follow, ok := s.follows[drama.ID].(obj)
 	if !ok {
 		s.mu.Unlock()
-		return // v1: follow is None → return, no emit
+		return false // v1: follow is None → return, no emit
 	}
 	stored := cloneObj(follow["drama"])
 	seasonTitle := drama.Title // v1: drama.get("title") or stored.get("title")
@@ -1264,6 +1271,7 @@ func (s *Store) ObserveDrama(drama Drama) {
 	if changed {
 		s.emitChanged()
 	}
+	return changed
 }
 
 // MarkNextSeason ports mark_next_season (watchstore.py:428-454): when the

@@ -225,7 +225,13 @@ func TestAppObserveDramaReportsWhetherFollowRowExists(t *testing.T) {
 		t.Errorf("newEpisodes 应为 7（10 集减去建行时已读的 3 集），得 %v", row["newEpisodes"])
 	}
 
-	// 同样的数据再观察一次：不该再有变化（后台每 30 分钟一轮，重复观察必须幂等）
+	// 同样的数据再观察一次：不该再有变化（后台每 30 分钟一轮，重复观察必须幂等）。
+	// ⚠ **这条断言就是本轮抓出产品错的那条**：上一版 `go test -count=1` 它是绿的，
+	// 因为壳层当时自己拿观察前后的整行快照比较，
+	// 而行里的 lastChecked/updateAt 每次观察都会刷新 ——
+	// 两次 `s.now()` 恰好落在同一个浮点刻度上时它才为假，等于在测时钟分辨率。
+	// 我把根包测试挂进 CI 并加 `-count=2` 之后，它两遍都红，才把这条真错挖出来：
+	// 现在 changed 用 Store 的返回值（与 emit 同源），幂等性才是真幂等。
 	out = decodeMap(t, ok(app.ObserveDrama(drama)))
 	if out["changed"] != false {
 		t.Fatalf("重复观察不该再报 changed：%+v", out)
