@@ -180,9 +180,16 @@ func TestMergeStartMultiQueuesEachSeason(t *testing.T) {
 	if len(h.svc.merges) != 2 {
 		t.Fatalf("merges 表该有两条：%d", len(h.svc.merges))
 	}
-	// Output 字段真的落到条目上（单剧那条走的是"全N集"，别互相污染）
-	if h.svc.merges[0].Output != "某剧 S01E01.mkv" {
-		t.Fatalf("条目 Output 不对：%q", h.svc.merges[0].Output)
+	// ⚠ 这条断言上一轮写的是 `Output == "某剧 S01E01.mkv"`，
+	// 那是把 bug 当规格钉：`Output` 的语义是"已落盘的绝对路径"，
+	// 排队阶段它必须是空，名字属于 `OutputName`。
+	// （同一个错在实现层的后果更糟：runMerge 从来不读 Output，
+	//  所以那个名字既不会出现在磁盘上，UI 又会在 done 之前显示一个不存在的路径。）
+	if h.svc.merges[0].Output != "" {
+		t.Fatalf("排队阶段 Output 该是空，实得 %q", h.svc.merges[0].Output)
+	}
+	if h.svc.merges[0].OutputName != "某剧 S01E01.mkv" {
+		t.Fatalf("条目 OutputName 不对：%q", h.svc.merges[0].OutputName)
 	}
 	if h.core.count("downloads") == 0 {
 		t.Fatal("没刷新核心任务表就排任务，可能拿到过期状态")
