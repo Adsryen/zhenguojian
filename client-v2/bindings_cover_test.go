@@ -49,10 +49,25 @@ func TestNormalizeForContainment(t *testing.T) {
 	if rel, err := filepath.Rel(r, a); err != nil || rel == ".." || strings.HasPrefix(rel, "..") {
 		t.Fatalf("Windows 折叠后应判定在根内，得 rel=%q err=%v", rel, err)
 	}
-	// Linux 语义：大小写不同就是不同目录，必须拒绝（折叠成小写就等于放行越界路径）。
+	// 大小写敏感的语义（Linux/macOS 那侧）：折叠关掉后，两个字符串必须真的不同。
+	// ⚠ 上一版这里写的是 `filepath.Rel(r2, a2)` 应该越界 —— 在 Windows runner 上必红，
+	// 因为 **Go 的 filepath.Rel 在 Windows 上本身就做大小写不敏感比较**，
+	// 也就是说"用 Rel 演一遍 Linux 语义"这件事在 Windows 上演不出来。
+	// 而根包在 linux 上根本编不出来（Wails 桌面后端要 CGO+GTK），
+	// 所以那条断言等于**永远没有任何平台会执行它**。
+	// 改成断言这个 helper 自己的字符串产物：这是平台无关的纯逻辑，
+	// 在 Windows 上同样能证明 foldCase=false 没有偷偷折叠大小写。
 	r2, a2 := normalizeForContainment("/data/downloads", "/data/Downloads/a.mp4", false)
-	if rel, err := filepath.Rel(r2, a2); err == nil && !strings.HasPrefix(rel, "..") {
-		t.Fatalf("Linux 不该把大小写不同的目录当成同一个，得 rel=%q", rel)
+	if r2 == a2 {
+		t.Fatalf("foldCase=false 时不该把不同大小写的路径当成同一个：%q == %q", r2, a2)
+	}
+	if !strings.Contains(a2, "Downloads") {
+		t.Fatalf("foldCase=false 却把路径折叠了：%q", a2)
+	}
+	// 同一组输入开折叠：两边必须一致（这才是 Windows 放行自家成品的依据）
+	r3, a3 := normalizeForContainment("/data/downloads", "/data/Downloads/a.mp4", true)
+	if r3 != strings.TrimSuffix(a3, "/a.mp4") && !strings.HasPrefix(a3, r3) {
+		t.Fatalf("foldCase=true 时 %q 应以 %q 为前缀", a3, r3)
 	}
 }
 
@@ -138,8 +153,18 @@ func TestLookupFFmpeg(t *testing.T) {
 		}
 		return p
 	}
+	// ⚠ 上一版这里写死 `ffmpeg`（无后缀），在 Windows runner 上必红：
+	// 产品照 v1 `tools.py:85-86`（`os.name == "nt"` 时补 `.exe`）找的是 `ffmpeg.exe`
+	// （见 lookupFFmpeg 里的 suffix，bindings_cover.go:165-176），
+	// 于是"产品按目标平台的行为是对的、测试按 POSIX 写的期望是错的"。
+	// 这类红最容易被误读成产品缺陷 —— 先核 v1 再动，别为了绿去改实现。
+	bin := "ffmpeg"
+	if runtime.GOOS == "windows" {
+		bin = "ffmpeg.exe"
+	}
+	// env 那条不要求后缀（v1 也照收用户的 ZHENGUO_FFMPEG 路径），保持无后缀写法
 	envBin := mk("envbin/ffmpeg")
-	runtimeBin := mk("appdir/runtime/ffmpeg/ffmpeg")
+	runtimeBin := mk(filepath.Join("appdir", "runtime", "ffmpeg", bin))
 	appDir := filepath.Join(dir, "appdir")
 	env := func(m map[string]string) func(string) string {
 		return func(k string) string { return m[k] }
@@ -164,7 +189,7 @@ func TestLookupFFmpeg(t *testing.T) {
 		if err := os.MkdirAll(sub, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		p := filepath.Join(sub, "ffmpeg")
+		p := filepath.Join(sub, bin)
 		if err := os.WriteFile(p, []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}

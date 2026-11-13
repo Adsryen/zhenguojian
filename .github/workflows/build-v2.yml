@@ -107,7 +107,35 @@ jobs:
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" ./...
           $LASTEXITCODE -eq 0 -or (throw "vet failed")
-          # Go 单测**不在这个 job 跑**，见上面的 test-linux job。
+
+          # ── 根包（package main）的 Go 单测：**这个 job 是唯一能跑它的地方** ──
+          # 事实来源：分支 `ci-root-tests-experiment` 的 run `43345089739`（第五十轮），
+          # 那次实测"执行 18 / 声明 18"，两条 FAIL（都是测试自己假设 POSIX，已改平台自洽）。
+          # 为什么装在这里而不是 test-linux：根包在 linux 上**编不出来**
+          # （Wails linux 桌面后端要 CGO+GTK，这里 CGO_ENABLED=0 —— workflow 里早记过），
+          # 而 windows 恰好是目标平台，这些绑定行为本来就该在 Windows 上验。
+          #
+          # ⚠ 装这个门的原因是我加 5 个绑定测试时才看见：
+          # test-linux 的命令一直是 `go test ./internal/...`，
+          # windows job 只有 vet+build —— vet 会**编译**测试文件（所以它拦到了我的语法错），
+          # 但**一条用例都不执行**。也就是说 `client-v2/*_test.go` 里那 18 个测试
+          # 从建立起就没跑过，而我此前把 CI 绿当 Go 侧证据时，这条一直没被算进去。
+          # 同族第六次："引擎在、接线缺"——这次缺的是执行而不是实现。
+          go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s -v . > "$env:RUNNER_TEMP/root-v.txt" 2>&1
+          $rootRc = $LASTEXITCODE
+          $ran = @(Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- (PASS|FAIL|SKIP): Test').Count
+          $declared = @(Select-String -Path *_test.go -Pattern '^func Test').Count
+          Write-Host "根包用例：执行 $ran / 声明 $declared（exit $rootRc）"
+          Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' | ForEach-Object { Write-Host $_.Line }
+          if ($rootRc -ne 0 -or $ran -ne $declared) {
+            Write-Host "----- 失败详情（前 60 行）-----"
+            Get-Content "$env:RUNNER_TEMP/root-v.txt" | Select-Object -First 60
+            throw "根包测试没全绿或没全执行（执行数≠声明数就是有用例没被跑到）"
+          }
+
+          # internal/* 的 Go 单测不在这个 job 跑，见上面的 test-linux job：
+          # 那边有 4 条断言假设 POSIX（权限位 0600、$HOME 数据目录、chmod 造写失败），
+          # 在 windows runner 上必红，实测记录见下面这段注释，不要"顺手"把它们挪过来。
           # 在 windows runner 上 `go test ./...` 的实跑结果（本轮 CI 日志原文，四条 FAIL）：
           #   internal/downloadsvc  TestMergesStatePersistAndRecover      快照模式应 0600（实得 -rw-rw-rw-）
           #   internal/updater      TestSettingsSaveReloadAndMode         mode=-rw-rw-rw- want 0600
