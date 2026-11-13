@@ -4,19 +4,19 @@
 
 # 会话状态（现测）
 
-生成时间：2026-11-13 05:32:25 +0000
+生成时间：2026-11-13 08:44:14 +0000
 
 | 指标 | 值 | 怎么量的 |
 |---|---|---|
-| 累计提交（相对 `a1a1c89`） | **147** | `git rev-list --count` + 首笔 |
-| HEAD | `5a9886e` | `git rev-parse --short HEAD` |
-| 工作区未提交条目 | 1 | `git status --porcelain` 行数 |
-| 前端验收脚本 | 29 只 | `verification/*_verify.py` |
-| 端口号（独占/冲突） | 33 个 / 0 处冲突 | `ports_audit.audit_dir` |
+| 累计提交（相对 `a1a1c89`） | **156** | `git rev-list --count` + 首笔 |
+| HEAD | `6350f85` | `git rev-parse --short HEAD` |
+| 工作区未提交条目 | 0 | `git status --porcelain` 行数 |
+| 前端验收脚本 | 30 只 | `verification/*_verify.py` |
+| 端口号（独占/冲突） | 34 个 / 0 处冲突 | `ports_audit.audit_dir` |
 | Go 绑定 | 87 个，前端零引用 3 个 | `evidence_audit` |
 | 绑定证据等级 | 仅桥接 57 / 桥接+Go单测 27 / 只有编译级证据 2 / 仅Go单测 1 | `evidence_audit` |
 | 核心动作 | 生产 26，假核心覆盖 11，只有真机第一次执行 15 | `core_action_audit` |
-| i18n 键 | zh 614 / en 614，字面量用到 565，动态取键 12，真死候选 17 | `i18n_key_audit` |
+| i18n 键 | zh 615 / en 615，字面量用到 565，动态取键 12，真死候选 17 | `i18n_key_audit` |
 
 ## 只有真实核心才会第一次执行的动作（真机清单的机器生成版）
 
@@ -76,5 +76,6 @@
 - `sorani_verify.py`
 - `sourceorder_verify.py`
 - `suggest_verify.py`
+- `theme_contrast_verify.py`
 - `update_verify.py`
 
