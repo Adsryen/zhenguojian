@@ -96,7 +96,7 @@ async function updSkipVersion() {
   padding: 5px 14px;
   font-size: 12.5px;
   line-height: 1.5;
-  border-bottom: 1px solid var(--line, #2b2b33);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
 .upd-banner-text {
@@ -116,7 +116,7 @@ async function updSkipVersion() {
   font-size: 12px;
   padding: 2px 10px;
   border-radius: 6px;
-  border: 1px solid var(--line, #2b2b33);
+  border: 1px solid var(--border);
   cursor: pointer;
 }
 .upd-banner-ghost {

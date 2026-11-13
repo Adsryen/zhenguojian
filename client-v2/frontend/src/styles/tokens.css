@@ -105,6 +105,7 @@
   --guo-danger: #e06c75;
   --guo-warning: #d29922;
   --guo-text: #d7dce5;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --guo-muted: #8d97a8;
   --guo-card-bg: #141821;      /* 海报卡本体底色 */
   --guo-badge-bg: #000000b3;   /* 角标 chip 黑底 70% */
@@ -209,6 +210,7 @@
   --guo-danger: #d0565f;
   --guo-warning: #bf8700;
   --guo-text: #23283a;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --guo-muted: #5f6878;
   --guo-card-bg: #ffffff;
   --guo-badge-bg: #ffffffb3;

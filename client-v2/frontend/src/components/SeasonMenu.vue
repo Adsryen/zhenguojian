@@ -100,7 +100,7 @@ defineExpose({ lookup })
 .season-root { position: relative; display: inline-flex; }
 .season-btn {
   border: 1px solid var(--guo-border, #262c3a);
-  background: var(--guo-surface2, #171b23);
+  background: var(--surface-2);
   color: var(--guo-text, #d7dce5);
   border-radius: 6px;
   padding: 4px 10px;
@@ -108,7 +108,7 @@ defineExpose({ lookup })
   cursor: pointer;
   white-space: nowrap;
 }
-.season-btn:hover { background: var(--guo-surface3, #1c2130); }
+.season-btn:hover { background: var(--guo-surface-3); }
 .season-menu {
   position: absolute;
   top: calc(100% + 4px);
@@ -122,7 +122,7 @@ defineExpose({ lookup })
   padding: 4px;
   border: 1px solid var(--guo-border, #262c3a);
   border-radius: 6px;
-  background: var(--guo-surface2, #171b23);
+  background: var(--surface-2);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 .season-item {
@@ -138,6 +138,6 @@ defineExpose({ lookup })
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.season-item:hover { background: var(--guo-surface3, #1c2130); }
+.season-item:hover { background: var(--guo-surface-3); }
 .season-item.current { color: var(--guo-accent, #4a83ff); }
 </style>

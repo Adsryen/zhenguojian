@@ -109,7 +109,7 @@ onBeforeUnmount(() => {
 .hk-keys {
   flex-shrink: 0;
   min-width: 76px;
-  font-family: var(--guo-font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 12px;
   padding: 2px 8px;
   border: 1px solid var(--border);

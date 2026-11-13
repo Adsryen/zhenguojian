@@ -137,7 +137,12 @@ def parse_tokens(body):
 
 def is_colorish(name, value):
     """尺寸/圆角/时长这类不算颜色（v1 也是这么排除 radius 的）。"""
-    skip = ("radius", "z-index", "duration", "size", "width", "height", "border-width", "gap")
+    # ⚠ 第五十九轮补 "font"：仓里加了 --font-mono 之后，这条排除表没有 font，
+    #   于是规矩 1 会把 "ui-monospace, SFMono-Regular, …" 当非法颜色报红。
+    #   这是子代理 C 提前预告的连锁坑，我照着踩了才写下来：
+    #   排除表要跟"仓里实际有哪些非颜色 token"一起长，而不是我一开始猜的那几个。
+    skip = ("radius", "z-index", "duration", "size", "width", "height", "border-width",
+            "gap", "font", "family")
     if any(k in name for k in skip):
         return False
     if re.match(r"^-?[\d.]+(px|em|rem|ms|s|deg|fr)?$", value):

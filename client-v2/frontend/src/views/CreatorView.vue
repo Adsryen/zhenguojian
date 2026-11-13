@@ -427,7 +427,7 @@ watch(() => route.query.u, () => void boot())
 .err-banner {
   border: 1px solid var(--danger, #d43a3a);
   color: var(--danger, #d43a3a);
-  background: var(--danger-soft, rgba(212, 58, 58, 0.08));
+  background: var(--danger-hover-bg);
 }
 .profile-top {
   display: flex;

@@ -616,7 +616,7 @@ onUnmounted(() => {
 .lib-status {
   padding: 0 24px 6px;
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
 }
 .lib-foot {
   display: flex;
@@ -628,7 +628,7 @@ onUnmounted(() => {
 }
 .lib-foot-hint {
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
 }
 /* ---- V2-E 榜单侧栏 ---- */
 .lib-body {
@@ -702,7 +702,7 @@ onUnmounted(() => {
   text-align: center;
   font-size: 16px;
   font-weight: 700;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
 /* 名次高亮色照 v1 rank_list.py:102-110 DESIGN 表 */
@@ -737,7 +737,7 @@ onUnmounted(() => {
 }
 .rank-cover-fb {
   font-size: 20px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
 }
 .rank-info {
   min-width: 0;
@@ -753,7 +753,7 @@ onUnmounted(() => {
 }
 .rank-metric {
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -761,13 +761,13 @@ onUnmounted(() => {
 .rank-hint {
   padding: 14px;
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
   text-align: center;
 }
 .rank-updated {
   padding: 0 14px 2px;
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
   flex-shrink: 0;
 }
 .rank-foot {
@@ -780,6 +780,6 @@ onUnmounted(() => {
 .rank-status {
   flex: 1;
   font-size: 12px;
-  color: var(--text-muted, #8a8f98);
+  color: var(--muted);
 }
 </style>
