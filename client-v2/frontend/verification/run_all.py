@@ -239,6 +239,31 @@ def main():
           % (_ev["bindings"], len(_ev["not_called"]),
              ", ".join(_ev["not_called"]) or "无", _dist))
 
+    # i18n 键三向对账：A（用了没定义）与 B（zh/en 不对称）是真 bug，硬拦——
+    # `t()` 缺键不会报错，它**把键名原样显示到界面上**（第四十四轮我写出过一次
+    # `downloads.mergeFail`，typecheck/build/硬编码扫描三道全绿）。
+    # C（未用名单）与 D（动态取键位置）只报数，因为"没用到"不是错误。
+    try:
+        import i18n_key_audit
+        _k = i18n_key_audit.audit()
+        print("i18n 键对账：zh %d / en %d，字面量用到 %d，动态取键 %d 处；"
+              "未用 %d（数据在用 %d + 拼接可得 %d + 真死候选 %d）"
+              % (_k["zh"], _k["en"], _k["used_literal"], _k["dynamic_sites"],
+                 len(_k["not_by_literal"]), len(_k["explainable"]),
+                 len(_k["by_prefix"]), len(_k["orphan"])))
+        if _k["missing_zh"] or _k["missing_en"]:
+            print("FAIL 用到但没定义的键（界面会直接显示键名）：%s"
+                  % ", ".join(sorted(set(_k["missing_zh"]) | set(_k["missing_en"]))))
+            return 1
+        if _k["only_zh"] or _k["only_en"]:
+            print("FAIL zh/en 键集不对称（英文界面会露键名）：只 zh %s / 只 en %s"
+                  % (_k["only_zh"], _k["only_en"]))
+            return 1
+    except SystemExit as e:
+        # 判据认不出 i18n.ts 结构时 audit() 主动炸 —— 不能降级成"没键可查所以通过"
+        print("FAIL i18n 键对账判据失效：%s" % str(e)[:160])
+        return 1
+
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
     if not scripts:
