@@ -56,11 +56,11 @@ func num(t *testing.T, m map[string]any, k string) float64 {
 func TestAppToggleSeenRoundTrip(t *testing.T) {
 	app := newAppIn(t)
 
-	res := decodeMap(t, mustOK(t, app.ToggleSeen("hongguo:1")))
+	res := decodeMap(t, ok(app.ToggleSeen("hongguo:1")))
 	if res["on"] != true {
 		t.Fatalf("第一次翻转应 on=true，得 %+v", res)
 	}
-	marks := decodeMap(t, mustOK(t, app.SeenList()))
+	marks := decodeMap(t, ok(app.SeenList()))
 	if _, had := marks["hongguo:1"]; !had {
 		t.Fatalf("SeenList 应含该 id：%+v", marks)
 	}
@@ -78,19 +78,20 @@ func TestAppToggleSeenRoundTrip(t *testing.T) {
 		t.Fatalf("文件里没有该 id：%s", body)
 	}
 
-	res = decodeMap(t, mustOK(t, app.ToggleSeen("hongguo:1")))
+	res = decodeMap(t, ok(app.ToggleSeen("hongguo:1")))
 	if res["on"] != false {
 		t.Fatalf("第二次翻转应 on=false，得 %+v", res)
 	}
 	// 再开一次 SeenList 应当读回空 —— 但注意：`Open()` 每次重开实例读文件，
 	// 这一步同时验到"绑定层没有把状态只留在内存里"。
-	marks = decodeMap(t, mustOK(t, app.SeenList()))
+	marks = decodeMap(t, ok(app.SeenList()))
 	if len(marks) != 0 {
 		t.Fatalf("取消后应无标记，得 %+v", marks)
 	}
 }
 
 func TestAppToggleSeenRejectsEmptyID(t *testing.T) {
+	// 这条专测错误分支，所以不取 ok（取了不用是编译错误）
 	app := newAppIn(t)
 	if _, err := app.ToggleSeen(""); err == nil || !strings.Contains(err.Error(), "缺少剧目 id") {
 		t.Fatalf("空 id 该报「缺少剧目 id」，得 %v", err)
@@ -103,30 +104,30 @@ func TestAppToggleSeenRejectsEmptyID(t *testing.T) {
 
 // 绑定名是 ImportSeen，Store 侧方法叫 ImportSeenJSON —— 别按内层名字去调绑定。
 func TestAppImportSeenNormalizesMillisAndKeepsExisting(t *testing.T) {
-	app := newAppIn(t)
+	app, ok := newAppIn(t), okOf(t)
 
 	// 毫秒载荷（前端 localStorage 存的是 epoch ms）要归一成秒
-	out := decodeMap(t, mustOK(t, app.ImportSeen(`{"hongguo:7":1763000000000}`)))
+	out := decodeMap(t, ok(app.ImportSeen(`{"hongguo:7":1763000000000}`)))
 	if num(t, out, "added") != 1 {
 		t.Fatalf("首次导入应新增 1 条，得 %+v", out)
 	}
-	marks := decodeMap(t, mustOK(t, app.SeenList()))
+	marks := decodeMap(t, ok(app.SeenList()))
 	if got := num(t, marks, "hongguo:7"); got != 1763000000 {
 		t.Fatalf("毫秒没归一成秒，得 %v", got)
 	}
 
 	// 已有 id 不覆盖（v1 迁移语义：Go 侧真值优先）
-	out = decodeMap(t, mustOK(t, app.ImportSeen(`{"hongguo:7":1,"hongguo:8":2}`)))
+	out = decodeMap(t, ok(app.ImportSeen(`{"hongguo:7":1,"hongguo:8":2}`)))
 	if num(t, out, "added") != 1 {
 		t.Fatalf("只该新增 hongguo:8，得 %+v", out)
 	}
-	marks = decodeMap(t, mustOK(t, app.SeenList()))
+	marks = decodeMap(t, ok(app.SeenList()))
 	if got := num(t, marks, "hongguo:7"); got != 1763000000 {
 		t.Fatalf("已有标记被导入覆盖了：%v", got)
 	}
 
 	// 空串是合法的空导入（前端"没有可迁移数据"时也调这里），不该报错
-	out = decodeMap(t, mustOK(t, app.ImportSeen("   ")))
+	out = decodeMap(t, ok(app.ImportSeen("   ")))
 	if num(t, out, "added") != 0 {
 		t.Fatalf("空载荷应 added=0，得 %+v", out)
 	}
@@ -136,7 +137,7 @@ func TestAppImportSeenNormalizesMillisAndKeepsExisting(t *testing.T) {
 		t.Fatal("坏 JSON 该报错")
 	}
 	// 报错路径不能写坏已有文件
-	marks = decodeMap(t, mustOK(t, app.SeenList()))
+	marks = decodeMap(t, ok(app.SeenList()))
 	if len(marks) != 2 {
 		t.Fatalf("坏 JSON 之后标记数变了：%+v", marks)
 	}
@@ -145,27 +146,27 @@ func TestAppImportSeenNormalizesMillisAndKeepsExisting(t *testing.T) {
 // ---------------------------------------------------------------- 下一季入口
 
 func TestAppSetNextSeasonRequiresFollowRow(t *testing.T) {
-	app := newAppIn(t)
+	app, ok := newAppIn(t), okOf(t)
 	next := `{"id":"hongguo:2","title":"某剧 第二季","source":"hongguo"}`
 
 	// 没追过这部剧 → marked=false，不创建行（v1 mark_next_season 同形）
-	out := decodeMap(t, mustOK(t, app.SetNextSeason("hongguo:1", next)))
+	out := decodeMap(t, ok(app.SetNextSeason("hongguo:1", next)))
 	if out["marked"] != false {
 		t.Fatalf("无追剧行时不该标记成功：%+v", out)
 	}
-	list := mustOK(t, app.Watchlist())
+	list := ok(app.Watchlist())
 	if strings.Contains(list, "hongguo:1") {
 		t.Fatalf("无追剧行却凭空出现了行：%s", list)
 	}
 
 	// 追剧之后才记入口；season 传 0 → 由新剧标题的季号推（v1 `int(season or season_number(title))`）
-	mustOK(t, app.ToggleFollow(`{"id":"hongguo:1","title":"某剧 第一季","source":"hongguo"}`))
-	out = decodeMap(t, mustOK(t, app.SetNextSeason("hongguo:1", next)))
+	ok(app.ToggleFollow(`{"id":"hongguo:1","title":"某剧 第一季","source":"hongguo"}`))
+	out = decodeMap(t, ok(app.SetNextSeason("hongguo:1", next)))
 	if out["marked"] != true {
 		t.Fatalf("有追剧行时应标记成功：%+v", out)
 	}
 	var rows []map[string]any
-	if err := json.Unmarshal([]byte(mustOK(t, app.Watchlist())), &rows); err != nil {
+	if err := json.Unmarshal([]byte(ok(app.Watchlist())), &rows); err != nil {
 		t.Fatalf("Watchlist 解析：%v", err)
 	}
 	var row map[string]any
@@ -191,17 +192,17 @@ func TestAppSetNextSeasonRequiresFollowRow(t *testing.T) {
 // ---------------------------------------------------------------- 观察器
 
 func TestAppObserveDramaReportsWhetherFollowRowExists(t *testing.T) {
-	app := newAppIn(t)
+	app, ok := newAppIn(t), okOf(t)
 	drama := `{"id":"hongguo:5","title":"某剧","source":"hongguo","episodes":10}`
 
 	// 没追这部剧：v1 observe_drama 直接 return（连 emit 都不发），这里如实报 observed=false
-	out := decodeMap(t, mustOK(t, app.ObserveDrama(drama)))
+	out := decodeMap(t, ok(app.ObserveDrama(drama)))
 	if out["observed"] != false {
 		t.Fatalf("未追剧应 observed=false，得 %+v", out)
 	}
 
-	mustOK(t, app.ToggleFollow(`{"id":"hongguo:5","title":"某剧","source":"hongguo","episodes":3}`))
-	out = decodeMap(t, mustOK(t, app.ObserveDrama(drama)))
+	ok(app.ToggleFollow(`{"id":"hongguo:5","title":"某剧","source":"hongguo","episodes":3}`))
+	out = decodeMap(t, ok(app.ObserveDrama(drama)))
 	if out["observed"] != true {
 		t.Fatalf("已追剧应 observed=true，得 %+v", out)
 	}
@@ -221,7 +222,7 @@ func TestAppObserveDramaReportsWhetherFollowRowExists(t *testing.T) {
 	}
 
 	// 同样的数据再观察一次：不该再有变化（后台每 30 分钟一轮，重复观察必须幂等）
-	out = decodeMap(t, mustOK(t, app.ObserveDrama(drama)))
+	out = decodeMap(t, ok(app.ObserveDrama(drama)))
 	if out["changed"] != false {
 		t.Fatalf("重复观察不该再报 changed：%+v", out)
 	}
@@ -232,10 +233,19 @@ func TestAppObserveDramaReportsWhetherFollowRowExists(t *testing.T) {
 	}
 }
 
-func mustOK(t *testing.T, s string, err error) string {
+// okOf 返回一个"只吃 (string, error)"的取值器。
+// 为什么不能写成 `ok(app.X())`：Go 允许多返回值直接当实参的**唯一情形**是
+// 实参列表恰好就是那一个调用（f(g())），混进别的参数（比如 t）就报
+// "multiple-value ... in single-value context"。
+// 我上一版就是这么写的，vet 在 Windows job 上直接拦下 ——
+// 这条语言规则我记一次就够了：以后写 Go 测试统一用闭包工厂。
+func okOf(t *testing.T) func(string, error) string {
 	t.Helper()
-	if err != nil {
-		t.Fatalf("绑定返回错误: %v", err)
+	return func(s string, err error) string {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("绑定返回错误: %v", err)
+		}
+		return s
 	}
-	return s
 }
