@@ -260,12 +260,30 @@ def main():
               const r = chips.getBoundingClientRect();
               return r.right <= window.innerWidth + 1 && r.left >= -1;
             }""")
+            # ── ⑥e/⑥f 首屏不被重复请求（v1 :215，上一轮我自己标了「未覆盖」的那条）──
+            # 上一轮我写的理由是「要数请求次数，得先给 store 加计数，不为此改产品代码」。
+            # 回头看：`__zgjCalLog` 本来就把每次调用记下来了 —— 要数的东西早就有，
+            # 是我没去用它。所以那不是覆盖不了，是我上一轮的判断偷懒。
+            page7 = fresh_open(ctx, {"pageSize": 2, "total": 12})[0]
+            for _ in range(4):
+                page7.evaluate("() => { const e=document.querySelector('.cal-scroll'); e.scrollTop = e.scrollHeight }")
+                page7.wait_for_timeout(800)
+            log7 = page7.evaluate("() => window.__zgjCalLog || []")
+            offs7 = [c["offset"] for c in log7]
+            dup_offs = sorted({o for o in offs7 if offs7.count(o) > 1})
+            check("⑥e 同一 offset 不被重复请求（v1 :215；上一轮被我误标成覆盖不了）",
+                  not dup_offs, f"序列={offs7} 重复={dup_offs}")
+            check("⑥f 首屏请求恰好一次（offset 0 出现次数 = 1）",
+                  offs7.count(0) == 1, f"序列={offs7}")
+            page7.close()
+
             check("⑦ 760px 宽下频道胶囊不溢出（v1 narrow_width 测试的**一半**；主题重绘 web 不需要）",
                   fits is True, f"fits={fits}")
 
             check("⑧ 全程无 JS 错误", not js_errors, "; ".join(js_errors[:3]))
             print("NOTE 覆盖边界：①v1 的 theme_* 两条是 Qt 重绘语义，web 由 CSS 变量承担，没有断言；"
-                  "②v1 :215「首页不被请求两次」需要数请求次数，本轮只断言了游标推进 —— 未覆盖，不假装")
+                  "②v1 :215 已由 ⑥e/⑥f 覆盖：用 mock 的调用序列数请求次数。"
+                  "上一轮我把它写成需要改产品代码才能测，其实是没看见日志早就在那儿了")
             page.screenshot(path=os.path.join(OUT, "calendar-paging.png"))
             browser.close()
     finally:
