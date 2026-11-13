@@ -121,11 +121,20 @@ jobs:
           # 但**一条用例都不执行**。也就是说 `client-v2/*_test.go` 里那 18 个测试
           # 从建立起就没跑过，而我此前把 CI 绿当 Go 侧证据时，这条一直没被算进去。
           # 同族第六次："引擎在、接线缺"——这次缺的是执行而不是实现。
-          go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s -v . > "$env:RUNNER_TEMP/root-v.txt" 2>&1
+          # `-count=2`：同一进程里连跑两遍。
+          # 逼出来的东西和 `-count=1` 不一样——跨用例的状态泄漏、
+          # 依赖执行顺序/时间戳的断言、以及"只偶发红"的不稳定门，
+          # 第二遍就会现形。第五十轮装这道门后第一条红
+          # （run 43345564590 的 TestAppObserveDrama）在下一遍就消失了，
+          # 而我拒绝把"重跑就绿"当成通过：不稳定门禁比没门禁更坏，
+          # 它会训练人重跑而不是去查原因。
+          go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=2 -timeout 300s -v . > "$env:RUNNER_TEMP/root-v.txt" 2>&1
           $rootRc = $LASTEXITCODE
-          $ran = @(Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- (PASS|FAIL|SKIP): Test').Count
+          $results = @(Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- (PASS|FAIL|SKIP): (Test\w+)')
+          $ran = @($results | ForEach-Object { $_.Matches[0].Groups[2].Value } | Sort-Object -Unique).Count
           $declared = @(Select-String -Path *_test.go -Pattern '^func Test').Count
-          Write-Host "根包用例：执行 $ran / 声明 $declared（exit $rootRc）"
+          Write-Host "根包用例：唯一执行 $ran / 声明 $declared（exit $rootRc，每遍跑两遍共 $(@($results).Count) 条结果行）"
+          Write-Host ("已执行清单：" + (($results | ForEach-Object { $_.Matches[0].Groups[2].Value } | Sort-Object -Unique) -join " "))
           Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' | ForEach-Object { Write-Host $_.Line }
           if ($rootRc -ne 0 -or $ran -ne $declared) {
             # 诊断要能指向失败原因本身。上一版这里打印"前 60 行"，
