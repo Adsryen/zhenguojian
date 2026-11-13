@@ -973,13 +973,36 @@ const mockApi: NativeApi = {
     return mockSuggestions(q)
   },
   // ── 青空次元账号 mock：login 只校验 track 形状（首 down 尾 up、≥2 点、尺寸/时间自洽）即成功；
-  //    window.__zgj.mockLoginFail='1' 强制失败（M5 断言用）；入参快照落 __zgjSoraniLastLogin（M8 断言用）──
+  //    window.__zgj.mockLoginFail='1' 强制失败（M5 断言用）；入参快照落 __zgjSoraniLastLogin（M8 断言用）
+  //
+  //    第五十六轮再加三个注入缝 + 一个调用计数（都只对 mock 生效，默认行为一字不变）：
+  //      __zgj.mockCaptchaFail='1'   取验证码失败（v1 :328 那条：回主页 + 红字）
+  //      __zgj.mockStatusFail='1'    读状态失败（v1 :404 那条：徽标「未知」而不是谎报未登录）
+  //      __zgj.mockSoraniNoName='1'  状态里没有 name（v1 :411「只有账号的核心」那一族：
+  //                                  徽标该是「已登录」，不能拼出 "已登录 · undefined"）
+  //      __zgjSoraniCalls            三次调用的次数（login/captcha/status），
+  //                                  v1 :321 要断言"本地拦下、根本没打核心"，
+  //                                  没有计数就只能靠时间差猜。──
   soraniStatus: async () => {
     await delay(80)
-    return { loggedIn: soraniMock.loggedIn, name: soraniMock.name }
+    const w = typeof window !== 'undefined' ? (window as any) : null
+    if (w) w.__zgjSoraniCalls = { ...(w.__zgjSoraniCalls || {}), status: (w.__zgjSoraniCalls?.status || 0) + 1 }
+    if (w?.__zgj?.mockStatusFail === '1' || w?.mockStatusFail === '1') {
+      // 同上：ASCII，避免英文界面露中文
+      throw new ApiError('mock sorani status read failed', 'status_fail')
+    }
+    const name = (w?.__zgj?.mockSoraniNoName === '1' || w?.mockSoraniNoName === '1') ? '' : soraniMock.name
+    return { loggedIn: soraniMock.loggedIn, name }
   },
   soraniCaptcha: async () => {
     await delay(150)
+    const w = typeof window !== 'undefined' ? (window as any) : null
+    if (w) w.__zgjSoraniCalls = { ...(w.__zgjSoraniCalls || {}), captcha: (w.__zgjSoraniCalls?.captcha || 0) + 1 }
+    if (w?.__zgj?.mockCaptchaFail === '1' || w?.mockCaptchaFail === '1') {
+      // ASCII：这条会作为 {msg} 嵌进 sorani.captchaFail 的句子，
+      // 中文会在英文界面里露出来（第 42 轮立的规矩）
+      throw new ApiError('mock captcha image fetch failed', 'captcha_fail')
+    }
     soraniMock.seq += 1
     return {
       id: `mock-captcha-${soraniMock.seq}`,
@@ -993,7 +1016,11 @@ const mockApi: NativeApi = {
   },
   soraniLogin: async (identifier, password, captchaId, track) => {
     await delay(220)
-    if (typeof window !== 'undefined') window.__zgjSoraniLastLogin = { identifier, password, captchaId, track }
+    if (typeof window !== 'undefined') {
+      window.__zgjSoraniLastLogin = { identifier, password, captchaId, track }
+      const w = window as any
+      w.__zgjSoraniCalls = { ...(w.__zgjSoraniCalls || {}), login: (w.__zgjSoraniCalls?.login || 0) + 1 }
+    }
     if (!identifier.trim() || !password) throw new ApiError(t('api.errLoginInput'), 'bad_input')
     const pts = track.trackList ?? []
     const dims = [track.bgImageWidth, track.bgImageHeight, track.templateImageWidth, track.templateImageHeight]
@@ -1010,7 +1037,12 @@ const mockApi: NativeApi = {
       throw new ApiError(t('api.errCaptcha'), 'sorani_captcha_fail')
     soraniMock.loggedIn = true
     soraniMock.name = identifier.trim()
-    return { loggedIn: true, name: identifier.trim() }
+    // ⚠ 第五十六轮：v1 :411 的 `AccountOnlyCore` 是"核心回的状态里没有 name"，
+    // 而 v2 的徽标数据源有两条：`soraniStatus`（读）与 `soraniLogin`（登录后立刻回的那份）。
+    // 上一版我只在 status 上打了 noName 缝，所以 M18 测不到 —— 徽标用的是 login 那份。
+    // 现在两条都认这个缝（默认行为不变：不设缝时 name 照旧）。
+    const noName = (window as any)?.__zgj?.mockSoraniNoName === '1' || (window as any)?.mockSoraniNoName === '1'
+    return { loggedIn: true, name: noName ? '' : identifier.trim() }
   },
   soraniLogout: async () => {
     await delay(120)

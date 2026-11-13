@@ -395,6 +395,120 @@ async def main():
                   False, "拖了 600 步却没进账密页")
 
 
+        # ============ M14–M18：v1 另外五条错误路径（:311/:321/:328/:404/:411） ============
+        # v1 的写法是直接把 Qt 的 stack 跳到某页 / 换一个残缺的 core 对象。
+        # v2 里没有"强行跳页"的入口，我**不硬造那个状态**（造出来测的是我自己），
+        # 所以每条都换成"同一个保证的可达形式"，并把差别写在断言名或注释里。
+
+        # ---- M14 v1 :311「无轨迹不许进账密页」的可达形式 ----
+        # v1 能 `stack.setCurrentWidget(page_creds)` 强行跳页再提交；
+        # v2 的 creds 页只能由 `SliderCaptcha` emit solved 之后进入，
+        # 而 `beginCaptcha()` 会把 track 置 null（SoraniLoginDialog.vue:53），
+        # 所以"账密页 + 无轨迹"这个状态在 v2 不可达。
+        # 于是测**同一保证的前件**：没拖过滑块就绝不该看到账密页。
+        md = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await md.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        pd = await md.new_page()
+        await pd.goto(f"{BASE}/#/settings")
+        await pd.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pd.click("[data-testid='sorani-login-btn']")
+        await pd.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        creds_d = await pd.locator("[data-testid='sorani-page-creds']:visible").count()
+        check("M14 没拖过滑块就看不到账密页（v1 :311 同一保证的可达形式；Qt 强行跳页在 v2 不可达）",
+              creds_d == 0, f"creds 可见={creds_d}")
+
+        # ---- M15 v1 :321「空账密本地拦下，根本没打核心」----
+        await pd.click("[data-testid='sorani-start-btn']")
+        await pd.wait_for_selector("[data-testid='sorani-slider']", timeout=8000)
+        await real_drag(pd, "[data-testid='sorani-handle']", 150)
+        await pd.wait_for_selector("[data-testid='sorani-page-creds']:visible", timeout=8000)
+        # 计数在 mock 侧（api.ts 的 __zgjSoraniCalls），不是靠时间差猜
+        before15 = await pd.evaluate("() => (window.__zgjSoraniCalls || {}).login || 0")
+        cap_before15 = await pd.evaluate("() => (window.__zgjSoraniCalls || {}).captcha || 0")
+        await pd.click("[data-testid='sorani-submit-btn']")
+        await pd.wait_for_timeout(1200)
+        after15 = await pd.evaluate("() => (window.__zgjSoraniCalls || {}).login || 0")
+        err15 = await pd.locator("[data-testid='sorani-error']:visible").count()
+        txt15 = (await pd.locator("[data-testid='sorani-error']").first.inner_text()).strip() if err15 else ""
+        check("M15 空账密被本地拦下：login 调用数不变 + 红字出现（v1 :321）",
+              after15 == before15 and err15 == 1 and bool(txt15),
+              f"login {before15}→{after15} err={txt15!r}")
+        # 红字必须是 i18n 的那句，不是键名（第 44 轮我自己写出过一次 downloads.mergeFail）
+        check("M15b 红字是本地化的句子而不是键名/裸 code",
+              ("请输入" in txt15 or "用户名" in txt15) and "sorani." not in txt15 and "captcha_fail" not in txt15,
+              f"文案={txt15!r}")
+        # 空账密被拦下时**不该**顺手重取验证码（那是"提交失败"分支才做的事）
+        cap_after15 = await pd.evaluate("() => (window.__zgjSoraniCalls || {}).captcha || 0")
+        check("M15c 本地拦下不额外打验证码请求（次数不变）",
+              cap_after15 == cap_before15, f"captcha {cap_before15}→{cap_after15}")
+
+        # ---- M16 v1 :328「取验证码失败 → 回状态页 + 红字」----
+        await pd.evaluate("() => { window.mockCaptchaFail = '1' }")
+        # ⚠ 上一版这里点的是 `sorani-creds-back`，而它只做 `page = 'captcha'`
+        #   ——**不会重新取验证码**，所以注入根本没被触发，红字还是上一步的"请输入…"。
+        #   真会重取的是 `sorani-reverify-btn`（@click="beginCaptcha"，SoraniLoginDialog.vue:187）。
+        #   先回滑块页，再点「重新验证」。
+        # ⚠ 第二次修这条：`sorani-reverify-btn` 其实在**账密页**上（SoraniLoginDialog.vue:186），
+        #   不在滑块页 —— 我按名字猜了归属，于是等元素可见等了 30s 超时。
+        #   正确做法：就停在账密页，点「重新验证」（@click="beginCaptcha"）→ 取验证码失败。
+        await pd.click("[data-testid='sorani-reverify-btn']")
+        await pd.wait_for_timeout(1800)
+        on_status = await pd.locator("[data-testid='sorani-page-status']:visible").count()
+        err16 = (await pd.locator("[data-testid='sorani-error']").first.inner_text()).strip() \
+            if await pd.locator("[data-testid='sorani-error']:visible").count() else ""
+        # v1 那句中文是「验证码获取失败」；v2 用 sorani.captchaFail 组装，
+        # 注入的错误消息本身是 ASCII（不然英文界面会露中文）
+        check("M16 取验证码失败：退回状态页 + 红字（v1 :328）",
+              on_status == 1 and bool(err16) and "验证码加载失败" in err16,
+              f"状态页可见={on_status} 红字={err16[:90]!r}")
+        # 注入的错误消息本身是 ASCII（api.ts 里那条 mock 异常），
+        # 中文句子由 i18n 的 sorani.captchaFail 组装 —— 所以英文态不会露中文。
+        check("M16b 红字里没有裸 code 也没有键名",
+              "captcha_fail" not in err16 and "sorani." not in err16,
+              f"红字={err16[:80]!r}")
+        await pd.evaluate("() => { delete window.mockCaptchaFail }")
+
+        # ---- M17 v1 :404「读状态失败不崩，徽标显示未知」----
+        await pd.evaluate("() => { window.__zgj = window.__zgj || {}; window.__zgj.mockStatusFail = '1' }")
+        await md.close()
+        me = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await me.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        await me.add_init_script("window.__zgj = { mockStatusFail: '1' }")
+        pe = await me.new_page()
+        await pe.goto(f"{BASE}/#/settings")
+        await pe.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pe.wait_for_timeout(1500)
+        chip17 = (await pe.locator("[data-testid='sorani-status']").inner_text()).strip()
+        check("M17 读状态失败：徽标是「未知」而不是谎报未登录（v1 :404）",
+              chip17 == "未知", f"chip={chip17!r}")
+
+        # ---- M18 v1 :411「核心只给账号没有 name」时不该拼出 undefined ----
+        await pe.evaluate("() => { window.__zgj = {} }")
+        await pe.close()
+        await me.close()
+        mf = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await mf.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        await mf.add_init_script("window.__zgj = { mockSoraniNoName: '1' }")
+        pf = await mf.new_page()
+        await pf.goto(f"{BASE}/#/settings")
+        await pf.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pf.click("[data-testid='sorani-login-btn']")
+        await pf.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        await pf.click("[data-testid='sorani-start-btn']")
+        await pf.wait_for_selector("[data-testid='sorani-slider']", timeout=8000)
+        await real_drag(pf, "[data-testid='sorani-handle']", 150)
+        await pf.wait_for_selector("[data-testid='sorani-page-creds']:visible", timeout=8000)
+        await pf.fill("[data-testid='sorani-identifier']", "solo")
+        await pf.fill("[data-testid='sorani-password']", "pw")
+        await pf.click("[data-testid='sorani-submit-btn']")
+        await pf.wait_for_selector("[data-testid='sorani-dialog']", state="detached", timeout=10000)
+        await pf.wait_for_timeout(1500)
+        chip18 = (await pf.locator("[data-testid='sorani-status']").inner_text()).strip()
+        check("M18 状态没有 name 时徽标是「已登录」，不拼出 undefined（v1 :411 那一族）",
+              chip18.startswith("已登录") and "undefined" not in chip18 and "·" not in chip18,
+              f"chip={chip18!r}")
+        await mf.close()
+
         # ================= 页 2（en，独立 context）：M7 =================
         ctx2 = await browser.new_context(viewport={"width": 1280, "height": 900})
         await ctx2.add_init_script("localStorage.setItem('zgj.locale', 'en')")
