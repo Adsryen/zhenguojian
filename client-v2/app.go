@@ -272,8 +272,10 @@ func (a *App) DanmakuWindow(session string, startMs, endMs float64) (string, err
 }
 
 // DanmakuAll → JSON: 整集弹幕文档（受核心上限约束），供降级与调试。
-func (a *App) DanmakuAll(session string) (string, error) {
-	data, err := native.DanmakuAll(session)
+// durationSec 是分集时长（秒）：核心要求 durationMs>0，缺它直接报错，
+// 不再悄悄发一个 0 过去让真机拒绝。
+func (a *App) DanmakuAll(session string, durationSec float64) (string, error) {
+	data, err := native.DanmakuAll(session, int64(durationSec*1000))
 	if err != nil {
 		return "", err
 	}

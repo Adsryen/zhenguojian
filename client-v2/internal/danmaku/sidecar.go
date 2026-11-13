@@ -174,7 +174,16 @@ type SidecarDeps struct {
 	//   → plan.session / plan.danmakuId）。
 	Resolve func() (session string, episodeID string, err error)
 	// FetchAll 整集弹幕（v1 danmaku.fetch_all → 核心 danmakuAll）。
-	FetchAll func(session string) (items []Item, total int64, err error)
+	//
+	// ⚠ 第五十九轮修正：v2 之前只把 session 传出来，于是实现里连
+	//   `durationMs` 都没法发 —— 而核心入口 `nativeDanmakuAll`
+	//   （guoapp-src/native/core/app_danmaku_all.go:180-181）是
+	//   `if input.DurationMS <= 0 || input.DurationMS > danmakuMaxDurationMS { 报错 }`，
+	//   也就是**真核心会直接拒绝**每一次"下载时保存弹幕"。
+	//   v1 一直是带 `startMs=0, durationMs=<集长>` 的（danmaku.py:71-72）。
+	//   时长由调用方给（`req.DurationMs`，本文件前面已经要求它 >0），
+	//   不再让实现方去猜——猜出来的第二个真相就是这次 bug 的来源。
+	FetchAll func(session string, durationMs int64) (items []Item, total int64, err error)
 	// Now epoch 毫秒；nil → time.Now。测试注入固定值才能断 fetchedAt。
 	Now func() int64
 }
@@ -219,7 +228,7 @@ func CollectSidecar(req SidecarRequest, deps SidecarDeps) (SidecarResult, error)
 	if session == "" {
 		return out, errors.New("没有拿到播放会话")
 	}
-	items, total, err := deps.FetchAll(session)
+	items, total, err := deps.FetchAll(session, req.DurationMs)
 	if err != nil {
 		return out, err
 	}

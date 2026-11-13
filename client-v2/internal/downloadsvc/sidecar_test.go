@@ -178,8 +178,16 @@ func TestCollectSidecarForJobWritesBothFiles(t *testing.T) {
 		if payload["playbackSession"] != "sess-1" {
 			t.Errorf("会话没传对：%v", payload)
 		}
-		if _, ok := payload["durationMs"]; ok {
-			t.Error("v2 的 danmakuAll 不收 durationMs（v1 收），别抄错契约")
+		// ⚠ 这里原本断言的是**反契约**：
+		//   `if _, ok := payload["durationMs"]; ok { t.Error(…) }`
+		//   ——把核心必需的字段当成"抄错了"禁止掉。谁修好谁红。
+		//   真实契约见 guoapp-src/native/core/app_danmaku_all.go:180-181
+		//   （DurationMS<=0 直接报「弹幕时间范围无效」）与 v1 danmaku.py:71-72。
+		if dur := jsonFloat(payload["durationMs"]); dur <= 0 {
+			t.Errorf("核心要求 durationMs>0（app_danmaku_all.go:181），实得 %v，载荷 %v", dur, payload)
+		}
+		if _, ok := payload["startMs"]; !ok {
+			t.Errorf("v1 同款要带 startMs（danmaku.py:72），载荷 %v", payload)
 		}
 		return map[string]any{
 			"total": float64(2),

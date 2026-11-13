@@ -293,8 +293,14 @@ func TestDanmakuWindowAcceptsAbsoluteWindowTail(t *testing.T) {
 	} else {
 		t.Logf("danmaku(bogus) -> %v", out)
 	}
-	if _, err2 := DanmakuAll("bogus-session"); err2 != nil {
+	// 带时长才走到核心（bogus 会话由上游报错，只记录不判失败）
+	if _, err2 := DanmakuAll("bogus-session", 90); err2 != nil {
 		t.Logf("danmakuAll(bogus) -> err=%v", err2)
+	}
+	// 新增：时长缺失必须**本地**拦下，不能发一个 0 让真核心去拒绝
+	//（这正是第五十九轮修掉的 bug 的守卫：以前这里连 durationMs 都不发）
+	if _, err2b := DanmakuAll("sess-x", 0); err2b == nil {
+		t.Fatal("durationMs<=0 应本地拦截（核心 app_danmaku_all.go:181 也会拒）")
 	}
 	if _, err3 := DanmakuWindow("", 0, 1); err3 == nil {
 		t.Fatal("空会话应本地拦截")

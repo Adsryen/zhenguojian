@@ -16,8 +16,12 @@ package downloadsvc
 //      既没有 force 也没有调用方命名的会话 → 这里拿到的可能是核心缓存里的既有会话。
 //      要补齐得先动核心契约，是单独一件事，不在这里假装等价。
 //   2. v1 `fetch_all(core, session, duration_ms)` 靠传入时长翻窗口；
-//      v2 的 `danmakuAll` 只收 `playbackSession`（`internal/native/actions.go:114`），
-//      翻完由核心自己负责。于是 v2 **不需要**先 ffprobe 出时长来分页。
+//      ⚠ 这一条我原来写的是「v2 的 danmakuAll 只收 playbackSession，
+//      于是 v2 不需要先算出时长」—— **那是把我自己少发字段说成上游契约**。
+//      核心要求 durationMs>0（app_danmaku_all.go:180-181），v1 也一直在发
+//      （danmaku.py:71-72）。第五十九轮已把时长串进 FetchAll / DanmakuAll。
+//      教训：写"v2 与 v1 不同"之前，必须去上游源码核那条差异存在；
+//      本任务已经三次栽在同一形状上（第 45 轮的"不自动播放"、第 59 轮的这条）。
 //   3. 但 `.ass` 的时间轴仍然需要一个总时长当事件上限（`BuildAss(items, durationMs)`），
 //      而 v2 核心既不在 job 行里给 duration、resolve 也不回 durationSeconds。
 //      这里取 `chapter.duration`（有就用），否则用**最后一条弹幕时间 + 60s** 近似，
@@ -324,9 +328,15 @@ func (s *Service) collectSidecarForJob(ctx context.Context, job map[string]any) 
 			epID, _ := data["danmakuId"].(string)
 			return session, epID, nil
 		},
-		// 见文件头第 2 条：v2 的 danmakuAll 只收 playbackSession
-		FetchAll: func(session string) ([]danmaku.Item, int64, error) {
-			data, err := s.call("danmakuAll", map[string]any{"playbackSession": session})
+		// v1 danmaku.fetch_all 同款三个字段（danmaku.py:71-72）：
+		// startMs=0 + durationMs=集长，缺 durationMs 会被核心入口直接拒绝
+		// （app_danmaku_all.go:181 `input.DurationMS <= 0` → 「弹幕时间范围无效」）。
+		FetchAll: func(session string, durationMs int64) ([]danmaku.Item, int64, error) {
+			data, err := s.call("danmakuAll", map[string]any{
+				"playbackSession": session,
+				"startMs":         int64(0),
+				"durationMs":      durationMs,
+			})
 			if err != nil {
 				return nil, 0, err
 			}

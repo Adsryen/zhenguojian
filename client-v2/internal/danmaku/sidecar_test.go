@@ -26,7 +26,7 @@ func writeFakeVideo(t *testing.T, dir, name string) string {
 func fixedDeps(items []Item, total int64, err error) SidecarDeps {
 	return SidecarDeps{
 		Resolve:  func() (string, string, error) { return "sess-1", "ep-9", nil },
-		FetchAll: func(string) ([]Item, int64, error) { return items, total, err },
+		FetchAll: func(string, int64) ([]Item, int64, error) { return items, total, err },
 		Now:      func() int64 { return 1794000000123 },
 	}
 }
@@ -100,7 +100,7 @@ func TestCollectSidecarSkipsWhenAlreadyPresent(t *testing.T) {
 	called := false
 	deps := SidecarDeps{
 		Resolve:  func() (string, string, error) { called = true; return "s", "e", nil },
-		FetchAll: func(string) ([]Item, int64, error) { return nil, 0, nil },
+		FetchAll: func(string, int64) ([]Item, int64, error) { return nil, 0, nil },
 	}
 	res, err := CollectSidecar(SidecarRequest{VideoPath: video, DurationMs: 1000}, deps)
 	if err != nil {
@@ -151,7 +151,7 @@ func TestCollectSidecarGuards(t *testing.T) {
 	// 会话缺失（v1「没有拿到播放会话」）
 	noSession := SidecarDeps{
 		Resolve:  func() (string, string, error) { return "", "", nil },
-		FetchAll: func(string) ([]Item, int64, error) { return []Item{{ID: "x", TimeMs: 1, Text: "y"}}, 1, nil },
+		FetchAll: func(string, int64) ([]Item, int64, error) { return []Item{{ID: "x", TimeMs: 1, Text: "y"}}, 1, nil },
 	}
 	if _, err := CollectSidecar(SidecarRequest{VideoPath: video, DurationMs: 5000}, noSession); err == nil ||
 		!strings.Contains(err.Error(), "没有拿到播放会话") {
@@ -169,7 +169,7 @@ func TestCollectSidecarGuards(t *testing.T) {
 	// fetch 失败原样上抛，且不留下半套
 	boom := SidecarDeps{
 		Resolve:  func() (string, string, error) { return "s", "e", nil },
-		FetchAll: func(string) ([]Item, int64, error) { return nil, 0, errors.New("核心挂了") },
+		FetchAll: func(string, int64) ([]Item, int64, error) { return nil, 0, errors.New("核心挂了") },
 	}
 	if _, err := CollectSidecar(SidecarRequest{VideoPath: video, DurationMs: 5000}, boom); err == nil ||
 		!strings.Contains(err.Error(), "核心挂了") {

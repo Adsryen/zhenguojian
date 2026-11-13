@@ -295,7 +295,8 @@ const realApi: NativeApi = {
     callGo<{ marked: boolean }>('SetNextSeason', dramaID, JSON.stringify(nextDrama)),
   observeDrama: async (drama: Drama) =>
     callGo<{ observed: boolean; changed: boolean; row: WatchRow | null }>('ObserveDrama', JSON.stringify(drama)),
-  danmakuAll: (session: string) => callGo<DanmakuWindowResult>('DanmakuAll', session),
+  danmakuAll: (session: string, durationSec: number) =>
+    callGo<DanmakuWindowResult>('DanmakuAll', session, durationSec),
   watchlist: () => callGo<WatchRow[]>('Watchlist'),
   historyList: () => callGo<HistoryRow[]>('HistoryList'),
   toggleFollow: (drama) => callGo<{ followed: boolean }>('ToggleFollow', JSON.stringify(drama)),
@@ -614,7 +615,7 @@ const mockApi: NativeApi = {
     const hit = rows.find((r) => r.drama.id === drama.id)
     return { observed: !!hit, changed: false, row: null as WatchRow | null }
   },
-  danmakuAll: async (session: string) => {
+  danmakuAll: async (session: string, _durationSec: number) => {
     await delay(200)
     return mockDanmakuAll(session)
   },

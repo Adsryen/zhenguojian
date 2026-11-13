@@ -111,11 +111,24 @@ func DanmakuWindow(session string, startMs, endMs int64) (map[string]any, error)
 }
 
 // DanmakuAll 拉整集弹幕（受核心上限约束），供播放器降级或导出使用。
-func DanmakuAll(session string) (map[string]any, error) {
+//
+// ⚠ 第五十九轮修契约：这里以前只发 `playbackSession`，
+//   而核心入口 `nativeDanmakuAll` 要求 `input.DurationMS > 0`
+//   （guoapp-src/native/core/app_danmaku_all.go:180-181，否则报「弹幕时间范围无效」），
+//   v1 一直是 `startMs=0, durationMs=<集长>`（danmaku.py:71-72）。
+//   少发这个字段在 mock 面看不出来（假核心自己回 80 条弹幕），真核心每次必拒。
+func DanmakuAll(session string, durationMs int64) (map[string]any, error) {
 	if session == "" {
 		return nil, fmt.Errorf("弹幕会话不能为空")
 	}
-	return Call("danmakuAll", map[string]any{"playbackSession": session})
+	if durationMs <= 0 {
+		return nil, fmt.Errorf("缺少分集时长，无法抓整集弹幕")
+	}
+	return Call("danmakuAll", map[string]any{
+		"playbackSession": session,
+		"startMs":         int64(0),
+		"durationMs":      durationMs,
+	})
 }
 
 // DramaCreators 取剧集的演职员条（v1 core_client.drama_creators：

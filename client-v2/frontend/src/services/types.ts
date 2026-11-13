@@ -143,7 +143,7 @@ export interface DanmakuItem {
   durationMs?: number
 }
 
-/** App.DanmakuWindow/DanmakuAll(session) 返回 */
+/** App.DanmakuWindow(session, start, end) / DanmakuAll(session, durationSec) 返回 */
 export interface DanmakuWindowResult {
   items: DanmakuItem[]
   startMs?: number
@@ -311,7 +311,8 @@ export interface NativeApi {
   /** R23：把"最新剧数据"交给核心观察器（v1 watchstore.observe_drama）。
    *  observed=false 表示这条根本不在追剧表（v1 对未追的剧直接 return，连 emit 都不发）。 */
   observeDrama(drama: Drama): Promise<{ observed: boolean; changed: boolean; row: WatchRow | null }>
-  danmakuAll(session: string): Promise<DanmakuWindowResult>
+  // durationSec：核心要求 durationMs>0（app_danmaku_all.go:181），0 会被拒
+  danmakuAll(session: string, durationSec: number): Promise<DanmakuWindowResult>
   // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
   watchlist(): Promise<WatchRow[]>
   historyList(): Promise<HistoryRow[]>
