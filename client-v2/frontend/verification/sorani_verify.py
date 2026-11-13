@@ -395,6 +395,65 @@ async def main():
                   False, "拖了 600 步却没进账密页")
 
 
+        # ============ M22/M23：v1 :280/:388「打开即懒查状态」与窄宽排布 ============
+        # 读 v1 原文后修正了我上一轮的记法：`:280/:388` 判的不是"什么时候读"这种模糊时序，
+        # 而是一条具体形状 —— **对话框一打开，打出去的第一个请求是"读状态"，
+        # 不是"取验证码"**（`self.assertEqual(self.core.calls[0], "")`，
+        # 空 command 就是 sorani_account 的状态查询）。
+        # v2 的对应实现：`onMounted(() => { ...; refreshStatus() })`（SoraniLoginDialog.vue:121-124），
+        # 而验证码只在点「开始验证」后由 `beginCaptcha()` 取（:49-59）。
+        # 用第五十六轮加的 `__zgjSoraniCalls` 就能把这条钉住，不需要猜时间差。
+        mz = await browser.new_context(viewport={"width": 1280, "height": 900})
+        await mz.add_init_script("localStorage.setItem('zgj.locale', 'zh')")
+        pz = await mz.new_page()
+        await pz.goto(f"{BASE}/#/settings")
+        await pz.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        # 行渲染本身会读一次状态（v1 :388 的 row_mounted_lazy_status 同义），先记下基线
+        await pz.wait_for_timeout(1200)
+        base_status = await pz.evaluate("() => (window.__zgjSoraniCalls || {}).status || 0")
+        base_captcha = await pz.evaluate("() => (window.__zgjSoraniCalls || {}).captcha || 0")
+        await pz.click("[data-testid='sorani-login-btn']")
+        await pz.wait_for_selector("[data-testid='sorani-dialog']", timeout=8000)
+        await pz.wait_for_timeout(1200)
+        after_open = await pz.evaluate(
+            "() => ({ status: (window.__zgjSoraniCalls || {}).status || 0,"
+            " captcha: (window.__zgjSoraniCalls || {}).captcha || 0 })")
+        check("M22 打开对话框时第一个新请求是读状态、不是取验证码（v1 :280）",
+              after_open["status"] > base_status and after_open["captcha"] == base_captcha,
+              f"status {base_status}→{after_open['status']} captcha {base_captcha}→{after_open['captcha']}")
+        chip22 = (await pz.locator("[data-testid='sorani-dialog-status']").inner_text()).strip()
+        check("M22b 打开后状态页显示「未登录」且没有登出按钮（v1 :280 后半）",
+              chip22 == "未登录"
+              and await pz.locator("[data-testid='sorani-dialog-logout']").count() == 0,
+              f"chip={chip22!r}")
+        # 点「开始验证」才该打验证码
+        await pz.click("[data-testid='sorani-start-btn']")
+        await pz.wait_for_selector("[data-testid='sorani-bg-img']", timeout=10000)
+        after_start = await pz.evaluate("() => (window.__zgjSoraniCalls || {}).captcha || 0")
+        check("M22c 只有点了「开始验证」才取验证码（v1 :303 页序不可反）",
+              after_start == base_captcha + 1, f"captcha={after_start} 基线={base_captcha}")
+
+        # ---- M23 窄宽对话框里滑块不溢出（v1 :304 的"controls fit"那一半）----
+        # ⚠ 只测排布，不测 v1 那半边的主题色：web 侧颜色由 CSS 变量承担、
+        #   重绘语义是 Qt 才需要的机制（这条差异我上一轮就写过，别在这里假装覆盖了）。
+        await pz.set_viewport_size({"width": 420, "height": 760})
+        await pz.wait_for_timeout(1200)
+        fit = await pz.evaluate("""() => {
+          const dlg = document.querySelector('[data-testid=sorani-dialog]');
+          const sl = document.querySelector('[data-testid=sorani-slider]');
+          if (!dlg || !sl) return null;
+          const d = dlg.getBoundingClientRect(), e = sl.getBoundingClientRect();
+          return { overflowsRight: e.right > d.right + 1, overflowsLeft: e.left < d.left - 1,
+                   dlgW: Math.round(d.width), sliderW: Math.round(e.width),
+                   // 横向滚动条也算溢出
+                   scrollOverflow: dlg.scrollWidth > dlg.clientWidth + 1 };
+        }""")
+        check("M23 420px 窄窗口里滑块不溢出对话框（v1 :304 的 controls fit 那一半）",
+              fit is not None and not fit["overflowsRight"] and not fit["overflowsLeft"]
+              and not fit["scrollOverflow"],
+              str(fit))
+        await mz.close()
+
         # ============ M19–M21 变尺寸换算（v1 :188 test_display_geometry） ============
         # v1 那条测的是"显示空间 300×180 / 模板 55 / limit=245"这组**换算**，
         # 而 v2 的 mock 把 600/360/110 写死了，所以只测过一种尺寸。
