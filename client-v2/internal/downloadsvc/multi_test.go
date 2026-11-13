@@ -499,11 +499,20 @@ func TestSeasonSpecsAreTwoDifferentSpecs(t *testing.T) {
 	if got := watchstore.SeasonNumber("某剧 第２季"); got != 2 {
 		t.Errorf("宽规格该认全角数字，实得 %d", got)
 	}
-	// 两者对普通「第N季」结论一致（不一致才叫真漂了）
-	for _, title := range []string{"某剧 第三季", "某剧 第12季", "某剧 S03"} {
+	// 交集只到「第N季」为止：两边都必须给同一个季号，不一致才是真漂了。
+	for _, title := range []string{"某剧 第三季", "某剧 第12季", "某剧 第3季"} {
 		if a, b := seasonOfTitle(title), watchstore.SeasonNumber(title); a != b {
-			t.Errorf("%q 两份实现给出不同结果：窄 %d / 宽 %d", title, a, b)
+			t.Errorf("%q 两份实现在交集上给出不同结果：窄 %d / 宽 %d", title, a, b)
 		}
+	}
+	// ⚠ `Sxx` 不在交集里，而且**不该假装在**：
+	// v1 `downloads.py:277` 的 season_of 有 `re.search(r"[Ss](\d+)")` 这一步兜底，
+	// v1 `watchstore.py:52-58` 的 season_number 只用 _SEASON_RE，匹配不到就返回 1。
+	// 我上一版把 "某剧 S03" 放进"两边应一致"的表里，CI 直接红：
+	// 窄 3 / 宽 1 —— 那是我把两份规格的关系想简单了，不是实现错。
+	// 现在改成断言**它们必须不同**，谁哪天"顺手统一"就会红在这里。
+	if a, b := seasonOfTitle("某剧 S03"), watchstore.SeasonNumber("某剧 S03"); a != 3 || b != 1 {
+		t.Errorf("Sxx 兜底只属于窄规格：窄应 3、宽应 1，实得 窄 %d / 宽 %d", a, b)
 	}
 }
 

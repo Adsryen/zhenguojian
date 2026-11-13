@@ -59,8 +59,9 @@ func archiveDramaKey(stem string) string {
 	// 结果把死分支变成活的：`第3季.mkv` 这种只有季号的标题，
 	// v1 归「合集」，我那版会归成 `第3季`。现在照 v1 的实际行为写，
 	// 并在 multi_test 里用 `第3季` 这条用例把差异钉住。
+	// stripSeasonTitle 自己在剥空时返回「合集」（v1 同），所以这里不需要再兜一道——
+	// 上一版留的 `return "合集"` 是 vet 抓到的死代码（unreachable code）。
 	return stripSeasonTitle(stem)
-	return "合集"
 }
 
 // ArchiveGroup 扫描分组条目（前端 types.ArchiveGroupRow 对齐）。
