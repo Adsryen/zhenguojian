@@ -33,7 +33,9 @@ func dramaOf(id, title string) map[string]any {
 	return map[string]any{"id": id, "title": title, "source": "hongguo"}
 }
 
-func TestMultiSeasonOf(t *testing.T) {
+// TestSeasonOfTitle 测 downloads.py:270-281 的窄规格 season_of。
+// （旧名 multiSeasonOf；收进 seasons.go 后本包只剩这一份实现。）
+func TestSeasonOfTitle(t *testing.T) {
 	cases := []struct {
 		title string
 		want  int
@@ -47,7 +49,7 @@ func TestMultiSeasonOf(t *testing.T) {
 		{"某剧 S07 第二季", 2},            // 两种标记都在时，第N季优先（v1 先找 _SEASON_RE）
 	}
 	for _, c := range cases {
-		if got := multiSeasonOf(c.title); got != c.want {
+		if got := seasonOfTitle(c.title); got != c.want {
 			t.Errorf("season_of(%q) = %d，期望 %d", c.title, got, c.want)
 		}
 	}
@@ -73,7 +75,7 @@ func TestMultiStripSeasonAndSafeName(t *testing.T) {
 		{"", "合集"},
 	}
 	for _, c := range cases {
-		if got := multiStripSeason(c.in); got != c.want {
+		if got := stripSeasonTitle(c.in); got != c.want {
 			t.Errorf("strip_season(%q) = %q，期望 %q", c.in, got, c.want)
 		}
 	}
