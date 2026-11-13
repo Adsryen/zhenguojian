@@ -224,6 +224,21 @@ def main():
     # 要硬拦就单独跑 `ports_audit.py --check-spec`（我提交文档前自己跑）。
     _ = ports_audit.check_spec(HERE)
 
+    # 绑定层证据审计：方向 A（前端调了 Go 没有）是真 bug，硬拦；
+    # 等级分布与"前端零引用"名单只报告——它是给我看趋势用的，
+    # 拿它拦路会让人开始绕过门禁（同 ports_audit 的 spec 对账只提示不拦路的理由）。
+    import evidence_audit
+    _ev = evidence_audit.audit()
+    if _ev["missing_in_go"]:
+        print("FAIL 前端调用了 Go 里不存在的绑定：%s" % ", ".join(_ev["missing_in_go"]))
+        print("     （mock 面不走桥，Playwright 全绿也看不见这类错，所以在这里硬拦）")
+        return 1
+    _dist = " / ".join("%s %d" % (k.split("（")[0], v) for k, v in
+                       sorted(_ev["distribution"].items(), key=lambda kv: -kv[1]))
+    print("绑定证据审计：%d 个绑定，前端零引用 %d 个（%s）；等级：%s"
+          % (_ev["bindings"], len(_ev["not_called"]),
+             ", ".join(_ev["not_called"]) or "无", _dist))
+
     scripts = sorted(f for f in os.listdir(HERE)
                      if f.endswith("_verify.py") and (not args.only or args.only in f))
     if not scripts:
