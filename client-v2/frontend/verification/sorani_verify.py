@@ -53,6 +53,30 @@ def port_open(host, port):
         return s.connect_ex((host, port)) == 0
 
 
+async def press_outside_then_drag(page, track_sel, handle_sel, dx_total, steps=12):
+    """v1 test_press_outside_handle_ignored：从把手**外面**按下再拖，
+    整段必须被忽略（不该把轨道当成把手来拖）。"""
+    tb = await page.locator(track_sel).bounding_box()
+    hb = await page.locator(handle_sel).bounding_box()
+    assert tb and hb
+    await page.mouse.move(tb["x"] + tb["width"] - 4, tb["y"] + tb["height"] / 2)  # 靠右端，离把手远
+    await page.mouse.down()
+    for i in range(1, steps + 1):
+        await page.mouse.move(tb["x"] + tb["width"] - 4 - i * 8, tb["y"] + tb["height"] / 2)
+        await page.wait_for_timeout(12)
+    await page.mouse.up()
+
+
+async def tiny_drag(page, handle_sel, dx=1):
+    """v1 test_short_drag_discarded：只拖 1px 不该发 track（真人判定不过）。"""
+    await real_drag(page, handle_sel, dx, steps=2, dy_jitter=0)
+
+
+async def many_point_drag(page, handle_sel, dx_total, steps):
+    """v1 test_point_cap_4000：造出超过上限的移动事件，看点位是否被夹住。"""
+    await real_drag(page, handle_sel, dx_total, steps=steps, dy_jitter=1)
+
+
 async def real_drag(page, handle_sel, dx_total, steps=20, dy_jitter=1):
     """page.mouse 真实事件链：按下 → 分步移动 → 释放（服务端拒纯合成瞬移）。"""
     box = await page.locator(handle_sel).bounding_box()
@@ -231,6 +255,145 @@ async def main():
             txt = (await page.locator("[data-testid='sorani-status']").inner_text()).strip()
             check("M6 重试成功→已登录→登出→未登录", False, f"retry_badge={m6a} final_badge={txt}")
         await ctx.close()
+
+        # ============ M9–M13：v1 用测试钉住的滑块语义（自带一个干净 context） ============
+        # ⚠ 第一版这段我插在 `ctx.close()` **之后**，于是 Page.evaluate 直接
+        #   TargetClosedError —— 而更糟的是它当时的表现可以是"少跑几条但整体还绿"。
+        #   现在自己开 ctx3/pc，与 M7 的 ctx2 同一个套路，不再依赖前面的页面活着。
+        ctx3 = await browser.new_context(viewport={"width": 1280, "height": 900})
+        pc = await ctx3.new_page()
+        await pc.goto(f"{BASE}/#/settings")
+        await pc.wait_for_selector("[data-testid='sorani-section']", timeout=15000)
+        await pc.click("[data-testid='sorani-login-btn']")
+        await pc.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        await pc.click("[data-testid='sorani-start-btn']")
+        await pc.wait_for_selector("[data-testid='sorani-slider']", timeout=8000)
+
+        # ============ M9–M13：v1 用测试钉住的滑块语义（M8 只测了字段值） ============
+        # 第五十五轮对账时发现：v1 test_sorani_login.py 有 21 条用例，
+        # 其中四条属于"轨道形状之外"的滑块语义，v2 一条都没测：
+        #   · track 的**键集合必须正好是那 7 个**（M8 只测了其中几个值，
+        #     多塞一个键或少一个键都不会被现有断言抓到，而 Go valid() 按契约校验）；
+        #   · x 钳到 limit、**y 不钳**（y 是相对按下点的原始抖动，钳了就等于抹掉真人轨迹）；
+        #   · 只拖 1px 应当丢弃（真人判定不过）；
+        #   · 从把手外面按下再拖应当整段忽略。
+        # 另加一条上限对账（v1 test_point_cap_4000）。
+
+        # ---- M9/M10：键集合 + x 钳位 y 不钳 ----
+        await pc.evaluate("() => { window.__zgjSoraniLastLogin = null }")
+        # 往**右端外**拖：x 应该被钳到 600-110=490，而 dy 用负的抖动，y 应保留负值
+        await real_drag(pc, "[data-testid='sorani-handle']", 900, steps=26, dy_jitter=-9)
+        try:
+            await pc.wait_for_selector("[data-testid='sorani-page-creds']:visible", timeout=8000)
+            await pc.fill("[data-testid='sorani-identifier']", "u_m9")
+            await pc.fill("[data-testid='sorani-password']", "p_m9")
+            await pc.click("[data-testid='sorani-submit-btn']")
+            await pc.wait_for_function("() => window.__zgjSoraniLastLogin", timeout=8000)
+            t9 = await pc.evaluate("() => window.__zgjSoraniLastLogin")
+            track = (t9 or {}).get("track") or {}
+            keys = sorted(track.keys())
+            want_keys = sorted([
+                "bgImageWidth", "bgImageHeight", "startTime", "stopTime",
+                "templateImageWidth", "templateImageHeight", "trackList",
+            ])
+            check("M9 track 的键集合正好是 7 个（v1 test_drag_yields_go_shape_track）",
+                  keys == want_keys, f"keys={keys}")
+            pts = track.get("trackList") or []
+            if pts:
+                # x 钳位：末点的 x 不该超过 490；而且拖到 900px 远，说明确实撞到上限
+                xs = [q["x"] for q in pts]
+                ys = [q["y"] for q in pts]
+                check("M10 x 钳到 [0,490]，而 y **不钳**（保留负抖动，v1 test_x_clamps_to_limit_y_does_not）",
+                      max(xs) <= 490 and min(ys) < 0,
+                      f"max x={max(xs)} min y={min(ys)}")
+            else:
+                check("M10 x 钳到 [0,490]，而 y **不钳**（保留负抖动，v1 test_x_clamps_to_limit_y_does_not）",
+                      False, "trackList 空")
+            await pc.wait_for_selector("[data-testid='sorani-dialog']", state="detached", timeout=8000)
+        except Exception as exc:
+            check("M9 track 的键集合正好是 7 个（v1 test_drag_yields_go_shape_track）", False, repr(exc)[:120])
+            check("M10 x 钳到 [0,490]，而 y **不钳**（保留负抖动，v1 test_x_clamps_to_limit_y_does_not）",
+                  False, "没走到提交")
+
+        # ---- M11：只拖 1px 应该丢弃，停在滑块页 ----
+        # 回到滑块页再测两条"该被忽略的拖动"。
+        # ⚠ 上一版这里只等 `sorani-login-btn`，超时了——因为 M10 那一次登录成功后
+        #   对话框**还开着**（停在 creds/status 页），此时页面上根本没有行内按钮。
+        #   这两个入口名字太像（sorani-login-btn = 行内开框；sorani-start-btn = 框内「开始验证」），
+        #   我把状态假设成"已关窗"才导致红。现在按当前界面实际有什么来点：
+        #   先关掉可能还开着的对话框，再走行内入口。
+        if await pc.locator("[data-testid='sorani-dialog']").count():
+            await pc.click("[data-testid='sorani-close-btn']")
+            await pc.wait_for_selector("[data-testid='sorani-dialog']", state="detached", timeout=8000)
+        # ⚠ 第二次修这条：上一次我只补了"先关窗"，还是等不到 `sorani-login-btn`。
+        #   真正的原因是 **M10 那一次登录成功了**：登录成功后行内按钮会变成
+        #   「登出」（sorani-logout-btn），`sorani-login-btn` 是 v-if 掉的。
+        #   所以这里要先登出回到未登录态，才有入口可点。
+        #   （我前两版都在猜"选择器名字对不对"，而该问的是"界面此刻是什么状态"。）
+        if await pc.locator("[data-testid='sorani-logout-btn']").count():
+            await pc.click("[data-testid='sorani-logout-btn']")
+            await pc.wait_for_selector("[data-testid='sorani-login-btn']", timeout=10000)
+        await pc.wait_for_selector("[data-testid='sorani-login-btn']", timeout=8000)
+        await pc.click("[data-testid='sorani-login-btn']")
+        await pc.wait_for_selector("[data-testid='sorani-start-btn']", timeout=8000)
+        await pc.click("[data-testid='sorani-start-btn']")
+        await pc.wait_for_selector("[data-testid='sorani-slider']", timeout=8000)
+        await tiny_drag(pc, "[data-testid='sorani-handle']")
+        await pc.wait_for_timeout(900)
+        # ⚠ 这里不能用 count()：对话框是 **v-show 三态**（组件头注释自己写着
+        #   「三页栈 → v-show 三态」），三个页面永远都在 DOM 里，
+        #   count() 恒为 1 —— 我前两版就是被它骗成"产品有 bug"。判可见性才对。
+        still_captcha = await pc.locator("[data-testid='sorani-page-creds']:visible").count()
+        handle_off = await pc.evaluate(
+            "() => { const h=document.querySelector('[data-testid=sorani-handle]');"
+            " return h ? Math.round(h.getBoundingClientRect().left) : null }")
+        check("M11 只拖 1px 被丢弃，没进账密页（v1 test_short_drag_discarded）",
+              still_captcha == 0, f"creds 页出现={still_captcha} 把手 left={handle_off}")
+        # 把手该回到原位
+        await pc.evaluate("() => document.querySelector('[data-testid=sorani-slider]')?.getBoundingClientRect().x")
+        left_now = await pc.evaluate(
+            "() => { const h=document.querySelector('[data-testid=sorani-handle]');"
+            " const s=document.querySelector('[data-testid=sorani-slider]');"
+            " if (!h || !s) return null;"
+            " if (s.getBoundingClientRect().width === 0) return null;"
+            " return Math.round(h.getBoundingClientRect().left - s.getBoundingClientRect().left) }")
+        check("M11b 丢弃后把手复位（offset 回 0；读到 null 算失败，不算没动）",
+              left_now is not None and left_now <= 2, f"把手相对左缘={left_now}")
+
+        # ---- M12：从把手外面按下整段忽略（v1 test_press_outside_handle_ignored）----
+        await press_outside_then_drag(pc, "[data-testid='sorani-slider']",
+                                      "[data-testid='sorani-handle']", 200)
+        await pc.wait_for_timeout(900)
+        left2 = await pc.evaluate(
+            "() => { const h=document.querySelector('[data-testid=sorani-handle]');"
+            " const s=document.querySelector('[data-testid=sorani-slider]');"
+            " if (!h || !s) return null;"
+            " if (s.getBoundingClientRect().width === 0) return null;"
+            " return Math.round(h.getBoundingClientRect().left - s.getBoundingClientRect().left) }")
+        creds12 = await pc.locator("[data-testid='sorani-page-creds']:visible").count()
+        check("M12 把手外按下再拖：整段忽略（没进账密页、把手没动）",
+              creds12 == 0 and left2 is not None and left2 <= 2,
+              f"creds={creds12} 把手左缘={left2}")
+
+        # ---- M13：点位上限（v1 test_point_cap_4000）----
+        await many_point_drag(pc, "[data-testid='sorani-handle']", 240, steps=600)
+        await pc.wait_for_timeout(1200)
+        creds13 = await pc.locator("[data-testid='sorani-page-creds']:visible").count()
+        t13 = await pc.evaluate("() => window.__zgjSoraniLastLogin")
+        if creds13:
+            # 拖成功进了账密页；点位数量只能在提交时才拿得到，这里用 mock 侧计数
+            await pc.fill("[data-testid='sorani-identifier']", "u_m13")
+            await pc.fill("[data-testid='sorani-password']", "p_m13")
+            await pc.click("[data-testid='sorani-submit-btn']")
+            await pc.wait_for_function("() => window.__zgjSoraniLastLogin", timeout=8000)
+            t13 = await pc.evaluate("() => window.__zgjSoraniLastLogin")
+            n13 = len(((t13 or {}).get("track") or {}).get("trackList") or [])
+            check("M13 600 步拖动：点位被夹在上限内且仍发得出（v1 test_point_cap_4000）",
+                  2 <= n13 <= 4002, f"点位数={n13}")
+        else:
+            check("M13 600 步拖动：点位被夹在上限内且仍发得出（v1 test_point_cap_4000）",
+                  False, "拖了 600 步却没进账密页")
+
 
         # ================= 页 2（en，独立 context）：M7 =================
         ctx2 = await browser.new_context(viewport={"width": 1280, "height": 900})

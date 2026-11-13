@@ -45,12 +45,36 @@ _PATTERNS = [
 ]
 
 
+def strip_trailing_comments(text):
+    """剥掉行尾的 `#` 注释（整行注释本来就不匹配四种模式，但**行尾**注释会）。
+
+    ⚠ 第五十五轮的真实事故：`preload_openpath_verify.py:18` 写的是
+        PORT = int(os.environ.get("VERIFY_PORT", "5198"))   # 原来默认 5187，第二个服务器取 PORT+1=5188
+    注释里的 5187/5188 都是**历史号**，早就不归它。而 D 模式带 `re.S`，
+    `[^)]*?` 会从前面某次 `port_open(` 一路吞进注释，把 5188 算成这个脚本的端口。
+    后果不是报表难看，而是两件事同时错：
+      · 全量回归把别人残留的监听**误判成 preload 泄漏**（"跑完仍占 5188"），
+      · 真正被抢号的 sorani 则整只脚本跑不了。
+    判据把注释当事实，就会同时产出假红与假归属。
+    """
+    out = []
+    for line in text.split("\n"):
+        i = line.find("#")
+        if i >= 0 and line[:i].count('"') % 2 == 0 and line[:i].count("'") % 2 == 0:
+            line = line[:i]
+        out.append(line)
+    return "\n".join(out)
+
+
 def extract_ports(text):
     """返回 {端口: {命中方式, …}}。宁可多收（同一脚本多种写法都指向同端口无害），
-    不能漏收——漏收才是假审计。"""
+    不能漏收——漏收才是假审计。**但注释不是写法**：先剥行尾注释。"""
     out = collections.defaultdict(set)
+    body = strip_trailing_comments(text)
     for rx, how in _PATTERNS:
-        for m in re.finditer(rx, text, re.M | re.S):
+        # D（调用现场）必须逐行匹配：跨行匹配就是上一版误收注释的根因
+        flags = re.M if how == "调用现场" else (re.M | re.S)
+        for m in re.finditer(rx, body, flags):
             out[m.group(1)].add(how)
     return dict(out)
 
@@ -227,6 +251,19 @@ def selftest():
         # 拼接出来的端口（PORT+1）静态算不出，但真脚本会显式写第二个常量；
         # 这里钉住"不瞎猜"：只抽显式出现的号
         ("隐式 PORT+1 不猜", "PORT = 5189\nSECOND = PORT + 1\n", {"5189"}),
+        # ⚠ 本轮事故的真实形状：**代码行尾**的历史注释。
+        # 整行注释的用例早就有，但这一种要等 D 模式跨行 + 行尾注释同时发生才会漏，
+        # 所以我上一版加的那条测试**没能防住**这次 —— 记下来：
+        # 测过一种形状不等于测过这一类形状。
+        ("行尾历史注释不算（本轮事故）",
+         'PORT = int(os.environ.get("VERIFY_PORT", "5198"))   # 原来默认 5187，第二个服务器取 PORT+1=5188\n'
+         'PLAIN_PORT = int(os.environ.get("VERIFY_PLAIN_PORT", "5199"))\n'
+         'def f():\n    return port_open("127.0.0.1", PORT)\n',
+         {"5198", "5199"}),
+        # D 模式不许跨行：跨行就会把后面注释里的号吸进来
+        ("D 跨行不吸后面的号",
+         'PORT = 5203\nif port_open("h", PORT):\n    # 以前这里用过 5190\n    pass\n',
+         {"5203"}),
     ]
     bad = 0
     for name, text, want in cases:
