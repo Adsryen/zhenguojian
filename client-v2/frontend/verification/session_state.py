@@ -188,6 +188,29 @@ def main(argv=None):
     a("")
     body = "\n".join(lines) + "\n"
 
+    def _norm(text):
+        return norm(text)
+
+    if args.check:
+        old = io.open(OUT, encoding="utf-8").read() if os.path.exists(OUT) else ""
+        if _norm(old) == _norm(body):
+            print("PASS SESSION-STATE.md 与现测一致（比较忽略易变行）")
+            return 0
+        import difflib
+        diff = [d for d in difflib.unified_diff(_norm(old).splitlines(),
+                                                _norm(body).splitlines(),
+                                                "文件", "现测", lineterm="", n=0)][2:]
+        print("FAIL SESSION-STATE.md 与现测不一致（过期或被人手改）：")
+        for d in diff[:12]:
+            print("  " + d[:150])
+        print("  重新生成：python3 verification/session_state.py")
+        return 1
+
+    io.open(OUT, "w", encoding="utf-8").write(body)
+    print("已生成 %s｜累计提交 %d｜HEAD %s" % (OUT, commits(), head()))
+    return 0
+
+
 def _selftest():
     """比较器的形状测试：它自己的两次错都用测试钉住 ——
     第一版把时间戳放进比较（刚生成就自红），
