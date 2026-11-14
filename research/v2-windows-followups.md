@@ -275,3 +275,45 @@ player/selftest/tray/updater/watchstore）。**但它们全都没有碰过真实
 6. 排错用：**Ctrl+Shift+F12** 开 Chromium DevTools（单按 F12 无效）。
 
 跑完把 1、2 的输出贴回来，我按结果决定 R26（要不要补 `release`）和余下的队列。
+
+
+---
+
+## 真机反馈第一批（三条播放 bug）→ `v2.0.0-alpha.27`
+
+发布页：https://github.com/Adsryen/zhenguojian/releases/tag/v2.0.0-alpha.27
+构建提交 `3c71402`，CI run `43619338982` ✓，四个资产齐（exe 21MB / app.zip 8MB /
+runtime.zip 139MB / build-info.json）。
+
+### 三条是同一条链，逐条的代码证据
+
+| 用户原话 | 根因（文件:行） | 修法 |
+|---|---|---|
+| 「关闭播放之后，后面的就再也无法播放了」（截图红字 `player: 服务已关闭`） | `app.go:374` 关闭按钮调 `Service.Close()`；Close 置 `closed=true`，而 `Open()` 一见它就返回 `ErrClosed`（`service.go:355/382`）。这个 Service 是**应用生命周期**的（app.go 只建一次）→ 点一次关闭，本进程内再也播不了 | 新增 `Service.Stop()`（非终态：quit mpv + 清会话状态，不置 closed）；`PlayerClosePlayer` 改调 Stop；应用退出那路（`app.go:157`）仍走 Close |
+| 「弹窗播放，关闭又会被二次打开」 | 后半句：`handleEventLocked` 的重建守卫只有 `if s.quitting || s.closed`（`service.go:861`），用户从 mpv 窗点 X 时两者都不是真 → 体面退出被当成崩溃 → `rebuildLocked` 重新 spawn。而 **v1 根本没有死亡重建**（`player.py` grep rebuild/respawn/意外 零命中），这条是 v2 自加的（`service.go:18` 注释写着） | mpv 体面退出会先发 `shutdown` 事件（`mpv/player.go:653`）→ 做成类型化哨兵 `mpv.ErrGracefulShutdown`，服务层 `errors.Is` 分流：关窗不重建并发 `player:stopped`（前端落到"已停止、可再播"），真崩了仍重建；`Open()` 复位 `quitting`，否则上一集的抑制标志会害本集崩了也不重建 |
+| 「点击关闭根本关闭不了」 | `stores/player.ts:shutdown()` 里 `await api.closeVideo()` **无上限等待**，IPC 卡住时路由走不到 `router.back()` | 1.2s 上限先回界面（v1 的 `stop(blocking=False)` 就是这个语义，`player.py:728-735` 注释明写 "never freezes the window"）；Go 侧 Stop 的 quit 也改成 goroutine 非阻塞 |
+
+### 前半句「为什么是弹窗」我仍然缺数据，所以把它变成可见
+
+`PlayerAttach` 一直返回 `{embedded, reason}`，但 **reason 从不显示**，
+所以我只能猜。现在真机回退时视频区角落显示
+「画面未内嵌（独立窗口播放）：{原因}」（i18n `player.embedFallback` 中英成对）。
+**请把这句原样抄回来** —— 这是定位内嵌失败的唯一入口。
+
+### 验证边界（不夸大）
+
+- 本机：`run_all` 30/30、失败 0、端口泄漏 0；typecheck 0；i18n 617/617 对称。
+- CI：`go vet` + internal 全量 Go 单测 **231/231**；
+  `internal/player` 由 alpha.26 那次的 **20/20 变成 23/23** ——
+  这 3 条正是本次新增用例，且那道门要求"执行数==声明数、缺哪个点名哪个"，
+  所以"跑了"是有日志行号的证据，不是我的推断。
+- 我第一版把断言写成 `st.EpIndex` 与 `h.em.has(...)`，**两个名字都是我编的**
+  （真实是 `Snapshot.Episode.Index`、`waitEvent/collect`），grep 才发现。
+  在"只有 CI 能编译 Go"的处境下，编方法名的代价就是一次构建失败。
+- **这三条都还没在真机验证过**：修的是你报的现象，我这边没有真机。
+
+### 请复测这条路径（顺序有意义）
+
+进播放 → **关视频窗**（不点页面关闭）→ 再播下一集 → 点页面「关闭」→ 再播一次。
+外加：视频区角落那句「画面未内嵌…」的**原因文本**，以及
+`zhenGuoJian-v2.exe --selftest` 的完整输出（alpha.26 那次还没跑）。
