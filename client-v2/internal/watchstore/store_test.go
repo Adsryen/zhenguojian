@@ -574,9 +574,14 @@ func TestWriteFailureKeepsOldFileAndDirty(t *testing.T) {
 	if err := os.Remove(dir); err != nil {
 		t.Fatalf("腾出路径: %v", err)
 	}
-	f, err := os.Create(dir)
-	if err != nil {
-		t.Fatal(err)
+	// ⚠ 用 cerr 而不是 err：下面紧跟着 `err := s.Flush()`，
+	//   我第一版在这里写了 `f, err := ...` 把 err 先声明了，
+	//   于是那行变成 "no new variables on left side of :=" ——
+	//   一个纯编译错，linux 与 windows 一起红（本机没有可用 Go，
+	//   这类错只能靠 CI 发现，所以更要写完就逐行看一遍而不是指望编译器兜底）。
+	f, cerr := os.Create(dir)
+	if cerr != nil {
+		t.Fatal(cerr)
 	}
 	_ = f.Close()
 	s.SaveWatch("hongguo:a", "t", "c", 2, 10, 100, true)
