@@ -1471,7 +1471,11 @@ func TestDefaultDataDirEnv(t *testing.T) {
 	got := DefaultDataDir()
 	if runtime.GOOS == "windows" {
 		if !filepath.IsAbs(got) || filepath.Base(got) != "ZhenguoJian" {
-			t.Fatalf("windows default 应落在 %LOCALAPPDATA%\\ZhenguoJian，实得 %q", got)
+			// ⚠ 文案里不要写 `%LOCALAPPDATA%`：vet 会把 `%L` 当格式动词
+			//   （`unknown verb L`），而 `go test` 默认跑 vet ——
+			//   所以这一处同时让 linux 与 windows 两个 job 都红。
+			//   改成不带百分号的说法，语义一样清楚。
+			t.Fatalf("windows default 应落在 LOCALAPPDATA 下的 ZhenguoJian，实得 %q", got)
 		}
 	} else if got != filepath.Join(homeDir(), ".zhenguojian") {
 		t.Fatalf("unix default: %q", got)
