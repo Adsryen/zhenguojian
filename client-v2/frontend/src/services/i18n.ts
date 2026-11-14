@@ -185,7 +185,7 @@ const zh: Record<string, string> = {
   'tray.menu.check': '检查更新',
   'tray.menu.quit': '退出程序',
   'tray.latest': '当前已是最新版本',
-  'tray.hint': '关闭主窗口后程序在系统托盘继续运行（下载不中断）：双击托盘图标恢复窗口，右键菜单可显示 / 检查更新 / 退出',
+  'tray.hint': '关闭窗口即退出程序（进行中的下载与合并会停止，与旧版一致）。托盘图标用于通知与追剧更新提醒；右键菜单可显示主窗口 / 检查更新 / 退出',
 
   // ---- 存储与关于 ----
   'settings.storage': '存储与关于',
@@ -891,7 +891,7 @@ const en: Record<string, string> = {
   'tray.menu.check': 'Check for updates',
   'tray.menu.quit': 'Exit',
   'tray.latest': 'You are on the latest version',
-  'tray.hint': 'Closing the window keeps the app running in the system tray (downloads continue): double-click the tray icon to restore, right-click for Show / Check updates / Exit',
+  'tray.hint': 'Closing the window quits the app (in-progress downloads and merges stop, matching the legacy client). The tray icon carries notifications and follow-up alerts; right-click for Show window / Check updates / Exit',
 
   'settings.storage': 'Storage & About',
   'settings.storage.hint': 'ZhenGuoJian V2 · short-drama aggregator (source adapters reference guoapp). Read-only below.',

@@ -15,6 +15,8 @@ import (
 	"time"
 	"unsafe"
 
+	"zhenguojian/client-v2/internal/winapi"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -56,6 +58,15 @@ func init() {
 // wndclassexw：x/sys/windows 未导出 WNDCLASSEXW，按 64 位内存布局手写
 // （沿用 spike/mpvembed/window_windows.go 验证过的结构）。
 type wndclassexw struct {
+	// ⚠ 字段顺序与个数必须逐位对上 Win32 的 WNDCLASSEXW，
+	//   因为 RegisterClassExW 会先校验 cbSize 再按偏移读后面的指针。
+	//   真机反馈（alpha.27 截图）「mpv: RegisterClassExW(ZgjVideoHost) 失败:
+	//   The parameter is incorrect.」有两个独立成因，这一版一起改：
+	//   ① 原来 LpszClassName 写在 LpszMenuName **前面**（真实顺序是
+	//      hbrBackground → lpszMenuName → lpszClassName → hIconSm），
+	//      等于把类名指针塞进菜单槽；
+	//   ② 原来**缺 hIconSm**，于是 `CbSize = unsafe.Sizeof(wc)` 比真实结构
+	//      小 8 字节 → 系统直接判 ERROR_INVALID_PARAMETER(87)。
 	CbSize        uint32
 	Style         uint32
 	LpfnWndProc   uintptr
@@ -65,9 +76,18 @@ type wndclassexw struct {
 	HIcon         windows.Handle
 	HCursor       windows.Handle
 	HBackground   windows.Handle
-	LpszClassName *uint16
 	LpszMenuName  *uint16
+	LpszClassName *uint16
+	HIconSm       windows.Handle
 }
+
+// 结构布局自检（windows job 会跑）：错了就是又一个"从来没成功过"的 bug。
+const (
+	wantWndClassExSize  = 80
+	wantClassNameOffset = 64
+	wantMenuNameOffset  = 56
+	wantInstanceOffset  = 24
+)
 
 var (
 	embedClassOnce sync.Once
@@ -117,10 +137,23 @@ func registerEmbedClass() error {
 			return
 		}
 		bg, _, _ := procEmbed["GetStockObject"].Call(uintptr(blackBrushStock))
+		/* HInstance 必须是**装着 wndproc 的那个模块**的句柄。
+		   原来这里写的是 `windows.CurrentProcess()` —— 查 x/sys 源码：
+		       func CurrentProcess() Handle { return Handle(^uintptr(1 - 1)) }
+		   那是 `0xFFFFFFFFFFFFFFFF` 的**进程伪句柄**，不是 HMODULE，
+		   RegisterClassExW 拿到它直接 ERROR_INVALID_PARAMETER(87)。
+		   也就是说内嵌这条路在 Windows 上从来没成功过一次，
+		   用户看到的"弹窗播放"就是它（alpha.27 的诊断文字第一次给出证据）。
+		   同一个错误在 tray_windows.go 还犯了三次，收成 winapi.SelfModule 一处。 */
+		hInst, errInst := winapi.SelfModule()
+		if errInst != nil {
+			embedClassErr = fmt.Errorf("mpv: %w", errInst)
+			return
+		}
 		var wc wndclassexw
 		wc.CbSize = uint32(unsafe.Sizeof(wc))
 		wc.LpfnWndProc = windows.NewCallback(embedWndProc)
-		wc.HInstance = windows.CurrentProcess()
+		wc.HInstance = hInst
 		wc.HBackground = windows.Handle(bg)
 		wc.LpszClassName = cls
 		// LazyProc.Call 第三返回值即 GetLastError。撞类容忍
@@ -204,6 +237,12 @@ func NewEmbedHost() (*EmbedHost, error) {
 	if err != nil {
 		return nil, err
 	}
+	// CreateWindowExW 的 hInstance 同样要模块句柄，不是进程伪句柄
+	// （见 registerEmbedClass 的说明；同一个错误原来在这里也犯了一次）。
+	hostModule, err := winapi.SelfModule()
+	if err != nil {
+		return nil, fmt.Errorf("mpv: 视频宿主窗取模块句柄失败: %w", err)
+	}
 	// 先建成隐藏态（不带 WS_VISIBLE）：首帧就绪前不放画面，避免黑块抢位。
 	ret, callErr, _ := procEmbed["CreateWindowExW"].Call(
 		0,
@@ -211,7 +250,7 @@ func NewEmbedHost() (*EmbedHost, error) {
 		0,
 		uintptr(wsChildEmbed),
 		0, 0, 1, 1,
-		uintptr(parent), 0, uintptr(windows.CurrentProcess()), 0,
+		uintptr(parent), 0, uintptr(hostModule), 0, // 同一次 SelfModule，不再用进程伪句柄
 	)
 	if ret == 0 {
 		return nil, fmt.Errorf("mpv: CreateWindowExW(%s) 失败 (lasterr=%d)", EmbedWindowClass, callErr)

@@ -26,6 +26,8 @@ import (
 	"time"
 	"unsafe"
 
+	"zhenguojian/client-v2/internal/winapi"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -102,17 +104,23 @@ type notifyIconDataV1 struct {
 
 // wndclassexwTray：x/sys/windows 未导出 WNDCLASSEXW，同 embed_windows.go 手写布局。
 type wndclassexwTray struct {
-	CbSize        uint32
-	Style         uint32
-	LpfnWndProc   uintptr
-	CbClsExtra    int32
-	CbWndExtra    int32
-	HInstance     windows.Handle
-	HIcon         windows.Handle
-	HCursor       windows.Handle
-	HBackground   windows.Handle
-	LpszClassName *uint16
+	CbSize      uint32
+	Style       uint32
+	LpfnWndProc uintptr
+	CbClsExtra  int32
+	CbWndExtra  int32
+	HInstance   windows.Handle
+	HIcon       windows.Handle
+	HCursor     windows.Handle
+	HBackground windows.Handle
+	/* ⚠ 第五轮真机反馈连带修正：WndClassEx 的真实顺序是
+	   hbrBackground → lpszMenuName → lpszClassName → hIconSm。
+	   原来这里把 ClassName 写在 MenuName 前面，等于把类名指针
+	   塞进菜单槽、而类名槽是 nil —— RegisterClassExW 直接
+	   ERROR_INVALID_PARAMETER(87)。托盘窗口的注册与视频宿主窗
+	   犯的是同一对错误（句柄 + 字段顺序），所以一起改。 */
 	LpszMenuName  *uint16
+	LpszClassName *uint16
 	HIconSm       windows.Handle
 }
 
@@ -194,7 +202,14 @@ func (b *winBackend) threadMain() {
 	var wc wndclassexwTray
 	wc.CbSize = uint32(unsafe.Sizeof(wc))
 	wc.LpfnWndProc = windows.NewCallback(trayWndProc)
-	wc.HInstance = windows.CurrentProcess()
+	// 原来这里用 windows.CurrentProcess()，那是进程伪句柄不是 HMODULE
+	// （x/sys: `Handle(^uintptr(1 - 1))`）→ 注册必然 87。
+	hInst, hErr := winapi.SelfModule()
+	if hErr != nil {
+		b.ready <- fmt.Errorf("tray: %w", hErr)
+		return
+	}
+	wc.HInstance = hInst
 	wc.LpszClassName = cls
 	if ret, _, e := trayProc["RegisterClassExW"].Call(uintptr(unsafe.Pointer(&wc))); ret == 0 && e != windows.ERROR_CLASS_ALREADY_EXISTS {
 		b.ready <- fmt.Errorf("tray: RegisterClassExW(%s) 失败: %w", trayWndClass, e)
@@ -210,7 +225,7 @@ func (b *winBackend) threadMain() {
 		0, uintptr(unsafe.Pointer(cls)), 0, 0,
 		0, 0, 0, 0,
 		0, // parent = NULL → 顶层窗
-		0, uintptr(windows.CurrentProcess()), 0)
+		0, uintptr(hInst), 0)
 	if ret == 0 {
 		b.ready <- fmt.Errorf("tray: CreateWindowExW(%s) 失败: %w", trayWndClass, ce)
 		return
@@ -281,7 +296,14 @@ func (b *winBackend) destroyIconIfPrivate() {
 
 // loadTrayIcon 三级回落：exe 资源 id=3 小尺寸私有副本 → exe 资源默认尺寸 → 系统 IDI_APPLICATION。
 func loadTrayIcon() (windows.Handle, bool) {
-	hInst := windows.CurrentProcess()
+	// 从 exe 资源取图标要的是**模块句柄**；原来传进程伪句柄，
+	// 于是注释里写的"三级回落"前两级（资源 id=3 / 默认尺寸）
+	// 永远失败，只会静默落到系统通用图标。取不到就老实返回 false，
+	// 由调用方走系统图标，不要把 0 句柄继续往下传。
+	hInst, err := winapi.SelfModule()
+	if err != nil {
+		return 0, false
+	}
 	cx, _, _ := trayProc["GetSystemMetrics"].Call(smCxSmIcon)
 	cy, _, _ := trayProc["GetSystemMetrics"].Call(smCySmIcon)
 	if cx == 0 {
