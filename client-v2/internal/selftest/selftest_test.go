@@ -369,7 +369,13 @@ func TestLookupToolFallsBackToPATH(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PATH 里的桩应该能找到: %v", err)
 	}
-	if filepath.Base(got) != "ffprobe" {
+	// ⚠ 上一轮我只改了桩名（加 .exe）却忘了改**这条断言**，
+	//   于是产品在 Windows 上明明找对了（实测 got=...\ffprobe.exe），
+	//   测试仍红在"找到了别的东西"——那是我自己的判据不看平台，
+	//   而且我注释里写了"判据也跟着比 Base（去扩展名后）"却没执行它：
+	//   **注释承诺过的事要做完，否则注释本身就是新的假声明。**
+	base := strings.TrimSuffix(filepath.Base(got), filepath.Ext(got))
+	if base != "ffprobe" {
 		t.Fatalf("找到了别的东西：%q", got)
 	}
 }
