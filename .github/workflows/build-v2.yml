@@ -12,8 +12,13 @@ permissions:
   contents: write
 
 jobs:
-  # Go 单测跑在 ubuntu：这批测试假设 POSIX（0600 权限位、$HOME 数据目录、chmod 造写失败），
-  # 在 windows runner 上会因平台语义而非产品问题变红（windows job 里留了实测日志）。
+  # Go 单测跑在 ubuntu。历史上这批测试假设 POSIX（0600 权限位、$HOME 数据目录、
+  # chmod 造写失败、ffprobe 桩无扩展名、MinGap=1ns 绑真实时钟精度），
+  # 在 windows runner 上会因**平台语义**而非产品问题变红 ——
+  # 第五轮真机反馈期间给 windows job 加了 internal 测试后，9 条果然当场红。
+  # 现已逐条改成平台自洽（见各条注释里的判据），windows 与 ubuntu 都跑同一套。
+  # 注意：改成"跳过 Windows 的 mode 检查"不等于验证过私密性，
+  # Windows 的访问控制靠 profile 目录 + ACL，那不在这些用例能力内（已登记待办）。
   test-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -119,6 +124,17 @@ jobs:
   windows:
     runs-on: windows-latest
     timeout-minutes: 30
+    env:
+      # ⚠ 第五轮真机反馈期间 alpha.28 的 tag 构建就是在这里失败的：
+      #   失败步骤 "Download mpv"，日志里是 403 + "rate limit"。
+      #   本 workflow 此前**从没给 windows job 传过 token**，
+      #   那句 `Invoke-RestMethod https://api.github.com/...` 因此是匿名请求，
+      #   GitHub 对匿名请求按 IP 限流 60 次/小时，而 runner 是共享 IP ——
+      #   能不能过全看运气。这跟用户更新器报的 403 是同一个根因
+      #   （公开镜像共用一个 API 配额，`gh-proxy.com/https://api.github.com/...`
+      #   实测回 "API rate limit exceeded"）。
+      #   带上 jobs 自带的 GITHUB_TOKEN 后配额升到 5000 次/小时。
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
@@ -322,7 +338,23 @@ jobs:
       - name: Download mpv
         run: |
           $ErrorActionPreference = "Stop"
-          $rel = Invoke-RestMethod -Headers @{ "User-Agent" = "ci" } https://api.github.com/repos/mpv-player/mpv/releases/latest
+          $hdrs = @{ "User-Agent" = "zhenguojian-ci" }
+          if ($env:GITHUB_TOKEN) { $hdrs["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
+          $rel = $null
+          for ($try = 1; $try -le 3; $try++) {
+            try {
+              $rel = Invoke-RestMethod -Headers $hdrs https://api.github.com/repos/mpv-player/mpv/releases/latest
+              break
+            } catch {
+              # 限流是暂时性的：退避后再试；三次都失败才判死，
+              # 并把"是不是 403/限流"写进错误里，免得下次又要翻日志才知道。
+              Write-Warning "mpv releases/latest 第 $try 次失败：$($_.Exception.Message)"
+              Start-Sleep -Seconds (5 * $try)
+            }
+          }
+          if (-not $rel) {
+            throw "取 mpv 最新版本信息失败（3 次重试）。若报 403/rate limit，说明 GITHUB_TOKEN 没生效——匿名请求在共享 IP 的 runner 上必然被限流"
+          }
           $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*full*.zip" } | Select-Object -First 1
           if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*.zip" -and $_.name -notlike "*pdb*" } | Select-Object -First 1 }
           if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
