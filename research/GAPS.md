@@ -234,3 +234,43 @@ PRD 里三条 `[ ]` 是**过期勾选**而不是未做：
 
 全量 `run_all` **30/30、失败 0、端口泄漏 0**；`player_verify` 33 项 ALL PASS；
 `discover_hero_verify` 回到 15/15；typecheck 0、build ✓；累计 **156 笔**。
+
+
+---
+
+## 八、更新器 403 与 CI 打包失败是**同一个根因**（实测数据）
+
+用户报「检查更新全线 403」，且他填的加速前缀 `https://gh.we-together.club/`
+**根本没出现在候选里** —— 查 `ChainCandidates`（chain.go:43-52）设计是对的
+（用户前缀排第 1），说明传进去的 `mirrorPrefix` 当时为空；这条仍未定案。
+
+但更本质的问题我实测出来了（本机走代理，两个镜像各验一次）：
+
+| 请求形状 | 结果 |
+|---|---|
+| `gh-proxy.com/https://api.github.com/repos/.../releases?per_page=20` | **403** `API rate limit exceeded for user ID 295646756` |
+| `ghproxy.net/https://api.github.com/repos/.../releases?per_page=20` | **403** `Invalid input.` |
+| `gh-proxy.com/https://github.com/Adsryen/zhenguojian/releases.atom` | **200**，27KB，`<entry>` 10 条 |
+
+结论：**公开 gh 镜像代理的是 `github.com/...` 的文件下载，不代理（或共用配额）
+`api.github.com` 的 JSON。** 所以更新器把 `api.github.com` 拼到镜像前缀上，
+这条路对所有人都注定 403 —— 不是用户网络的问题。
+
+同一根因还打掉了 **CI 自己的打包步骤**：
+`Download mpv` 用 `Invoke-RestMethod https://api.github.com/...` 且
+**整个 workflow 从没传过 token**（`grep GITHUB_TOKEN` 零命中），
+匿名请求在共享 IP 的 runner 上被限流 → alpha.28 第一次构建就是这么失败的
+（`403` + `rate limit` 在日志里）。已修：注入 `GITHUB_TOKEN` + 3 次退避重试。
+
+### 更新器该怎么修（**尚未实现**，这是下一步）
+
+`releases.atom` 走镜像是通的（实测 200），所以正确做法是
+**把版本发现的数据源从 api.github.com 的 JSON 换成 atom**，
+按候选链依次尝试。atom 能给出：tag（title/link）、更新日期；
+**给不出** prerelease 标记与资产列表 —— 所以要配套决定：
+
+- 预发布判定：v2 的 tag 命名已经是 `v2.0.0-alpha.N`，可以从 tag 文本判；
+- 资产下载：本来就走 `github.com/.../releases/download/...`，
+  那是镜像支持的形状，不受此问题影响。
+
+这条属于"有实测证据、方案清楚、但我还没做"，不要当成已完成。
