@@ -371,7 +371,13 @@ func (a *App) PlayerDanmakuOpacity(v float64) (string, error) {
 	return "", a.playerSvc.SetDanmakuOpacity(v)
 }
 func (a *App) PlayerState() (string, error)          { return marshalJSON(a.playerSvc.State()) }
-func (a *App) PlayerClosePlayer() (string, error)    { return "", a.playerSvc.Close() }
+// PlayerClosePlayer 停"这一次播放"（Stop，**非终态**）。
+// 第五十九轮真机反馈修正：这里原来调 `Close()`（终态，置 closed 后
+// Open 永远返回 ErrClosed），而 playerSvc 是应用生命周期的（本文件只建一次），
+// 于是用户点一次「关闭」，本进程内再也播不了 ——
+// 截图里那句红字「播放失败：player: 服务已关闭」就是它。
+// 应用退出的终态清理走 app.go:157 那一路，仍然调 Close()。
+func (a *App) PlayerClosePlayer() (string, error)    { return "", a.playerSvc.Stop() }
 
 // ---------- V2-4 播放画面内嵌（PlayerAttach/PlayerSetBounds/PlayerDetach） ----------
 //

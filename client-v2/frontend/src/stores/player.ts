@@ -455,6 +455,16 @@ export const usePlayerStore = defineStore('player', {
         const m = asObject<PlayerErrorPayload>(payload)
         if (m?.message) this.error = m.message
       })
+      /* 用户直接关掉视频窗口（mpv 自己发 shutdown）时，Go 侧现在报
+         player:stopped 而不是重建。界面必须跟着落到"停了但还能再播"，
+         不能显示成播放失败——那是两件事。 */
+      bus.EventsOn('player:stopped', () => {
+        this.running = false
+        this.paused = true
+        this.opened = false
+        this.error = ''
+        this.setHint(t('player.stoppedExternally'))
+      })
       bus.EventsOn('danmaku:stats', (payload: unknown) => {
         const m = asObject<DanmakuStatsPayload>(payload)
         if (!m) return
@@ -789,7 +799,24 @@ export const usePlayerStore = defineStore('player', {
         return
       }
       try {
-        await api.closeVideo()
+        /* 真机反馈第三条「点击关闭根本关闭不了」：这里原来 `await api.closeVideo()`
+           无上限等待——Go 侧 Close 里 quit 有 2s 超时，但 IPC 卡住时
+           整个调用仍可能迟迟不返回，于是路由永远走不到 back()，
+           界面看起来"关闭没反应"。
+           v1 的做法就是证据：`player.stop(blocking=False)` 把
+           quit/terminate/kill 丢到辅助线程，注释明写
+           "switching episodes never freezes the window"（player.py:728-735），
+           只有 app 退出才 blocking=True。
+           所以这里给一个 1.2s 上限：超时就先返回界面，
+           后台那次调用自己结束即可（Go 侧 Stop 已经是非阻塞语义）。
+           ⚠ 另外必须给 closeVideo 自己挂一个 catch：
+           超时先赢时它还在飞，稍后 reject 就变成**未处理拒绝**
+           （控制台红错 + Playwright pageerror 会抓到它）。 */
+        const closing = api.closeVideo().catch(() => undefined)
+        await Promise.race([
+          closing,
+          new Promise((resolve) => setTimeout(resolve, 1200))
+        ])
       } catch {
         /* 已经关了 */
       }

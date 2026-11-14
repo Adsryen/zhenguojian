@@ -87,6 +87,18 @@ const (
 	EventExit         EventKind = "exit"         // mpv 进程退出（Err 带 why_died）
 )
 
+// ErrGracefulShutdown 标记"mpv 自己发了 shutdown 事件"的退出：
+// 用户点视频窗的 X、或我们下发 quit，都走这条路。
+//
+// 第五十九轮（真机反馈）加这个哨兵的原因：服务层原来只认
+// "quitting/closed 才算用户退出"，于是**用户从 mpv 窗口自己点关闭**
+// 被当成意外死亡 → 自动重建 → 窗刚关掉又弹出来
+// （用户原话：「关闭又会被二次打开」）。
+// v1 根本没有死亡重建（player.py grep rebuild/respawn 零命中），
+// 这条是 v2 自加的行为，真机上直接成了 bug。
+// 有类型化信号才能把"体面关窗"和"真崩了"分开，而不是靠猜。
+var ErrGracefulShutdown = errors.New("mpv: 收到 shutdown 事件")
+
 // Event 是发布给服务层的事件；State 是更新后的完整快照。
 type Event struct {
 	Kind  EventKind
@@ -650,7 +662,7 @@ func (p *Player) eventPump(ipc *IPC) {
 			p.mu.Unlock()
 			p.publish(Event{Kind: EventEndFile, Name: ev.Reason})
 		case "shutdown":
-			p.publish(Event{Kind: EventExit, Err: errors.New("mpv: 收到 shutdown 事件")})
+			p.publish(Event{Kind: EventExit, Err: ErrGracefulShutdown})
 		}
 	}
 }

@@ -73,6 +73,7 @@ const panelOpen = ref(true)
 const chapters = ref<Chapter[]>([])
 const chaptersLoading = ref(false)
 const panelBodyEl = ref<HTMLElement | null>(null)
+const embedReason = ref('')
 
 /* ── V2-4 内嵌几何上报 ── */
 const stageEl = ref<HTMLElement | null>(null)
@@ -332,6 +333,11 @@ onMounted(async () => {
   // attach 必须先于 bootFromQuery→PlayerOpen：mpv spawn 时 --wid 才已就位。
   const attach = await embedApi.attach()
   embedActive = attach.embedded
+  /* 第五十九轮真机反馈：用户看到的是"弹窗播放"而不是页面内画面。
+     内嵌失败本身有正常回退分支，但**原因从不显示**，所以我拿不到数据、
+     只能靠猜。现在把它挂在视频区角落（真机且回退时才出现），
+     用户一眼能看见、也能直接念给我。 */
+  embedReason.value = attach.embedded ? '' : attach.reason || 'unknown'
   if (embedActive) {
     if (stageEl.value) {
       stageRO = new ResizeObserver(() => void reportBounds())
@@ -383,6 +389,11 @@ onBeforeUnmount(() => {
     <div class="pl-mid">
       <div class="pl-col">
         <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
+          <div
+            v-if="embedReason && !store.loading && !store.error"
+            class="pl-hint embed-fallback"
+            data-testid="embed-fallback"
+          >{{ tf('player.embedFallback', { reason: embedReason }) }}</div>
           <div v-if="store.loading" class="pl-hint">{{ t('player.openingSession') }}</div>
           <div v-else-if="store.error" class="pl-hint err">
             {{ store.error }}
@@ -666,6 +677,11 @@ onBeforeUnmount(() => {
   color: var(--muted, #9aa3b2);
   font-size: 13px;
 }
+.embed-fallback {
+  opacity: 0.75;
+  font-size: 12px;
+}
+
 .pl-hint.err {
   color: var(--danger, #f56c6c);
 }

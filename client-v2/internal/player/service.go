@@ -382,6 +382,9 @@ func (s *Service) Open(ctx context.Context, req Request) error {
 	if s.closed {
 		return ErrClosed // resolve 期间可能被 Close
 	}
+	// 上一集可能是 Stop()/体面退出留下的 quitting，这次必须清掉，
+	// 否则本集真崩了也不会重建（抑制标志的作用域只能是"这一次会话"）。
+	s.quitting = false
 	s.req = &Request{DramaID: req.DramaID, Title: req.Title, Index: req.Index,
 		Drama: req.Drama, Chapter: req.Chapter, Quality: req.Quality}
 	s.plan = &plan
@@ -659,7 +662,61 @@ func (s *Service) SetDanmakuOpacity(v float64) error {
 	return nil
 }
 
+// Stop 只停"这一次播放"：quit mpv、清会话状态，但**服务仍可再次 Open**。
+//
+// 第五十九轮（真机反馈）新增。此前 `PlayerClosePlayer` 直接调 `Close()`，
+// 而 `Close()` 置 `closed=true` 且 `Open()` 见到它就返回 `ErrClosed`
+// （service.go:355/382）—— 而这个 Service 是**应用生命周期**的
+// （app.go 只建一次），于是用户点一次「关闭」之后，
+// 本进程内所有后续播放永远失败在「player: 服务已关闭」。
+// 用户截图里的红字正是这条 ErrClosed。
+//
+// v1 把"停止播放"和"退出程序"分成两件事：`player.stop()` 之后照样能再播，
+// 只有 app 退出才做终态清理。这里补的就是这层区分。
+func (s *Service) Stop() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.quitting = true // 抑制这次 quit 触发的重建
+	p := s.p
+	s.p = nil
+	s.stopSessionLocked()
+	if s.pumpStop != nil {
+		close(s.pumpStop)
+		s.pumpStop = nil
+	}
+	s.mu.Unlock()
+
+	if p != nil {
+		// v1 `stop(blocking=False)` 的同款理由（player.py:728-735：
+		// "switching episodes never freezes the window"）：
+		// quit 有超时上限，超时后 Terminate/Kill 兜底，全在 goroutine 里做，
+		// 界面不能因为一个卡住的 IPC 而"关闭点了没反应"。
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			if err := p.Quit(ctx); err != nil {
+				s.log("player: stop 时 quit 失败（Quit 内部已尽力 terminate）: %v", err)
+			}
+		}()
+	}
+	return nil
+}
+
+// stopSessionLocked 清掉一次会话的运行时状态（调用方须持锁）。
+// 与 Close 的唯一区别：不把服务判死。
+func (s *Service) stopSessionLocked() {
+	s.fetcher = nil
+	s.req = nil
+	s.plan = nil
+	s.subAttached = false
+	s.assPath = ""
+}
+
 // Close 停服务：quit mpv + 清弹幕状态。可重复调用（幂等）。
+// ⚠ 终态：置 closed 后本服务不再接受 Open —— 只用于应用退出。
 func (s *Service) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -859,6 +916,15 @@ func (s *Service) handleEventLocked(ev mpv.Event) {
 		}
 	case mpv.EventDisconnected, mpv.EventExit:
 		if s.quitting || s.closed {
+			return
+		}
+		// 用户从 mpv 窗口点关闭：mpv 先发 shutdown 事件再退出。这不是崩溃，
+		// 不能重建——重建等于"把用户刚关掉的窗又开起来"（真机反馈的第一条）。
+		// 报 player:stopped，让界面回到"可再播"而不是"播放失败"。
+		if errors.Is(ev.Err, mpv.ErrGracefulShutdown) {
+			s.log("player: mpv 体面退出（用户关窗或 quit），不重建")
+			s.stopSessionLocked()
+			s.emit("player:stopped", map[string]any{})
 			return
 		}
 		why := "播放器与 mpv 断开"

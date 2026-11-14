@@ -423,6 +423,72 @@ func TestDisconnectRebuildResumesAfterFileLoaded(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------- 真机反馈修正
+// 用户报告两条：
+//   ① 「播放不在播放页面，而是弹窗播放，关闭又会被二次打开」
+//   ② 「关闭播放之后，后面的就如图再也无法播放了」（截图红字 player: 服务已关闭）
+// 下面三条分别钉住：体面关窗不重建、Stop 非终态、崩溃重建仍然保留（别改过头）。
+
+func TestGracefulShutdownDoesNotRebuild(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.svc.Open(context.Background(), openReq(1)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	f0 := h.l.nth(0)
+	f0.setLoaded(30.0, 120.0)
+	// 用户点 mpv 窗口自己的 X：mpv 发 shutdown 事件后退出
+	f0.push(mpv.Event{Kind: mpv.EventExit, Err: mpv.ErrGracefulShutdown})
+
+	h.em.waitEvent(t, "player:stopped", time.Second, nil)
+	// 关键：**不能**再拉起新实例（这就是"关了又弹出来"）
+	time.Sleep(120 * time.Millisecond)
+	if n := len(h.l.all()); n != 1 {
+		t.Fatalf("体面关窗后不该重建，起了 %d 个实例（用户看到的窗会被再弹开）", n)
+	}
+	// 体面关窗不是错误：不该发 player:error（否则界面显示"播放失败"）
+	for _, ev := range h.em.collect() {
+		if ev.Name == "player:error" {
+			t.Fatalf("体面关窗不该发 player:error：%+v", ev)
+		}
+	}
+}
+
+func TestStopIsNotTerminalAndReopens(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.svc.Open(context.Background(), openReq(1)); err != nil {
+		t.Fatalf("第一次 Open: %v", err)
+	}
+	if err := h.svc.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// 真机那条 bug 的形状：Stop 之后再 Open 会拿到 ErrClosed
+	if err := h.svc.Open(context.Background(), openReq(2)); err != nil {
+		t.Fatalf("Stop 之后应能再播（v1 stop() 后照样能播）: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return len(h.l.all()) == 2 }, "第二次播放起了新实例")
+	st := h.svc.State()
+	if st.Episode.Index != 2 {
+		t.Fatalf("应是第 2 集，实得 %+v", st.Episode)
+	}
+	// Stop 留下的 quitting 必须被下一次 Open 清掉，否则本集真崩了也不会重建
+	h.l.nth(1).push(mpv.Event{Kind: mpv.EventDisconnected, Err: errors.New("boom")})
+	waitFor(t, time.Second, func() bool { return len(h.l.all()) == 3 },
+		"Open 应复位 quitting：崩溃仍需自动重建")
+}
+
+func TestCloseStaysTerminalForAppExit(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.svc.Open(context.Background(), openReq(1)); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := h.svc.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := h.svc.Open(context.Background(), openReq(2)); err != player.ErrClosed {
+		t.Fatalf("Close 是终态（只用于应用退出），实得 %v", err)
+	}
+}
+
 func TestRebuildStormCap(t *testing.T) {
 	h := newHarness(t, func(c *player.Config) { c.MaxRebuilds = 2 })
 	if err := h.svc.Open(context.Background(), openReq(1)); err != nil {
