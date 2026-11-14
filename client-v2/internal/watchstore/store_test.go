@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -564,15 +565,20 @@ func TestWriteFailureKeepsOldFileAndDirty(t *testing.T) {
 	}
 	before := loadFile(t, filepath.Join(dir, FileName))
 
-	// Make the directory unwritable so CreateTemp fails (run as non-root;
-	// skip when root, which ignores mode bits).
-	if os.Geteuid() == 0 {
-		t.Skip("running as root; file modes are not enforced")
+	// 要造的是"写不进去"这个**结果**，方法必须跨平台。
+	// 原来用 `chmod(dir, 0500)`：Windows 上 chmod 基本是 no-op
+	// （CI 实测写照样成功 → `expected write error surfaced`），
+	// 而且 root 下也无效，所以还多了一条 Skip。
+	// 换成把"目录"变成一个**同名普通文件**：在它下面建临时文件
+	// 在 unix 与 Windows 上都必然失败（ENOTDIR），判据回到平台无关。
+	if err := os.Remove(dir); err != nil {
+		t.Fatalf("腾出路径: %v", err)
 	}
-	if err := os.Chmod(dir, 0o500); err != nil {
+	f, err := os.Create(dir)
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	_ = f.Close()
 	s.SaveWatch("hongguo:a", "t", "c", 2, 10, 100, true)
 	err := s.Flush()
 	if err == nil {
@@ -1448,8 +1454,21 @@ func TestDefaultDataDirEnv(t *testing.T) {
 		t.Fatalf("ZHENGUO_DATA→abspath: %q", got)
 	}
 	t.Setenv("ZHENGUO_DATA", "")
+	// ⚠ 第五轮真机反馈连带修正：这条用例此前只在 Linux 上跑过，
+	//    windows job 加上 internal 测试后当场红 9 条。逐条核过都是
+	//    **测试自己假设 POSIX**，不是产品在 Windows 上不对；
+	//    但"测试假设错"与"产品真错"必须分开核过才能这么说，
+	//    每条的判据写在各自注释里。
+	// 默认目录本来就是分平台的：unix 走 ~/.zhenguojian，
+	// Windows 走 %LOCALAPPDATA%\ZhenguoJian（CI 实测返回
+	// `C:\Users\runneradmin\AppData\Local\ZhenguoJian`，那是**期望值**，
+	// 原来这句断言把 unix 分支写死成唯一正确答案）。
 	got := DefaultDataDir()
-	if got != filepath.Join(homeDir(), ".zhenguojian") {
+	if runtime.GOOS == "windows" {
+		if !filepath.IsAbs(got) || filepath.Base(got) != "ZhenguoJian" {
+			t.Fatalf("windows default 应落在 %LOCALAPPDATA%\\ZhenguoJian，实得 %q", got)
+		}
+	} else if got != filepath.Join(homeDir(), ".zhenguojian") {
 		t.Fatalf("unix default: %q", got)
 	}
 }

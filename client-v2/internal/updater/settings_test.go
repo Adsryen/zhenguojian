@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -28,7 +29,16 @@ func TestSettingsSaveReloadAndMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if st.Mode().Perm() != 0o600 {
+	// ⚠ 第五轮真机反馈连带修正：这条用例此前只在 Linux 上跑过，
+	//    windows job 加上 internal 测试后当场红 9 条。逐条核过都是
+	//    **测试自己假设 POSIX**，不是产品在 Windows 上不对；
+	//    但"测试假设错"与"产品真错"必须分开核过才能这么说，
+	//    每条的判据写在各自注释里。
+	// Windows 上没有 POSIX 权限位（CI 实测 -rw-rw-rw-），
+	// 0600 这个意图只能靠"文件位于当前用户 profile 目录内"来近似保证。
+	// 所以这里在 Windows 上跳过 mode 检查，但**不假装验证过私密性**：
+	// 真正的访问控制是 ACL，不在本用例范围内，已另记一条待办。
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Errorf("mode=%v want 0600", st.Mode().Perm())
 	}
 	if _, err := os.Stat(path + ".tmp"); !os.IsNotExist(err) {

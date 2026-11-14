@@ -344,12 +344,26 @@ func TestLookupToolRejectsBrokenEnvPath(t *testing.T) {
 }
 
 func TestLookupToolFallsBackToPATH(t *testing.T) {
+	// ⚠ 第五轮真机反馈连带修正：这条用例此前只在 Linux 上跑过，
+	//    windows job 加上 internal 测试后当场红 9 条。逐条核过都是
+	//    **测试自己假设 POSIX**，不是产品在 Windows 上不对；
+	//    但"测试假设错"与"产品真错"必须分开核过才能这么说，
+	//    每条的判据写在各自注释里。
+	// Windows 上 `exec.LookPath("ffprobe")` 不会匹配一个**没有扩展名**的文件
+	// （它按 PATHEXT 找 ffprobe.exe），所以原来那个 POSIX 形状的桩
+	// 在目标平台根本不该被找到——产品报错文案「找不到 ffprobe.exe（放 exe 同级、
+	// PATH 或 ZHENGUO_FFPROBE 指定）」在 Windows 上恰恰是对的。
+	// 桩按平台命名，判据也跟着比 Base（去扩展名后）。
 	dir := t.TempDir()
-	stub := filepath.Join(dir, "ffprobe")
+	stubName := "ffprobe"
+	if runtime.GOOS == "windows" {
+		stubName = "ffprobe.exe" // LookPath 在 Windows 只认带扩展名的候选
+	}
+	stub := filepath.Join(dir, stubName)
 	if err := os.WriteFile(stub, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatalf("写桩: %v", err)
 	}
-	t.Setenv("ZHENGUO_FFPROBE", "")          // 空串=未设（代码里走 TrimSpace 判空）
+	t.Setenv("ZHENGUO_FFPROBE", "") // 空串=未设（代码里走 TrimSpace 判空）
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	got, err := lookupTool("ffprobe")
 	if err != nil {

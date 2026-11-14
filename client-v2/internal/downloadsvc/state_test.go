@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -64,8 +65,17 @@ func TestMergesStatePersistAndRecover(t *testing.T) {
 	if p.ID != "d1#001-002" || p.State != MergeDone || p.Output == "" || p.Bytes <= 0 || p.CreatedAt <= 0 {
 		t.Fatalf("done 条目快照字段不全: %+v", p)
 	}
-	if fi, err := os.Stat(filepath.Join(h.tmp, "merges.state.json")); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("快照模式应 0600: %v %v", fi, err)
+	// ⚠ 第五轮真机反馈连带修正（这条此前只在 Linux 跑过）：
+	//    Windows 没有 POSIX 权限位（CI 实测 -rw-rw-rw-），
+	//    所以 mode 检查只在非 Windows 上做。**不是放宽判据**——
+	//    私密性在 Windows 上由"文件位于当前用户 profile 目录内 + ACL"承担，
+	//    那不在本用例能力范围内，已另记待办，不在这里假装验证过。
+	fi, err := os.Stat(filepath.Join(h.tmp, "merges.state.json"))
+	if err != nil {
+		t.Fatalf("快照文件应存在: %v", err)
+	}
+	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+		t.Fatalf("快照模式应 0600: %v", fi)
 	}
 	vb, _ := os.ReadFile(verifyPath)
 	if !strings.Contains(string(vb), `"mergeVerify":false`) {

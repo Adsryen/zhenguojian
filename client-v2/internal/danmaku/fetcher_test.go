@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -49,10 +50,35 @@ func (s *fakeSource) callLog() []fetchCall {
 
 // syncFetcher 把 run 钩子换成同步执行，测试免 goroutine 竞态；
 // endMs 计算复刻 runDefault（span + bust）。
+// ⚠ 第五轮真机反馈连带修正：这条用例此前只在 Linux 上跑过，
+//
+//	windows job 加上 internal 测试后当场红 9 条。逐条核过都是
+//	**测试自己假设 POSIX**，不是产品在 Windows 上不对；
+//	但"测试假设错"与"产品真错"必须分开核过才能这么说，
+//	每条的判据写在各自注释里。
+//
+// 节流与冷却都改由**假时钟**决定，不再依赖真实时钟精度。
+//
+// 上一版写的是 `opt.MinGap = time.Nanosecond`，靠"真实时钟必然已经走过 1ns"
+// 来解除节流。Windows 单调时钟粒度约 1ms，`Now().Sub(lastReq)` 可能正好是 0，
+// 于是 `0 < 1ns` 成立 → 第一个窗口之后全被挡，
+// 表现就是 `窗口序列 = [0], want [0 30000 60000 90000]`（四条用例同因）。
+// Linux 纳秒精度下永远过得去，所以这 bug 只在目标平台暴露。
+//
+// 现在：每次取时钟前进 4s（> MinGap 3s，也 > MinGap+RetryDelays[0]=4s 的下限），
+// 于是"过了多久"由测试决定，与平台时钟无关。
 func syncFetcher(t *testing.T, src *fakeSource, opt FetcherOptions) *Fetcher {
 	t.Helper()
-	opt.MinGap = time.Nanosecond
-	opt.RetryDelays = []time.Duration{time.Nanosecond, time.Nanosecond}
+	opt.MinGap = 3 * time.Second
+	opt.RetryDelays = []time.Duration{time.Second, time.Second}
+	var clkMu sync.Mutex
+	clk := time.Unix(1700000000, 0)
+	opt.Now = func() time.Time {
+		clkMu.Lock()
+		defer clkMu.Unlock()
+		clk = clk.Add(4 * time.Second)
+		return clk
+	}
 	f := NewFetcher(src, opt)
 	f.run = func(job, start int64) {
 		f.mu.Lock()
