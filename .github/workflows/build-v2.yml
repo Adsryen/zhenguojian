@@ -72,10 +72,21 @@ jobs:
             # 门是对的（它确实发现了不一致），但 grep 源码这个**方法**错了：
             # 它把"文件里写了什么"当成"这个平台会跑什么"，
             # 而后者只有 `go test -list` 知道（它尊重 build tag）。
+            # ⚠ GitHub 的 bash 默认是 `set -eo pipefail`（本步骤只另外写了 set -u）。
+            #   上一版这里直接 `list_out=$(go test -list ...)`，
+            #   于是一旦某包的 -list 返回非零，**赋值语句本身就触发 set -e，
+            #   脚本当场中止**——后面那句 `list_rc=$?` 根本没机会执行，
+            #   我精心写的"点名哪个包坏了"的注解一条都没打出来。
+            #   现象就是日志停在最后一个正常包 + 一行 exit 1，
+            #   我因此白查了两轮才知道"诊断是瞎的"。
+            #   取返回码必须显式绕过 errexit。
+            set +e
             list_out=$(go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" \
               -run '^$' -list '.*' "$pkg" 2>"$RUNNER_TEMP/list-err.txt")
             list_rc=$?
-            wanted=$(printf '%s\n' "$list_out" | grep -oE '^Test[A-Za-z0-9_]+$' | sort -u)
+            set -e
+            # grep 没匹配到就返回 1，同样会撞 set -e（没有用例的包是合法的），所以都要兜住
+            wanted=$(printf '%s\n' "$list_out" | grep -oE '^Test[A-Za-z0-9_]+$' | sort -u || true)
             declared=$(printf '%s\n' "$wanted" | grep -c 'Test' || true)
             if [ "$list_rc" -ne 0 ]; then
               echo "::error title=$pkg 列不出用例::go test -list 失败（exit $list_rc）"
@@ -90,7 +101,7 @@ jobs:
             go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" \
               -count=1 -timeout 300s -v "$pkg" > "$RUNNER_TEMP/pkg-v.txt" 2>&1
             rc=$?
-            executed=$(grep -oE '^--- (PASS|FAIL|SKIP): Test[A-Za-z0-9_]+' "$RUNNER_TEMP/pkg-v.txt" | sed 's/^--- [A-Z]*: //' | sort -u)
+            executed=$(grep -oE '^--- (PASS|FAIL|SKIP): Test[A-Za-z0-9_]+' "$RUNNER_TEMP/pkg-v.txt" | sed 's/^--- [A-Z]*: //' | sort -u || true)
             # 两侧都按**唯一名**计数。上一版右边用 `grep -c`（总行数）、左边用 `sort -u | wc -l`
             # （唯一数），判据不对称：只要谁把这里改成 `-count=2`（根包门就是这个形状），
             # 结果行会翻倍，这道门立刻假红 —— 那属于"改了设计没同步改判据"，我自己前天刚犯过。

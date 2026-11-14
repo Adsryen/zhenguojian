@@ -565,25 +565,26 @@ func TestWriteFailureKeepsOldFileAndDirty(t *testing.T) {
 	}
 	before := loadFile(t, filepath.Join(dir, FileName))
 
-	// 要造的是"写不进去"这个**结果**，方法必须跨平台。
-	// 原来用 `chmod(dir, 0500)`：Windows 上 chmod 基本是 no-op
-	// （CI 实测写照样成功 → `expected write error surfaced`），
-	// 而且 root 下也无效，所以还多了一条 Skip。
-	// 换成把"目录"变成一个**同名普通文件**：在它下面建临时文件
-	// 在 unix 与 Windows 上都必然失败（ENOTDIR），判据回到平台无关。
-	if err := os.Remove(dir); err != nil {
-		t.Fatalf("腾出路径: %v", err)
+	// 造"写不进去"的手段必须跨平台，但**不能改动测试要验的东西**：
+	// 本例后半段要 `loadFile(dir/FileName)` 比较"写失败没损坏旧文件"，
+	// 所以目录必须还在。
+	//
+	// 我第一版把它改成"删掉目录、建同名普通文件"（ENOTDIR 跨平台必失败），
+	// 编译是过了，但把被测语义拆了 —— 目录没了，后面那句比较就成了空话。
+	// 已回退。Windows 上 chmod 造不出不可写目录（实测写照样成功），
+	// 也没有免依赖就能设 ACL 的标准手段，所以**整条 Skip**，
+	// 并写清这是"Windows 上这条语义没被验证"，不是"验证过了"。
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 上 chmod 不产生不可写目录；本例要的是写失败这条语义，" +
+			"在 Windows 上未验证（不是已验证），不做假通过")
 	}
-	// ⚠ 用 cerr 而不是 err：下面紧跟着 `err := s.Flush()`，
-	//   我第一版在这里写了 `f, err := ...` 把 err 先声明了，
-	//   于是那行变成 "no new variables on left side of :=" ——
-	//   一个纯编译错，linux 与 windows 一起红（本机没有可用 Go，
-	//   这类错只能靠 CI 发现，所以更要写完就逐行看一遍而不是指望编译器兜底）。
-	f, cerr := os.Create(dir)
-	if cerr != nil {
-		t.Fatal(cerr)
+	if os.Geteuid() == 0 {
+		t.Skip("running as root; file modes are not enforced")
 	}
-	_ = f.Close()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
 	s.SaveWatch("hongguo:a", "t", "c", 2, 10, 100, true)
 	err := s.Flush()
 	if err == nil {
