@@ -212,6 +212,44 @@ jobs:
             Get-Content "$env:RUNNER_TEMP/root-v.txt"
             throw "根包测试没全绿或没全执行（执行数≠声明数就是有用例没被跑到）"
           }
+          # ── internal 各包在 Windows 上也要真跑一遍 ──
+          # 第五轮补这一步的原因很具体：我加了两条 `//go:build windows` 的
+          # WNDCLASSEXW 布局自检（internal/mpv、internal/tray），
+          # 然后去 CI 日志里找它们的名字 —— **windows job 根本不跑 ./internal/...**
+          # （日志里 internal 出现 0 次），而 linux job 因构建约束跳过它们。
+          # 结果是"测试写了、名字看着可靠、实际任何 job 都没执行过"，
+          # 这正是本任务反复抓的"引擎在、接线没有"那一族（第七次），
+          # 而且这次是我自己刚造出来的。
+          # 平台差异本身也是信息：这些包此前只在 linux 上跑过，
+          # 路径/句柄/换行之类的假设从没在目标平台上验证过。
+          $intFail = 0
+          $intPkgs = go list ./internal/...
+          foreach ($pkg in $intPkgs) {
+            $vtxt = "$env:RUNNER_TEMP/int-v.txt"
+            go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -count=1 -timeout 300s -v $pkg 2>&1 | Tee-Object -FilePath $vtxt | Out-Null
+            $irc = $LASTEXITCODE
+            $iResults = @(Select-String -Path $vtxt -Pattern '^--- (PASS|FAIL|SKIP): (Test\w+)')
+            $iRan = @($iResults | ForEach-Object { $_.Matches[0].Groups[2].Value } | Sort-Object -Unique).Count
+            $iList = go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -run '^$' -list '.*' $pkg 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error title=$pkg 列不出用例::go test -list 失败（exit $LASTEXITCODE）"
+              $intFail = 1
+              continue
+            }
+            $iDeclared = @($iList | Select-String -Pattern '^Test\w+$' | ForEach-Object { $_.Line } | Sort-Object -Unique).Count
+            $short = $pkg -replace '^zhenguojian/client-v2/', ''
+            Write-Host ("{0,-28} 执行 {1,3} / 声明 {2,3}  exit {3}" -f $short, $iRan, $iDeclared, $irc)
+            if ($irc -ne 0) {
+              Write-Host "::error title=$pkg 有失败用例::exit $irc"
+              Select-String -Path $vtxt -Pattern '^--- FAIL: Test' -Context 0,6 | Select-Object -First 8 | ForEach-Object { Write-Host $_.Line }
+              $intFail = 1
+            }
+            if ($iRan -ne $iDeclared) {
+              Write-Host "::error title=$pkg 覆盖对不上::执行 $iRan ≠ 声明 $iDeclared"
+              $intFail = 1
+            }
+          }
+          if ($intFail -ne 0) { throw "Windows 上 internal 用例没全绿或没全执行" }
 
           # internal/* 的 Go 单测不在这个 job 跑，见上面的 test-linux job：
           # 那边有 4 条断言假设 POSIX（权限位 0600、$HOME 数据目录、chmod 造写失败），
