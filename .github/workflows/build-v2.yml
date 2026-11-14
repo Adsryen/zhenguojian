@@ -289,9 +289,13 @@ jobs:
           #     等于把我的调试成本转嫁成他的等待。
           # 已登记为待办：查清 9 条各自是"产品在 Windows 上真错"还是
           # "测试自己假设 POSIX"，修完后把这一行改回 throw（硬门）。
-          if ($intFail -ne 0) {
-            Write-Host "::warning title=Windows internal 用例未全绿::有包失败，本轮先不拦（见上面各包全文），修完改回硬门"
-          }
+          # 恢复为硬门。降级只存在过一轮，且降级理由写在那里
+          # （不能因为我在调试就把用户拿产物的路堵死）。
+          # 现在 9 条平台假设已逐条处理（4 条假时钟/桩名/GOOS 分支、
+          # 2 条 mode 跳过、1 条整条 Skip 并写明"Windows 上未验证"、
+          # 其余为同一根因），两个 job 实测均 success（run 43626108414），
+          # 所以这一步该拦住未来的 Windows 回归。
+          if ($intFail -ne 0) { throw "Windows 上 internal 用例没全绿或没全执行" }
 
           # internal/* 的 Go 单测不在这个 job 跑，见上面的 test-linux job：
           # 那边有 4 条断言假设 POSIX（权限位 0600、$HOME 数据目录、chmod 造写失败），
