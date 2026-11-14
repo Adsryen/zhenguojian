@@ -51,14 +51,37 @@ jobs:
           # 现在逐包跑：唯一执行数必须等于该包声明的顶层 `func Test*` 数，
           # 不符就点名差在哪个用例（做集合差，不再只报一个数字让人自己数）。
           # `t.Skip` 计入"执行到"（`--- SKIP` 也是结果行），本轮 grep 过：
-          # 无 TestMain、无按 build tag 屏蔽的测试文件，所以这条判据现在是干净的。
+          # ⚠ 该前提已被打破（现在有 //go:build windows 的用例），所以判据
+          # 改成用 `go test -list` 取声明集合，见下面循环内注释。
           set -u
           total_ran=0
           total_declared=0
           gate_fail=0
           for pkg in $(go list ./internal/...); do
             dir="${pkg#zhenguojian/client-v2/}"
-            declared=$(grep -hoE '^func Test[A-Za-z0-9_]+' "$dir"/*_test.go 2>/dev/null | sort -u | wc -l)
+            # 声明集合**问工具链要**，不再 grep 源码数 `func Test*`。
+            # 打破的正是我自己写在上面那条前提注释：「无按 build tag 屏蔽的测试文件，
+            # 所以这条判据现在是干净的」—— 第五轮我加了两个 `//go:build windows`
+            # 的布局自检（internal/mpv、internal/tray），linux 上于是
+            # 「声明 23 / 执行 22」「声明 8 / 执行 7」，门红了。
+            # 门是对的（它确实发现了不一致），但 grep 源码这个**方法**错了：
+            # 它把"文件里写了什么"当成"这个平台会跑什么"，
+            # 而后者只有 `go test -list` 知道（它尊重 build tag）。
+            list_out=$(go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" \
+              -run '^$' -list '.*' "$pkg" 2>"$RUNNER_TEMP/list-err.txt")
+            list_rc=$?
+            wanted=$(printf '%s\n' "$list_out" | grep -oE '^Test[A-Za-z0-9_]+$' | sort -u)
+            declared=$(printf '%s\n' "$wanted" | grep -c 'Test' || true)
+            if [ "$list_rc" -ne 0 ]; then
+              echo "::error title=$pkg 列不出用例::go test -list 失败（exit $list_rc）"
+              sed 's/^/    /' "$RUNNER_TEMP/list-err.txt" | head -12
+              gate_fail=1
+            fi
+            if ls "$dir"/*_test.go >/dev/null 2>&1 && [ "$declared" -eq 0 ]; then
+              # 有 _test.go 却一条都列不出来 = 判据本身坏了（静默 0==0 会放行一切）
+              echo "::error title=$pkg 判据失效::有 _test.go 但 go test -list 返回 0 条，拒绝按 0==0 放行"
+              gate_fail=1
+            fi
             go test -tags "v2overlay production devtools" -overlay "$RUNNER_TEMP/ov/overlay.json" \
               -count=1 -timeout 300s -v "$pkg" > "$RUNNER_TEMP/pkg-v.txt" 2>&1
             rc=$?
@@ -67,7 +90,6 @@ jobs:
             # （唯一数），判据不对称：只要谁把这里改成 `-count=2`（根包门就是这个形状），
             # 结果行会翻倍，这道门立刻假红 —— 那属于"改了设计没同步改判据"，我自己前天刚犯过。
             ran=$(printf '%s\n' "$executed" | grep -c 'Test' || true)
-            wanted=$(grep -hoE '^func Test[A-Za-z0-9_]+' "$dir"/*_test.go 2>/dev/null | sed 's/^func //' | sort -u)
             total_ran=$((total_ran + ran))
             total_declared=$((total_declared + declared))
             printf '%-30s 执行 %3s / 声明 %3s  exit %s\n' "$dir" "$ran" "$declared" "$rc"
@@ -164,7 +186,14 @@ jobs:
           $rootRc = $LASTEXITCODE
           $results = @(Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- (PASS|FAIL|SKIP): (Test\w+)')
           $ran = @($results | ForEach-Object { $_.Matches[0].Groups[2].Value } | Sort-Object -Unique).Count
-          $declared = @(Select-String -Path *_test.go -Pattern '^func Test').Count
+          # 同 linux：声明集合问工具链要（尊重 build tag），不 grep 源码。
+          # 根包在 linux 上根本编不了（wails linux 需要 CGO+GTK），
+          # 所以这条门是它唯一的执行机会，判据不能再靠文本猜。
+          $listOut = go test -tags "v2overlay production devtools" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -run '^$' -list '.*' . 2>&1
+          if ($LASTEXITCODE -ne 0) { throw "根包 go test -list 失败（exit $LASTEXITCODE）：$listOut" }
+          $declaredList = @($listOut | Select-String -Pattern '^Test\w+$' | ForEach-Object { $_.Line })
+          $declared = @($declaredList | Sort-Object -Unique).Count
+          if ($declared -eq 0) { throw "根包有 _test.go 却列不出任何用例 —— 判据本身坏了，拒绝按 0==0 放行" }
           Write-Host "根包用例：唯一执行 $ran / 声明 $declared（exit $rootRc，每遍跑两遍共 $(@($results).Count) 条结果行）"
           Write-Host ("已执行清单：" + (($results | ForEach-Object { $_.Matches[0].Groups[2].Value } | Sort-Object -Unique) -join " "))
           Select-String -Path "$env:RUNNER_TEMP/root-v.txt" -Pattern '^--- FAIL: Test' | ForEach-Object { Write-Host $_.Line }
