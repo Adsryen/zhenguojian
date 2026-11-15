@@ -283,5 +283,21 @@ export const embedBridge = {
     } catch {
       /* 同上 */
     }
+  },
+  /* 逃生门：内嵌黑屏时退回 mpv 独立窗口（App.PlayerForceWindow）。
+     返回后调用方要重开当前集，mpv 才会自己建顶层窗。 */
+  forceWindow: async (): Promise<boolean> => {
+    // ⚠ 这里**不判 isMock**：按本文件分层，mock/无桥的分支在 facade（api.ts）
+    //   与 mock/embed.ts，桥面只管调桥。我第一版写了 `if (isMock || !hasBridge)`，
+    //   而 `isMock` 在本文件并不存在——typecheck 直接拒（`Cannot find name 'isMock'`）。
+    //   凭空标识符这类错本机现在能查了（scripts/go-local.sh + npm run typecheck），
+    //   不该再留给 CI。
+    try {
+      await callGo('PlayerForceWindow')
+      return true
+    } catch (err: any) {
+      console.info('[embed] forceWindow 失败', String(err?.message ?? err))
+      return false
+    }
   }
 }

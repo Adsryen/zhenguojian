@@ -53,5 +53,10 @@ export const embedApi = {
   detach: async (): Promise<void> => {
     if (isMock || !hasBridge) return
     return embedBridge.detach()
+  },
+  forceWindow: async (): Promise<boolean> => {
+    if (isMock) return mockEmbedApi.forceWindow()
+    if (!hasBridge) return false
+    return embedBridge.forceWindow()
   }
 }

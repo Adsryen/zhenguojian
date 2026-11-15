@@ -24,5 +24,9 @@ export const mockEmbedApi = {
   },
   detach: async (): Promise<void> => {
     /* mock/无桥：no-op */
+  },
+  forceWindow: async (): Promise<boolean> => {
+    /* mock/无桥没有内嵌可放弃，返回 false 让调用方知道没生效 */
+    return false
   }
 }

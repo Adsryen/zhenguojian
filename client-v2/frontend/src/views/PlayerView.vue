@@ -79,7 +79,12 @@ const embedReason = ref('')
    置 localStorage['zgj.embedDebug']='1' 后显示在视频区左上角，
    排错时截一张图就够，不用开 DevTools 复制。 */
 const embedHost = ref<EmbedHostDebug | null>(null)
-const embedDebugOn = localStorage.getItem('zgj.embedDebug') === '1'
+/* ⚠ 临时改成**默认开启**：连续两版要求用户手动开开关才能拿到现场，
+   而用户回报的还是同一句"还是没画面"。查不清的原因是没有数据，
+   所以这一版把诊断常驻显示（含一行"调试信息，查清后移除"），
+   并附一个逃生门按钮——黑屏期间用户至少能看。
+   TODO(内嵌黑屏查清后)：改回 localStorage 开关。 */
+const embedDebugOn = true
 
 /* ⚠ 这一行我第一版写成中文串拼接，被 `i18n_static_scan.py` 的零硬编码棘轮
    当场抓到 7 处（它抓的是**界面可见中文**，不管这段是不是调试信息）。
@@ -381,6 +386,16 @@ onMounted(async () => {
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
 })
 
+/* 逃生门：放弃内嵌、改用 mpv 独立窗口，然后重开当前集。
+   只改"画面落在哪个窗"，不改播放/会话/弹幕语义。 */
+async function forceWindowMode() {
+  const ok = await embedApi.forceWindow()
+  if (!ok) return
+  embedActive = false
+  embedReason.value = 'forced-window'
+  await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
+}
+
 /* 播放失败重试：重放整条 boot 链（解析超时/网络抖动后可直接再试一次）。 */
 async function retryBoot() {
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
@@ -418,7 +433,13 @@ onBeforeUnmount(() => {
             v-if="embedDebugOn && embedHost"
             class="pl-hint embed-debug"
             data-testid="embed-debug"
-          >{{ embedDebugText }}</div>
+          >{{ embedDebugText }}
+            <button
+              class="pl-btn tiny"
+              type="button"
+              data-testid="embed-force-window"
+              @click="forceWindowMode"
+            >{{ t('player.embedForceWindow') }}</button></div>
           <div
             v-if="embedReason && !store.loading && !store.error"
             class="pl-hint embed-fallback"
