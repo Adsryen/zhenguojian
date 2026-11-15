@@ -1,4 +1,12 @@
-# coreoverlay —— v2 注入核心包的 overlay 源文件
+# coreoverlay —— v2 注入核心包的 overlay 源文件（**存成 `.go.txt`，不是 `.go`**）
+
+为什么不是 `.go`：这两个文件是 `package core` 且引用 `nativeDrama` 等
+只有注入 core 包后才存在的符号。放在模块里当 `.go` 看，
+`go vet ./...` 会真的去编译这个目录并报
+`coreoverlay\discovery.go:18:11: undefined: nativeDrama`（CI 实测踩过）。
+v1 那边没暴露，只是因为它的构建只 `go build .`（根包），没下钻子目录。
+现在由 `make-overlay.py` 在构建时把 `.go.txt` 落地成临时 `.go`
+（写到 overlay.json 同级的 `overlay-src/`），仓库里这个目录**不是一个 Go 包**。
 
 `client-v2/scripts/make-overlay.py` 把本目录的两个文件以 `go build -overlay`
 注入 `guoapp-src/native/core` 包（键名 `sidecar_overlay_<name>.go`），

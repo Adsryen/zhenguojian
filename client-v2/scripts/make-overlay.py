@@ -24,11 +24,25 @@ def rel(p):
 src_overlay_dir = rel(os.path.join(root, "client-v2", "coreoverlay"))
 core_dir = rel(os.path.join(root, "guoapp-src", "native", "core"))
 
+# 仓库里存的是 `.go.txt`，**不是 `.go`**：
+# 这两个文件的 `package core` + 对 `nativeDrama` 等符号的引用，
+# 只有被 overlay 注入 core 包之后才成立；放在模块里当 `.go` 看，
+# `go vet ./...` 会真的去编译这个目录然后报
+# `coreoverlay\discovery.go:18:11: undefined: nativeDrama`（CI 实测）。
+# v1 那边没暴露，只是因为它的构建只 `go build .`（根包），没下钻。
+# 所以这里让脚本在构建时把 `.go.txt` 落地成临时 `.go`，仓库里那个目录
+# 从此**不是一个 Go 包**，谁也不会再误编译它。
+materialize_dir = os.path.join(base, "overlay-src")
+os.makedirs(materialize_dir, exist_ok=True)
+
 Replace = {}
 for name in ("discovery.go", "poster_metadata.go"):
-    real = os.path.join(src_overlay_dir, name)
+    src = os.path.join(src_overlay_dir, name + ".txt")
+    dst = rel(os.path.join(materialize_dir, name))
+    with open(src, "r", encoding="utf-8") as f_in, open(dst, "w", encoding="utf-8") as f_out:
+        f_out.write(f_in.read())
     fake = os.path.join(core_dir, "sidecar_overlay_" + name)
-    Replace[fake] = real
+    Replace[fake] = dst
 
 with open(out, "w", encoding="utf-8") as f:
     json.dump({"Replace": Replace}, f, indent=1)
