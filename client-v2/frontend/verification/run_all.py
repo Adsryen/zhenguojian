@@ -288,6 +288,25 @@ def main():
         print("FAIL 核心动作对账判据执行失败：%r" % (exc,))
         return 1
 
+    # 发布摘要判据：latest.json 的 notes 由 client-v2/scripts/release_notes.py 产出，
+    # CI 发布前会跑它的 selftest，但那是发布时才跑；这里让本地回归也每天看它一眼
+    # （上一轮我在这件事上"CI 绿 + 我核过"却还是发出去一行表格头，
+    #  原因就是判据本身没有可测形态）。
+    _rs = os.path.join(ROOT, "client-v2", "scripts", "release_notes.py")
+    if os.path.exists(_rs):
+        r = subprocess.run([sys.executable, _rs, "--selftest"],
+                           capture_output=True, text=True, timeout=120,
+                           cwd=ROOT, stdin=subprocess.DEVNULL)
+        tail = (r.stdout or "").strip().splitlines()[-1:] or ["(无输出)"]
+        print("发布摘要判据：%s" % tail[0])
+        if r.returncode != 0:
+            print("FAIL release_notes selftest 非 0（exit=%d）：%s"
+                  % (r.returncode, (r.stderr or "")[-300:]))
+            return 1
+    else:
+        print("FAIL 找不到 %s —— 判据文件被移动或删除，这条检查退化成空转" % _rs)
+        return 1
+
     # 会话状态文件的对账：里面的数字只能由脚本产生。
     # 我在这个任务里六次凭记忆写错提交数，所以把它做成文件 + 比较器，
     # 而不是继续对自己说"以后现测"。

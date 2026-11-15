@@ -485,16 +485,18 @@ jobs:
                                url = "$base/$name" }
           }
 
-          # notes 取发布说明首行（非空），只给一行摘要，别把整篇塞进元数据
-          $notes = ""
-          if (Test-Path client-v2/build/bin/RELEASE-NOTES.md) {
-            # ⚠ 第一版取"第一条非空行"，实测 alpha.30 的 latest.json 里
-            #   notes 变成了 `## 本 Release 资产说明` —— 一行 Markdown 标题。
-            #   notes 是要显示给人的，得跳过标题行取第一句正文。
-            $notes = (Get-Content client-v2/build/bin/RELEASE-NOTES.md |
-                      Where-Object { $_.Trim() -ne "" -and $_.Trim() -notmatch "^#" } |
-                      Select-Object -First 1).Trim()
-          }
+          # notes 的判据不在这里，唯一实现在 client-v2/scripts/release_notes.py（带 --selftest）。
+          # 上一轮我在这段内联改了一版"跳过 # 标题取第一条非空行"，CI 绿、我也看了
+          # latest.json，结果 notes 是 `| 文件 | 用途 |`（表格头）——
+          # 内联在 PowerShell 里的逻辑没有任何东西能测它，所以"我核过了"并不等于"它对"。
+          # 现在先跑判据自己的 selftest，再生成，判据坏了发布就停。
+          $rs = "client-v2/scripts/release_notes.py"
+          python $rs --selftest
+          if ($LASTEXITCODE -ne 0) { throw "release_notes selftest 失败，不带着坏判据发布" }
+          $notes = (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md |
+                    Select-Object -First 1)
+          if ($LASTEXITCODE -ne 0) { throw "release_notes 取摘要失败 (exit $LASTEXITCODE)" }
+          if (-not $notes) { $notes = "" }
 
           $m = [ordered]@{
             schema      = 1
