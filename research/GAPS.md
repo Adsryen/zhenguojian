@@ -192,6 +192,37 @@ PRD 里三条 `[ ]` 是**过期勾选**而不是未做：
 
 ### 工具链实情（先说结论，别说半截话）
 
+## 七·补 —— **本节上面那条环境结论已被推翻**（第六轮，重要）
+
+真实原因不是"没装 Go"，而是 `~/.local/go` 是**混版 GOROOT**
+（`VERSION` 写 go1.24.6，stdlib 汇编却与工具不配）。解法：
+
+    GOTOOLCHAIN=go1.25.3   # 让 go 自己下载一套自洽工具链
+
+实测（都已跑过，不是推断）：
+- hello world 编译并运行 ✓
+- `internal/...` 9 个包全量 **16 秒**跑完、全绿
+- `GOOS=windows go vet -tags "v2overlay production devtools" -overlay … ./...` **rc=0**
+- 根包（**不带 tag**）`go test -count=2` ✓
+
+两个必须记住的坑：
+1. `GOSUMDB=off` 会让**工具链模块拒绝下载**
+   （`verifying module: checksum database disabled by GOSUMDB=off`）——
+   我之前为绕网络问题全局设了它，正好把这条路堵死，于是以为"本机编不了"。
+2. 根包"linux 编不出来"只对**带 tag**成立（wails linux 要 cgo）；
+   不带 tag 时 vet/test 都能跑。我原先写进 workflow 注释的那句是绝对化的。
+
+用法固化在 `scripts/go-local.sh`（`vet|winvet|test|race|root`）。
+
+**为什么值得单独写一节**：本轮我因为这条错结论白跑了 3 次 CI 构建
+（未使用导入、`:=` 重复声明、`%LOCALAPPDATA%` 里的 `%L` 被 vet 判非法动词，
+而 `go test` 默认跑 vet，所以一个文案里的百分号能让两个 job 一起红）。
+**一个未验证的环境假设，代价会一直付下去。**
+
+---
+
+## 七、原文（保留作为"我错过"的记录）
+
 - 本机**没有 Go**，也没有 pkg-config/GTK/webkit → **Linux GUI 版本机编不出来**，
   而且那本来不是发货物（发版目标是 Windows exe）。
 - 我在 `~/.local/go` 装了用户级 Go 1.24.6：`go list ./internal/...` 通、依赖拉得动，

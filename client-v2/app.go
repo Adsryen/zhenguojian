@@ -159,12 +159,305 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
-// shutdown 挂 wails OnShutdown：停托盘（RemoveIcon + 消息线程收尾）、
-// 关停播放服务（Quit mpv、停 tick、停弹幕抓取）。
+// ---------- 退出收尾（OnShutdown）：并发跑互不依赖的步骤 ----------
+//
+// 【耗时账：每步的最坏上界，逐条读代码算出来的（行号 = 改前现状）】
+//
+//	trayH.Stop()            internal/tray/tray.go:136-142
+//	                        = winBackend.Unregister 等消息泵 time.After(2s)
+//	                          （internal/tray/tray_windows.go:190）
+//	                          ＋分发协程 time.After(3s)（tray.go:140）
+//	                        → 最坏 5s；没注册成功（非 Windows / Start 失败）时 0s
+//	downloadSvc.OnShutdown  internal/downloadsvc/service.go:182-206
+//	                        = cancel()（ffmpeg 的 killTree 挂在 cmd.Cancel 上，
+//	                          executor.go:103，由 os/exec 的 watchCtx goroutine
+//	                          即刻触发，不等 worker 退出）
+//	                          ＋等 pollLoop/workerLoop time.After(5s)（service.go:201）
+//	                          ＋flushMergesNow 落盘（service.go:205）
+//	                        → 最坏 5s＋写盘；空闲时几十 ms
+//	playerSvc.Close()       internal/player/service.go:742-749
+//	                        = mpv.Player.Quit（internal/mpv/player.go:482-513）：
+//	                          ipc "quit" ≤1s → proc.Terminate() → 等进程
+//	                          time.After(2s)（player.go:507，**不受 ctx 约束**，
+//	                          所以 service 那句 2s ctx 管不到这一截）→ proc.Kill
+//	                        → 最坏 ≈3s；mpv 正常应 quit 时几十~几百 ms
+//
+//	串行（改前）：最坏 5＋5＋3 ＝ 13s；典型 ＝ 三步相加 ＝ 用户实测的 2–3s。
+//	并发（改后）：典型 ＝ 最慢的那一步；最坏 ＝ max(budget 2s, killBudget 4s) ＝ 4s。
+//
+// 【为什么这三步可以并发（不是"看起来独立"，是各自的等待对象不相交）】
+//   - 托盘：LockOSThread 的 Win32 消息泵 ＋ 一个分发协程；
+//   - 下载：它自己的 pollLoop/workerLoop 两个 goroutine ＋ 合并子进程句柄；
+//   - 播放：mpv 的 IPC 连接与进程句柄。
+//     三者不共享任何锁（tray.Handler.mu / downloadsvc.Service.mu /
+//     player.Service.mu 是三把不同的锁），也不互相调用；唯一共享的外部依赖是
+//     internal/native 引擎门面，而运行期下载轮询与弹幕抓取本来就在并发调它，
+//     并发化不多一个调用方。
+//
+// 【顺带补上的真窟窿（比省时间更要紧）】
+// beforeClose 的 quitWatchdog 第 5 秒 os.Exit(0)。串行时播放收尾排在最后，
+// 前面压着 5s＋5s —— 托盘或下载一卡，看门狗就在 `playerSvc.Close()` 之前响，
+// 进程一没，正在排队的 quit/Terminate 全没下发，**mpv 直接成孤儿**（ffmpeg 同理）。
+// 并发后这一步在 t=0 起跑，Terminate 最迟 t≈1s 落地，离看门狗还有 4s 余量。
+// 所以"并发化"没有削弱"不留孤儿"，它削弱的是"排到最后的才安全"这个假安全感。
+//
+// shutdownStep 是退出收尾里的一步。
+type shutdownStep struct {
+	name string
+	// terminal=true：这一步"没跑完"的代价是外部进程还活着（孤儿 mpv），
+	// 所以 budget 到点不撒手，一直等到 killBudget 为止。
+	terminal bool
+	// run 必须自己收敛（三步的现状上见上面的耗时账）；runner 只管
+	// "同时起跑 / 等多久 / 失败与超时都记日志"。
+	run func(context.Context) error
+}
+
+// shutdownOutcome 是一步的结果：日志和测试都读它。
+type shutdownOutcome struct {
+	name      string
+	took      time.Duration
+	err       error
+	abandoned bool // 到点没等到结果（goroutine 可能还在后台跑）
+}
+
+func (o shutdownOutcome) String() string {
+	switch {
+	case o.abandoned:
+		return fmt.Sprintf("%s=超时放弃(已等%s)", o.name, o.took)
+	case o.err != nil:
+		return fmt.Sprintf("%s=失败(%s): %v", o.name, o.took, o.err)
+	default:
+		return fmt.Sprintf("%s=ok(%s)", o.name, o.took)
+	}
+}
+
+var (
+	// shutdownBudget 是普通步骤（托盘、下载）的等待上限。到点放弃的是
+	// **等待**，不是职责：goroutine 继续自己跑完，结果写进带缓冲的槽位。
+	shutdownBudget = 2 * time.Second
+	// shutdownKillBudget 是终态步骤（mpv）的硬上限。取 4s 的两个理由：
+	// 它内部最坏 ≈3s（quit 1s ＋ 等进程 2s），留 1s 调度余量；
+	// 且必须 < quitWatchdog(5s)——看门狗是 os.Exit，它一响连 Terminate 都没了。
+	shutdownKillBudget = 4 * time.Second
+)
+
+// shutdownLogf 是收尾日志出口（打包成 windowsgui 后 stdout 不一定有人看，
+// 但它是 devtools/控制台启动与真机复现时唯一能看到"关窗花了多久"的地方；
+// 测试注入捕获函数，钉住"失败不静默"）。
+var shutdownLogf = func(format string, v ...any) {
+	println("[zhenguojian] shutdown: " + fmt.Sprintf(format, v...))
+}
+
+// stopTray 是托盘收尾的调用点。做成变量不是为好看：`_ = a.trayH.Stop()`
+// 这种"把错误吞回去"的回归，从根包没有别的办法观察到——tray.Handler 的
+// 后端在包外不可注入，非 Windows 上 Stop 又恒返回 nil。所以这里留一个缝，
+// 由 TestShutdownTrayErrorIsNotSwallowed 钉住（改前它连一条日志都不会有）。
+var stopTray = func(h *tray.Handler) error { return h.Stop() }
+
+// shutdownSteps 把退出收尾的三个依赖映射成可并发的步骤。
+// 顺序不构成语义（并发起跑），列在这里是为了让"谁被放弃、谁是终态"可读可测。
+func (a *App) shutdownSteps() []shutdownStep {
+	return []shutdownStep{
+		{
+			name: "tray",
+			run: func(context.Context) error {
+				// 改前这里是 Stop() 无返回值，Unregister 的"消息线程 2s 未退出"
+				// 被 `_ =` 吞在托盘包内部；现在把错误交给调用方记日志。
+				return stopTray(a.trayH)
+			},
+		},
+		{
+			name: "downloads",
+			run: func(ctx context.Context) error {
+				// 被 budget 放弃时各保住/丢掉什么（逐条对着 service.go:182-206 核过）：
+				//   保住 ffmpeg：cancel() 一落地，os/exec 的 watchCtx goroutine 就调
+				//     cmd.Cancel → killTree（executor.go:103）；它不等 worker 退出，
+				//     但也不是 cancel() 返回那一瞬就完——被放弃时它已经有一整个
+				//     budget 的时间去落地（cancel 在 t≈0，放弃在 t=budget）。
+				//   保住轮询/worker 的取消：同一个 cancel；
+				//   可能丢掉：末尾那次 merges.state.json 立即落盘（service.go:205）。
+				//     但改前的串行路径在同一种"worker 卡死"场景下也丢它——
+				//     那要等满 5s，而 quitWatchdog 第 5 秒就 os.Exit(0)，
+				//     前面还压着托盘最多 5s。所以这不是新丢的东西，
+				//     是把"本来就撞看门狗"的情形挪进了有界日志里。
+				a.downloadSvc.OnShutdown(ctx)
+				return nil
+			},
+		},
+		{
+			name:     "mpv",
+			terminal: true,
+			run: func(context.Context) error {
+				// 终态 Close，**不是** PlayerClosePlayer 那条 Stop：
+				// Stop 把 quit 丢进 goroutine 就返回（service.go:697-703，
+				// 那是换集/关播放窗的语义，"never freezes the window"），
+				// 退出时进程跟着没，那个 goroutine 也就没了 = 孤儿 mpv。
+				return a.playerSvc.Close()
+			},
+		},
+	}
+}
+
+// shutdown 挂 wails OnShutdown：并发跑 shutdownSteps。
 func (a *App) shutdown(ctx context.Context) {
-	a.trayH.Stop()
-	a.downloadSvc.OnShutdown(ctx)
-	_ = a.playerSvc.Close()
+	runShutdownSteps(ctx, a.shutdownSteps(), shutdownBudget, shutdownKillBudget, shutdownLogf)
+}
+
+// runShutdownSteps 并发执行 steps，返回每步结果。语义（测试钉的就是这四条）：
+//
+//	① 所有步骤同时起跑 —— 这是"串行求和"变成"并发取最大"的唯一来源；
+//	② 单步 panic 收成 error，不得带走其它步骤；
+//	③ budget 到点只放弃**非终态**步骤；终态步骤继续等到 killBudget，
+//	   再不到点才放弃，并且日志必须点名"可能留孤儿进程"——这是全套唯一
+//	   还能漏 mpv 的口子，不能悄悄走过去；
+//	④ 失败 / panic / 超时一律走 logf，不静默。
+//
+// 放弃的判定是**一次性**的（settled 标记）：迟到的结果不会把"已放弃"改写成 ok，
+// 否则测试与日志都会跟着调度抖。
+func runShutdownSteps(parent context.Context, steps []shutdownStep, budget, killBudget time.Duration,
+	logf func(format string, v ...any)) []shutdownOutcome {
+
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	t0 := time.Now()
+	// 一个共享的派生 ctx：runner 返回时 cancel，让**被放弃**的 goroutine
+	// 有个"宿主已经不等了"的信号可看（现有三步都自带超时、不看它；
+	// 但它保证了以后加进来的步骤不必再自己发明一套放弃协议）。
+	// ⚠ 放弃靠的是"不再等"，不是取消：cancel 之后这一步仍在跑。
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+
+	outcomes := make([]shutdownOutcome, len(steps))
+	startedAt := make([]time.Time, len(steps))
+	settled := make([]bool, len(steps))
+	var mu sync.Mutex
+
+	// settle 只在槽位空闲时写：先到的判定算数（结果或放弃），后来者被忽略。
+	settle := func(i int, o shutdownOutcome) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if settled[i] {
+			return false
+		}
+		settled[i] = true
+		outcomes[i] = o
+		return true
+	}
+	giveUp := func(i int, why string) {
+		settle(i, shutdownOutcome{
+			name:      steps[i].name,
+			took:      time.Since(startedAt[i]),
+			err:       fmt.Errorf("%s（这一步自己没在预算内结束）", why),
+			abandoned: true,
+		})
+	}
+
+	var wg sync.WaitGroup
+	for i, st := range steps {
+		startedAt[i] = time.Now()
+		wg.Add(1)
+		go func(i int, st shutdownStep) {
+			defer wg.Done()
+			since := startedAt[i]
+			err := callShutdownStep(ctx, st)
+			settle(i, shutdownOutcome{name: st.name, took: time.Since(since), err: err})
+		}(i, st)
+	}
+	finished := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(finished)
+	}()
+
+	// 放弃所有"非终态且还没结束"的槽位。
+	abandonOrdinary := func() {
+		mu.Lock()
+		idx := make([]int, 0, len(steps))
+		for i := range steps {
+			if !steps[i].terminal && !settled[i] {
+				idx = append(idx, i)
+			}
+		}
+		mu.Unlock()
+		for _, i := range idx {
+			giveUp(i, fmt.Sprintf("%s 未在 %s 内结束", steps[i].name, budget))
+		}
+	}
+	terminalWaiting := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for i := range steps {
+			if steps[i].terminal && !settled[i] {
+				return true
+			}
+		}
+		return false
+	}
+
+	// 第一轮：所有步骤共用 budget。
+	timer := time.NewTimer(budget)
+	select {
+	case <-finished:
+		timer.Stop()
+	case <-timer.C:
+		abandonOrdinary()
+	}
+	// 第二轮：只剩终态步骤在等时，把上限放宽到 killBudget（从 t=0 起算）。
+	if terminalWaiting() {
+		left := killBudget - time.Since(t0)
+		if left < 0 {
+			left = 0
+		}
+		hard := time.NewTimer(left)
+		select {
+		case <-finished:
+			hard.Stop()
+		case <-hard.C:
+			mu.Lock()
+			idx := make([]int, 0, len(steps))
+			for i := range steps {
+				if steps[i].terminal && !settled[i] {
+					idx = append(idx, i)
+				}
+			}
+			mu.Unlock()
+			for _, i := range idx {
+				// 唯一还能留孤儿的路径：内部 Quit 的上界被人改大、或这一步
+				// 根本卡死。点名喊出来，别让它躲在一条 ok 里。
+				giveUp(i, fmt.Sprintf("%s 未在 %s 内结束——可能留下孤儿 mpv", steps[i].name, killBudget))
+			}
+		}
+	}
+
+	snapshot := make([]shutdownOutcome, len(outcomes))
+	mu.Lock()
+	copy(snapshot, outcomes)
+	mu.Unlock()
+
+	parts := make([]string, 0, len(snapshot))
+	for _, o := range snapshot {
+		parts = append(parts, o.String())
+		if o.err != nil {
+			logf("步骤 %s 未干净结束: %v", o.name, o.err)
+		}
+	}
+	logf("并发收尾用时 %s（预算 %s / 终态上限 %s）：%s",
+		time.Since(t0).Round(time.Millisecond), budget, killBudget, strings.Join(parts, " "))
+	return snapshot
+}
+
+// callShutdownStep 跑一步，panic 转成 error：一个步骤炸了不得带走其它收尾。
+func callShutdownStep(ctx context.Context, st shutdownStep) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("shutdown: %s panic: %v", st.name, r)
+		}
+	}()
+	if st.run == nil {
+		return nil
+	}
+	return st.run(ctx)
 }
 
 // TrayStatus 托盘状态一行文本（running / unsupported: … / failed: … / stopped）。

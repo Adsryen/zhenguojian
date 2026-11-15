@@ -120,12 +120,24 @@ func (h *Handler) Start() error {
 	return nil
 }
 
-// Stop 注销托盘并等消息泵收尾（最多 3s；超时只记状态不卡关机）。
-func (h *Handler) Stop() {
+// trayDispatchWait 是等分发协程（run）退出的上限。做成变量是为了让
+// "卡住的分发协程"这条分支能进单测——写死 3s 的超时，测试要么等 3 秒
+// 要么永远测不到，两种都不是钉住。
+var trayDispatchWait = 3 * time.Second
+
+// Stop 注销托盘并等消息泵收尾，**返回收尾里的失败**（调用方负责记日志）。
+// 改前这里无返回值：winBackend.Unregister 的"消息线程 2s 未退出"被
+// `_ = h.b.Unregister()` 吞在包内，退出路径上没人知道托盘到底走没走干净
+// （app.go 的并发收尾正是要拿这条日志）。
+//
+// 上界：Unregister（Windows 2s，见 tray_windows.go unregisterTimeout）
+// ＋分发协程 trayDispatchWait（3s）＝最坏 5s；没 Start 过时 0s。
+// 超时不卡关机：状态记进 Status()，错误原样交出去。
+func (h *Handler) Stop() error {
 	h.mu.Lock()
 	if !h.started {
 		h.mu.Unlock()
-		return
+		return nil
 	}
 	h.started = false
 	h.stopped = true
@@ -133,12 +145,19 @@ func (h *Handler) Stop() {
 	done := h.done
 	h.mu.Unlock()
 
-	_ = h.b.Unregister()
+	unregErr := h.b.Unregister()
 	select {
 	case <-done:
 		h.setStatus("stopped")
-	case <-time.After(3 * time.Second):
+		return unregErr
+	case <-time.After(trayDispatchWait):
 		h.setStatus("stopped (unregister timeout)")
+		if unregErr != nil {
+			// %w 而不是 %v：两个上限同时命中时，调用方 errors.Is 还得能认出
+			// Unregister 那条原始错误，不然日志里只剩一句拼出来的文案。
+			return fmt.Errorf("tray: Unregister: %w；分发协程 %s 未退出", unregErr, trayDispatchWait)
+		}
+		return fmt.Errorf("tray: 分发协程 %s 未退出", trayDispatchWait)
 	}
 }
 

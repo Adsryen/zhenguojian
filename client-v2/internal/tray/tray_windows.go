@@ -18,7 +18,6 @@ package tray
 //   - Explorer 重启（TaskbarCreated 广播）自动重挂图标。
 
 import (
-	"errors"
 	"fmt"
 	"runtime"
 	"sync/atomic"
@@ -179,7 +178,13 @@ func (b *winBackend) Register(h *Handler) error {
 	return nil
 }
 
-// Unregister 删除图标并关消息窗，等泵线程收尾（最多 2s）。
+// unregisterTimeout 是等托盘消息线程退出的上限（变量化理由同 tray.go 的
+// trayDispatchWait：这条超时得能进单测，而不是靠真等 2 秒）。
+var unregisterTimeout = 2 * time.Second
+
+// Unregister 删除图标并关消息窗，等泵线程收尾（最多 unregisterTimeout）。
+// 删图标是**同步**的（PostMessage 之前就已 NIM_DELETE），所以到点放弃等待
+// 不会把图标留在通知区域——拖着的只是消息线程那口气。
 func (b *winBackend) Unregister() error {
 	b.deleteIcon()
 	if b.hwnd != 0 {
@@ -187,8 +192,8 @@ func (b *winBackend) Unregister() error {
 	}
 	select {
 	case <-b.done:
-	case <-time.After(2 * time.Second):
-		return errors.New("tray: 消息线程 2s 未退出")
+	case <-time.After(unregisterTimeout):
+		return fmt.Errorf("tray: 消息线程 %s 未退出", unregisterTimeout)
 	}
 	return nil
 }
