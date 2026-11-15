@@ -10,7 +10,11 @@ import (
 	"time"
 )
 
-// GitHub Releases 列表端点（per_page=20 足够覆盖 v2 全部预发布 + 稳定版）。
+// ReleasesAPIURL GitHub Releases 列表端点（per_page=20 足够覆盖 v2 全部预发布 + 稳定版）。
+// ⚠ D1 之后仅作为【最后兜底】（见 service.go discoverRelease）：公开 gh 加速镜像
+// 只代理 github.com 形状 URL，api.github.com 经 gh-proxy.com 必然 403 rate limit、
+// 经 ghproxy.net 403 Invalid input，国内任何前缀都救不回来；保留只为海外/直连
+// 环境和 CI 未产出 latest.json 的过渡期。主路径是 latest.json（见 latest.go）。
 const ReleasesAPIURL = "https://api.github.com/repos/Adsryen/zhenguojian/releases?per_page=20"
 
 // defaultMirrors 国内加速前缀候选（决策约定顺序），直连永远排在它们之前。

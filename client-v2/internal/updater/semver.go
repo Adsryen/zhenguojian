@@ -1,7 +1,8 @@
-// Package updater —— v2 程序内检查/下载/应用更新（GitHub Releases API + 国内加速候选链）。
+// Package updater —— v2 程序内检查/下载/应用更新（latest.json 元数据主路径 +
+// github.com 形状镜像候选链；旧 Releases API JSON 仅作海外兜底，见 latest.go/chain.go）。
 // 语义参照 reference/guoapp/native/core/app_update.go（服务端 /v1/latest 模式），
-// 差异：本包直连 GitHub Releases 列表并本地选版；通道 = stable 默认 / 含 prerelease 可选；
-// 版本比较 = semver-lite vX.Y.Z(-pre.N)。平台差异仅收在 apply_* 与文件名判断。
+// 差异：本包读随 release 发布的 latest.json 并在本地选版；通道 = stable 默认 /
+// 含 prerelease 可选；版本比较 = semver-lite vX.Y.Z(-pre.N)。平台差异仅收在 apply_* 与文件名判断。
 package updater
 
 import (

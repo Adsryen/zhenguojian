@@ -3,6 +3,7 @@ package updater
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,8 +19,37 @@ import (
 const exeContent = "0123456789abcdef01" // 18B
 const zipContent = "ZIPDATA"            // 7B
 
-// newComboServer 一个服务器同时扮演 releases API 与资产下载源；
-// 用 mirrorPrefix 指向它即可全程离线（候选链首选 = 前缀拼接）。
+// comboManifestJSON latest.json 契约 fixture（schema 1，v9.9.9 稳定版；exe 带显式
+// url 走 /dl/x.exe，appZip/runtimeZip 故意缺 url → 顺带验证 tag+name 合成下载地址）。
+func comboManifestJSON(base string) string {
+	return fmt.Sprintf(`{"schema":1,"generatedAt":"2026-03-01T00:00:00Z","tag":"v9.9.9","version":"9.9.9","prerelease":false,
+		"notes":"test notes","assets":{
+			"exe":{"name":"zhenGuoJian-v2.exe","size":%d,"sha256":"%s","url":"%s/dl/x.exe"},
+			"appZip":{"name":"zhenGuoJian-v2-app.zip","size":%d,"sha256":"%s"},
+			"runtimeZip":{"name":"zhenGuoJian-v2-runtime.zip","size":145,"sha256":"%s"},
+			"buildInfo":{"name":"build-info.json","size":120}}}`,
+		len(exeContent), strings.Repeat("a1", 32), base,
+		len(zipContent), strings.Repeat("b2", 32), strings.Repeat("c3", 32))
+}
+
+// comboAtomFeed 单 entry 的 releases.atom（真实 feed 形态的缩略版）。
+func comboAtomFeed() string {
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/">
+  <id>tag:github.com,2008:https://github.com/Adsryen/zhenguojian/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/Adsryen/zhenguojian/releases"/>
+  <entry>
+    <id>tag:github.com,2008:Repository/1450138827/v9.9.9</id>
+    <link rel="alternate" type="text/html" href="https://github.com/Adsryen/zhenguojian/releases/tag/v9.9.9"/>
+    <title>v9.9.9</title>
+  </entry>
+</feed>`
+}
+
+// newComboServer 一个服务器同时扮演 latest.json 主路径（releases.atom、
+// releases/latest/download/latest.json、releases/download/<tag>/latest.json）、
+// 旧 releases API 兜底与资产下载源；用 mirrorPrefix 指向它即可全程离线
+// （候选链首选 = 前缀拼接）。
 func newComboServer(t *testing.T) (*httptest.Server, string, int64) {
 	t.Helper()
 	var base string
@@ -33,9 +63,15 @@ func newComboServer(t *testing.T) (*httptest.Server, string, int64) {
 "assets":[{"name":"zhenGuoJian-v2.exe","browser_download_url":"%s/dl/x.exe","size":%d},
           {"name":"zhenGuoJian-v2-app.zip","browser_download_url":"%s/dl/app.zip","size":%d}]}]`,
 				base, exeSize, base, len(zipContent))
-		case strings.Contains(p, "/dl/x.exe"):
+		case strings.Contains(p, "/releases.atom"):
+			w.Header().Set("Content-Type", "application/atom+xml")
+			io.WriteString(w, comboAtomFeed())
+		case strings.Contains(p, "/latest.json"):
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, comboManifestJSON(base))
+		case strings.HasSuffix(p, "/"+DefaultExeAsset), strings.Contains(p, "/dl/x.exe"):
 			serveBytes(w, r, []byte(exeContent))
-		case strings.Contains(p, "/dl/app.zip"):
+		case strings.HasSuffix(p, "/"+DefaultAppZipAsset), strings.Contains(p, "/dl/app.zip"):
 			serveBytes(w, r, []byte(zipContent))
 		default:
 			http.NotFound(w, r)

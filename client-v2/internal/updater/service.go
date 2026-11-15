@@ -158,20 +158,9 @@ func (s *Service) runCheck(ctx context.Context, set Settings) *CheckResult {
 		channel = "prerelease"
 	}
 	res := &CheckResult{Current: s.Local.Version, Dev: s.Local.Dev, Channel: channel, CheckedAt: time.Now().Unix()}
-	urls := ChainCandidates(ReleasesAPIURL, set.MirrorPrefix)
-	data, err := FetchJSON(ctx, s.checkClient, urls, 4<<20)
+	rel, releases, err := s.discoverRelease(ctx, set)
 	if err != nil {
 		res.Error = err.Error()
-		return res
-	}
-	releases, err := ParseReleases(data)
-	if err != nil {
-		res.Error = err.Error()
-		return res
-	}
-	rel := PickLatest(releases, set.Prerelease)
-	if rel == nil {
-		res.Error = "未找到 v2 发布版本"
 		return res
 	}
 	s.mu.Lock()
@@ -196,6 +185,46 @@ func (s *Service) runCheck(ctx context.Context, set Settings) *CheckResult {
 	res.Available = newer
 	res.Release = rel
 	return res
+}
+
+// discoverRelease 版本发现两条路径（D1 改数据源，dev-plan-2026-11.md 第三节）：
+//  1. 主路径 = latest.json 元数据（fetchLatestRelease）：镜像代理的是 github.com
+//     形状 URL，国内加速前缀对它有效；对 api.github.com 一律无效（实测 403）。
+//  2. 兜底 = 旧 Releases API JSON（fetchAPIRelease）。它在国内经 gh 镜像必然
+//     403（rate limit / Invalid input），保留只为海外/直连环境，以及 CI 还没
+//     产出 latest.json 的过渡期——主路径任何失败（网络/解析/契约校验）都会
+//     继续试它；两边都失败才报错，错误里保留各自的具体原因。
+//
+// 返回选中的 release 与候选列表（供 ReleaseByTag/下载；主路径只有一个 = 单元素）。
+func (s *Service) discoverRelease(ctx context.Context, set Settings) (*Release, []Release, error) {
+	rel, primaryErr := fetchLatestRelease(ctx, s.checkClient, set)
+	if primaryErr == nil {
+		return rel, []Release{*rel}, nil
+	}
+	rel2, releases, fbErr := s.fetchAPIRelease(ctx, set)
+	if fbErr == nil {
+		return rel2, releases, nil
+	}
+	return nil, nil, fmt.Errorf("latest.json 主路径失败：%v；旧 API 兜底失败：%v", primaryErr, fbErr)
+}
+
+// fetchAPIRelease 旧兜底路径：api.github.com/releases?per_page=20 + 本地选版。
+// 见 discoverRelease 注释——它在国内经镜像必然 403，不要当主路径用。
+func (s *Service) fetchAPIRelease(ctx context.Context, set Settings) (*Release, []Release, error) {
+	urls := ChainCandidates(ReleasesAPIURL, set.MirrorPrefix)
+	data, err := FetchJSON(ctx, s.checkClient, urls, 4<<20)
+	if err != nil {
+		return nil, nil, err
+	}
+	releases, err := ParseReleases(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	rel := PickLatest(releases, set.Prerelease)
+	if rel == nil {
+		return nil, releases, errors.New("未找到 v2 发布版本")
+	}
+	return rel, releases, nil
 }
 
 // Status 给 UpdateStatus 绑定：当前版本 + 最近检查结果 + 下载状态 + 设置摘要。
