@@ -604,6 +604,53 @@ func TestMergeUnverifiedOnCheckMismatch(t *testing.T) {
 	}
 }
 
+// 确定性钉住那个竞态窗口（不靠调度碰运气）。
+//
+// 来历：Windows CI 上 TestMergeCancelAndSkipVerify 偶发红在"应转为 canceled"，
+// 查出来不是测试抖动，而是真 bug：`nextQueued()` 先把 State 置 running，
+// `entry.cancel` 却要等 `runMergeEntry` 起跑才登记；
+// 落在中间那一刻的取消请求，`MergeCancel` 因 `m.cancel == nil` **什么都不做**，
+// 却照样返回 {"ok":true} —— 界面以为取消了，合并跑到底。
+// Linux 窗口极小所以一直绿。
+func TestMergeCancelInRegistrationWindow(t *testing.T) {
+	h := newHarness(t)
+	mergeFixture(t, h)
+	h.exec.blockOn = "-f concat"
+
+	// 手工造出那个窗口：条目已 running，但 cancel 还没登记
+	h.svc.mu.Lock()
+	h.svc.loadMergesLocked()
+	var e *MergeEntry
+	for _, m := range h.svc.merges {
+		if m.ID == "d1#001-002" {
+			e = m
+		}
+	}
+	if e == nil {
+		h.svc.mu.Unlock()
+		t.Fatal("fixture 没建出预期条目")
+	}
+	e.State = MergeRunning
+	e.cancel = nil
+	h.svc.mu.Unlock()
+
+	if _, err := h.svc.MergeCancel(e.ID); err != nil {
+		t.Fatalf("MergeCancel: %v", err)
+	}
+
+	h.svc.mu.Lock()
+	pending, state := e.cancelRequested, e.State
+	h.svc.mu.Unlock()
+	if !pending {
+		t.Fatal("窗口内的取消请求被丢掉了——修复前正是这个形状")
+	}
+	// 也不能在这里直接写终态：exec 还在跑，worker 会把它覆盖回 running/done，
+	// 那会变成"看起来取消了、其实没有"的另一种假象
+	if state == MergeCanceled {
+		t.Fatal("不该在取消请求处直接改终态（应由登记后补一刀，让 exec 真正退出）")
+	}
+}
+
 func TestMergeCancelAndSkipVerify(t *testing.T) {
 	h := newHarness(t)
 	mergeFixture(t, h)

@@ -602,6 +602,15 @@ type MergeEntry struct {
 
 	jobs      []map[string]any
 	cancel    context.CancelFunc
+	/* cancelRequested 补的是这个竞态窗口（Windows CI 实测会红）：
+	   `nextQueued()` 先把 State 置成 running，
+	   而 `entry.cancel` 要等 `runMergeEntry` 真正起跑才登记。
+	   落在中间那一刻的取消请求，原来在 `MergeCancel` 里因为
+	   `if m.cancel != nil` 不成立而**什么都不做**——
+	   界面拿到 {"ok":true} 以为取消成功，合并却照样跑到底。
+	   Linux 窗口极小、Windows 调度慢所以偶发命中。
+	   现在把"要取消"记在条目上，由登记方登记完立刻补一刀。 */
+	cancelRequested bool
 	createdAt time.Time
 	// restored 交付 A：本条目来自启动快照恢复，jobs 需执行时重挂。
 	restored bool
@@ -768,6 +777,12 @@ func (s *Service) MergeCancel(id string) (map[string]any, error) {
 		case MergeRunning:
 			if m.cancel != nil {
 				cancels = append(cancels, m.cancel)
+			} else {
+				// 竞态窗口：worker 已把状态标成 running，但还没登记 cancel。
+				// 记在条目上，由 runMergeEntry 登记后立刻取消。
+				// ⚠ 不能在这里直接改 State：exec 还在跑，改完会被 worker 覆盖回去，
+				//   那正是"看起来取消了、其实没有"的形状。
+				m.cancelRequested = true
 			}
 		case MergeQueued:
 			m.State = MergeCanceled
@@ -835,7 +850,13 @@ func (s *Service) runMergeEntry(ctx context.Context, entry *MergeEntry) {
 	runCtx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
 	entry.cancel = cancel
+	pendingCancel := entry.cancelRequested
+	entry.cancelRequested = false
 	s.mu.Unlock()
+	if pendingCancel {
+		// 取消请求落在"已 running 但未登记 cancel"的窗口里，这里补生效
+		cancel()
+	}
 	defer func() {
 		cancel()
 		s.mu.Lock()
