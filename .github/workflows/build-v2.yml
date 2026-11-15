@@ -488,8 +488,12 @@ jobs:
           # notes 取发布说明首行（非空），只给一行摘要，别把整篇塞进元数据
           $notes = ""
           if (Test-Path client-v2/build/bin/RELEASE-NOTES.md) {
+            # ⚠ 第一版取"第一条非空行"，实测 alpha.30 的 latest.json 里
+            #   notes 变成了 `## 本 Release 资产说明` —— 一行 Markdown 标题。
+            #   notes 是要显示给人的，得跳过标题行取第一句正文。
             $notes = (Get-Content client-v2/build/bin/RELEASE-NOTES.md |
-                      Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
+                      Where-Object { $_.Trim() -ne "" -and $_.Trim() -notmatch "^#" } |
+                      Select-Object -First 1).Trim()
           }
 
           $m = [ordered]@{
