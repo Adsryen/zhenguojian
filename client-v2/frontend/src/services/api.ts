@@ -1103,9 +1103,32 @@ export const MOCK_MODE = isMock
    时整条播放链路保持现行行为（mpv 独立窗 / 浏览器无画面）。
    时序契约：PlayerAttach → PlayerOpen（spawn 前 SetWid 生效）→ 几何/状态变化
    PlayerSetBounds（物理像素，零尺寸=隐藏）→ 离开 PlayerDetach。 */
+/** 内嵌现场（Go 侧 mpv.HostDebug）。真机「音频有、画面黑」只能靠它定位。 */
+export interface EmbedHostDebug {
+  supported?: boolean
+  parentHwnd?: string
+  parentClass?: string
+  childHwnd?: string
+  childVisible?: boolean
+  childLeft?: number
+  childTop?: number
+  childWidth?: number
+  childHeight?: number
+  lastInX?: number
+  lastInY?: number
+  lastInW?: number
+  lastInH?: number
+  lastOutVisible?: boolean
+  lastOutX?: number
+  lastOutY?: number
+  lastOutW?: number
+  lastOutH?: number
+}
+
 export interface AttachResult {
   embedded: boolean
   reason?: string
+  host?: EmbedHostDebug
 }
 
 export const embedApi = {
@@ -1117,15 +1140,26 @@ export const embedApi = {
     }
     if (!hasBridge) return { embedded: false }
     try {
-      return (await callGo<AttachResult>('PlayerAttach')) ?? { embedded: false }
+      const r = (await callGo<AttachResult>('PlayerAttach')) ?? { embedded: false }
+      // 控制台留现场：排错时用户开 Ctrl+Shift+F12 就能复制给我，
+      // 不需要我猜"是不是父窗选错 / 子窗从没被摆过"。
+      console.info('[embed] attach', JSON.stringify(r))
+      return r
     } catch (err: any) {
-      return { embedded: false, reason: String(err?.message ?? err) }
+      const r = { embedded: false, reason: String(err?.message ?? err) }
+      console.info('[embed] attach 失败', JSON.stringify(r))
+      return r
     }
   },
   setBounds: async (x: number, y: number, w: number, h: number): Promise<void> => {
     if (isMock || !hasBridge) return
     try {
-      await callGo('PlayerSetBounds', x, y, w, h)
+      const r = await callGo<{ ok: boolean; host?: EmbedHostDebug }>(
+        'PlayerSetBounds', x, y, w, h)
+      // 只报"有尺寸的那几次"，否则每次几何变化都打一条会把控制台刷满
+      if (w > 1 && h > 1) {
+        console.info('[embed] setBounds', x, y, w, h, JSON.stringify(r?.host ?? null))
+      }
     } catch {
       /* 几何上报失败不干扰播放 UI（窗口销毁竞态等） */
     }

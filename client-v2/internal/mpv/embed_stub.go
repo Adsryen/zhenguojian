@@ -28,6 +28,9 @@ func (e *EmbedHost) HWND() uintptr { return 0 }
 func (e *EmbedHost) ApplyBounds(Bounds) error { return nil }
 
 // Hide 无操作。
+// Debug 非 Windows 没有现场可取，supported:false。
+func (e *EmbedHost) Debug() HostDebug { return HostDebug{} }
+
 func (e *EmbedHost) Hide() {}
 
 // Close 无操作。

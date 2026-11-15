@@ -413,7 +413,8 @@ func (a *App) PlayerAttach() (string, error) {
 		a.embed = host
 	}
 	a.playerSvc.SetWid(a.embed.HWND())
-	return marshalJSON(map[string]any{"embedded": true})
+	// 现场一起返回：真机「音频有画面黑」只能靠它定位（见 mpv.HostDebug）
+	return marshalJSON(map[string]any{"embedded": true, "host": a.embed.Debug()})
 }
 
 // PlayerSetBounds 按视频容器矩形移动/显隐子窗（物理像素，相对主窗客户区；
@@ -427,7 +428,7 @@ func (a *App) PlayerSetBounds(x, y, w, h int) (string, error) {
 	if err := a.embed.ApplyBounds(mpv.Bounds{X: x, Y: y, W: w, H: h}); err != nil {
 		return "", err
 	}
-	return marshalJSON(map[string]any{"ok": true})
+	return marshalJSON(map[string]any{"ok": true, "host": a.embed.Debug()})
 }
 
 // PlayerHitBands 上报视频矩形上/下「点击穿透带」高度（物理像素；前端按

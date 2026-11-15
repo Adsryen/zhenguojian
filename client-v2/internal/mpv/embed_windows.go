@@ -47,7 +47,7 @@ func init() {
 		"EnumWindows", "GetWindowThreadProcessId", "GetClassNameW", "GetWindowTextW",
 		"IsWindowVisible", "RegisterClassExW", "CreateWindowExW", "DefWindowProcW",
 		"MoveWindow", "ShowWindow", "SetWindowPos", "DestroyWindow",
-		"ScreenToClient", "GetClientRect",
+		"ScreenToClient", "GetClientRect", "GetWindowRect",
 	} {
 		procEmbed[n] = user32Embed.NewProc(n)
 	}
@@ -221,6 +221,10 @@ type EmbedHost struct {
 	mu     sync.Mutex
 	parent windows.HWND
 	child  windows.HWND
+	// 最近一次 ApplyBounds 的现场（只给诊断读，不参与任何播放判定）
+	lastIn Bounds
+	lastR  Rect
+	lastV  bool
 }
 
 // NewEmbedHost 发现 Wails 主窗口并在其下创建隐藏的视频承载子窗。
@@ -275,6 +279,7 @@ func (e *EmbedHost) ApplyBounds(b Bounds) error {
 		return errors.New("mpv: 子窗已销毁")
 	}
 	r, visible := VideoRect(b)
+	e.lastIn, e.lastR, e.lastV = b, r, visible
 	if !visible {
 		procEmbed["ShowWindow"].Call(uintptr(e.child), swHide)
 		return nil
@@ -285,6 +290,32 @@ func (e *EmbedHost) ApplyBounds(b Bounds) error {
 	procEmbed["SetWindowPos"].Call(uintptr(e.child), uintptr(hwndTop), 0, 0, 0, 0,
 		uintptr(swpNoSize|swpNoMove|swpNoActivate))
 	return nil
+}
+
+// Debug 取内嵌现场（句柄、父窗类名、子窗矩形与可见性、最近一次换算）。
+// 全是"读现场"，任何一步失败就留零值，不影响播放。
+func (e *EmbedHost) Debug() HostDebug {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	d := HostDebug{Supported: true,
+		ParentHwnd: fmt.Sprintf("0x%x", uintptr(e.parent)),
+		ChildHwnd:  fmt.Sprintf("0x%x", uintptr(e.child)),
+		LastInX:    e.lastIn.X, LastInY: e.lastIn.Y, LastInW: e.lastIn.W, LastInH: e.lastIn.H,
+		LastOutVisible: e.lastV,
+		LastOutX:       e.lastR.X, LastOutY: e.lastR.Y, LastOutW: e.lastR.W, LastOutH: e.lastR.H}
+	if e.parent != 0 {
+		d.ParentClass = winString(procEmbed["GetClassNameW"], uintptr(e.parent))
+	}
+	if e.child != 0 {
+		vis, _, _ := procEmbed["IsWindowVisible"].Call(uintptr(e.child))
+		d.ChildVisible = vis != 0
+		var rc windows.Rect
+		if ret, _, _ := procEmbed["GetWindowRect"].Call(uintptr(e.child), uintptr(unsafe.Pointer(&rc))); ret != 0 {
+			d.ChildLeft, d.ChildTop = int(rc.Left), int(rc.Top)
+			d.ChildWidth, d.ChildHeight = int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
+		}
+	}
+	return d
 }
 
 // Hide 隐藏子窗（页面离开/暂停展示 DOM 覆盖层时用）。

@@ -38,6 +38,36 @@ const WailsWindowClass = "wailsWindow"
 // 与类名联合校验以避开同进程中其它窗口与多实例串扰。
 const MainWindowTitle = "真果鉴"
 
+// HostDebug 是内嵌链路的现场数据。
+//
+// 为什么要它：真机 alpha.28 报「音频有、画面全黑」，而我**没有任何手段
+// 知道用户机器上的窗口层级长什么样** —— 窗口类注册修好后这是第一次真跑，
+// 剩下的候选原因（父窗选错、子窗尺寸没生效、可见性、z-order 压不过 WebView2、
+// mpv 没往这个窗画）在本机一个都复现不了。继续猜就是编故事，
+// 所以把现场取回来：输出走 DevTools 控制台（Ctrl+Shift+F12），
+// 用户截一张图我就能定位，而不是再让他试一轮。
+type HostDebug struct {
+	Supported    bool   `json:"supported"`
+	ParentHwnd   string `json:"parentHwnd"`
+	ParentClass  string `json:"parentClass"`
+	ChildHwnd    string `json:"childHwnd"`
+	ChildVisible bool   `json:"childVisible"`
+	// 子窗屏幕坐标矩形（物理像素）。宽高还是 1 就说明从没被真正摆过。
+	ChildLeft      int  `json:"childLeft"`
+	ChildTop       int  `json:"childTop"`
+	ChildWidth     int  `json:"childWidth"`
+	ChildHeight    int  `json:"childHeight"`
+	LastInX        int  `json:"lastInX"`
+	LastInY        int  `json:"lastInY"`
+	LastInW        int  `json:"lastInW"`
+	LastInH        int  `json:"lastInH"`
+	LastOutVisible bool `json:"lastOutVisible"`
+	LastOutX       int  `json:"lastOutX"`
+	LastOutY       int  `json:"lastOutY"`
+	LastOutW       int  `json:"lastOutW"`
+	LastOutH       int  `json:"lastOutH"`
+}
+
 // Bounds 是视频容器相对宿主窗口客户区的矩形，单位物理像素
 // （前端已按 devicePixelRatio 换算）。W/H 小于 1 视为隐藏请求。
 type Bounds struct {

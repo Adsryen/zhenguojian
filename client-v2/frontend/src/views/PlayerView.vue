@@ -32,7 +32,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, SPEED_CHOICES, QUALITY_CHOICES } from '@/stores/player'
 import { dramaFromQuery, detailRoute } from '@/services/dramaRef'
-import { api, embedApi } from '@/services/api'
+import { api, embedApi, type EmbedHostDebug } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
@@ -74,6 +74,24 @@ const chapters = ref<Chapter[]>([])
 const chaptersLoading = ref(false)
 const panelBodyEl = ref<HTMLElement | null>(null)
 const embedReason = ref('')
+/* 内嵌现场（父窗类名 / 子窗矩形 / 可见性 / 最近一次换算）。
+   默认不显示——正常用户不该看到调试信息；
+   置 localStorage['zgj.embedDebug']='1' 后显示在视频区左上角，
+   排错时截一张图就够，不用开 DevTools 复制。 */
+const embedHost = ref<EmbedHostDebug | null>(null)
+const embedDebugOn = localStorage.getItem('zgj.embedDebug') === '1'
+
+const embedDebugText = computed(() => {
+  const h = embedHost.value
+  if (!h) return ''
+  return '父窗 ' + (h.parentClass || '?')
+    + ' · 子窗 ' + (h.childHwnd || '?')
+    + ' · 屏幕矩形 ' + h.childWidth + '×' + h.childHeight + ' @' + h.childLeft + ',' + h.childTop
+    + ' · visible=' + (h.childVisible ? '是' : '否')
+    + ' · 最近上报 ' + h.lastInW + '×' + h.lastInH
+    + ' → 换算 ' + h.lastOutW + '×' + h.lastOutH
+    + '（visible=' + (h.lastOutVisible ? '是' : '否') + '）'
+})
 
 /* ── V2-4 内嵌几何上报 ── */
 const stageEl = ref<HTMLElement | null>(null)
@@ -338,6 +356,7 @@ onMounted(async () => {
      只能靠猜。现在把它挂在视频区角落（真机且回退时才出现），
      用户一眼能看见、也能直接念给我。 */
   embedReason.value = attach.embedded ? '' : attach.reason || 'unknown'
+  embedHost.value = attach.host ?? null
   if (embedActive) {
     if (stageEl.value) {
       stageRO = new ResizeObserver(() => void reportBounds())
@@ -389,6 +408,11 @@ onBeforeUnmount(() => {
     <div class="pl-mid">
       <div class="pl-col">
         <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
+          <div
+            v-if="embedDebugOn && embedHost"
+            class="pl-hint embed-debug"
+            data-testid="embed-debug"
+          >{{ embedDebugText }}</div>
           <div
             v-if="embedReason && !store.loading && !store.error"
             class="pl-hint embed-fallback"
