@@ -82,6 +82,7 @@ def main():
             browser = p.chromium.launch(executable_path=EXE)
             ctx = browser.new_context(viewport={"width": 1280, "height": 800})
             ctx.add_init_script("window.__zgjMockEmbed = true;")
+            ctx.grant_permissions(["clipboard-read", "clipboard-write"], origin=BASE)
             page = ctx.new_page()
             page.goto(PLAYER_URL)
             page.wait_for_selector(".pl-stage", timeout=15000)
@@ -194,6 +195,31 @@ def main():
             check("C6f 徽标带 show 四元组（可见=0 时能看出卡在哪个条件）",
                   bool(m_show) and "{want}" not in badge,
                   f"show={m_show.groups() if m_show else 'NO-MATCH'} badge={badge[-120:]!r}")
+
+            # ── C7：「复制内嵌诊断」按钮把徽标写成纯文本进剪贴板 ──
+            # 连续四个 tag 我都靠用户截图读徽标，而整行徽标在界面上会被左边缘裁掉，
+            # 每次都要来回追问。这个按钮就是为此加的，断言钉住三件事：
+            #   点得中、剪贴板里是完整文本（version= 行 + host= 原始 JSON）、
+            #   badge 行与界面上同一份文本（同源，不漂移）。
+            page.click('[data-testid="embed-copy-diag"]')
+            page.wait_for_timeout(500)
+            clip = page.evaluate("navigator.clipboard.readText()")
+            c7_ver = _re.search(r"^version=\S+", clip, _re.M)
+            c7_host = _re.search(r"^host=\{", clip, _re.M)
+            c7_badge = _re.search(r"^badge=.*", clip, _re.M)
+            check("C7a 复制成功且含版本行（没进按钮时 readText 会是空串）",
+                  bool(c7_ver), f"head={clip[:80]!r}")
+            check("C7b 含 host 原始 JSON（读数必须是数字本身，不是渲染过的句子）",
+                  bool(c7_host), f"len={len(clip)}")
+            # 界面上的 badge = 徽标正文 + 错误行 + 两个按钮的文字（inner_text 全拼起来），
+            # 剪贴板里只有徽标正文 —— 所以判「剪贴板徽标行是界面徽标的前缀且足够长」，
+            # 而不是要求整段相等（我第一版就按整段相等写的，C7c 当场红，inClip=True
+            # 却 FAIL，因为差异正是那两个按钮的文字）。
+            c7_line = c7_badge.group(0)[len("badge="):].strip() if c7_badge else ""
+            check("C7c 徽标行与界面上同一份文本（同源，不漂移）",
+                  bool(c7_line) and len(c7_line) > 40
+                  and badge.strip().startswith(c7_line),
+                  f"line={c7_line[-60:]!r}")
 
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {

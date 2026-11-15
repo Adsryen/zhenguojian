@@ -20,6 +20,7 @@
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -191,6 +192,35 @@ def selftest():  # 分母必须把两组用例都算进去——
 
 
 
+HEAVY_PROCS = ("client-v2-linux", "client-v2.exe", "mpv")
+
+
+def heavy_processes(proc_root="/proc"):
+    """返回正在运行的重负载进程名（去重、排序）。
+
+    只读 /proc/<pid>/comm，不 shell out：comm 是内核截到 15 字符的进程名，
+    `client-v2-linux` 正好 14 字符、`mpv` 3 字符，都在范围内。
+    /proc 不存在（非 Linux）时返回空列表——这条预检在别的平台上是 no-op，
+    但调用方必须把它打成 SKIP 而不是"通过"。
+    """
+    found = set()
+    try:
+        pids = os.listdir(proc_root)
+    except OSError:
+        return []
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc_root, pid, "comm"), "rb") as f:
+                name = f.read().decode("utf-8", "replace").strip()
+        except OSError:
+            continue
+        if name in HEAVY_PROCS:
+            found.add(name)
+    return sorted(found)
+
+
 def _listener_pid(port):
     """返回监听该端口的进程 pid（取不到就 None）。"""
     import subprocess
@@ -274,6 +304,22 @@ def main():
 
     if args.selftest:
         return selftest()
+
+    # 第八十三轮加的预检：**别的重负载进程在跑就不许开回归**。
+    # 实测过一次假失败：linux-smoke 跑完没收尾，client-v2-linux + mpv 还在拉流，
+    # 紧接着的 run_all 里 discover_hero_verify 5/15 红（cards=0、offsetTop=-1，
+    # 也就是网格根本没渲染出来）；单独重跑 15/15 全绿。
+    # 这种"单独绿、套件红"不是脚本顺序耦合，是机器被抢了 CPU/带宽，
+    # 而固定等待的验收脚本对负载敏感——不拦下来就会白白查一晚上。
+    busy = heavy_processes()
+    if busy:
+        print("FAIL 有重负载进程在跑：%s" % ", ".join(busy))
+        print("     回归脚本靠固定等待判渲染，被抢负载会出现**假失败**（83 轮实测："
+              "discover_hero 套件里 5/15 红、单跑 15/15 绿）。先关掉再跑。")
+        return 1
+    _probe = os.path.isdir("/proc")
+    print("重负载预检 %s：没有 GUI 产物/mpv 在抢 CPU 与带宽"
+          % ("OK" if _probe else "SKIP（非 Linux，读不到 /proc，这条验不了）"))
 
     # 开工前预检：两个脚本默认抢同一个端口 → 直接不跑。
     # 为什么要在跑之前查而不是跑完看残留：撞号时前一个脚本的服务器会被后一个当成
@@ -401,6 +447,29 @@ def main():
             return 1
     else:
         print("FAIL 找不到 %s —— 判据文件被移动或删除，这条检查退化成空转" % _rs)
+        return 1
+
+    # 第八十三轮加的第十一道预检：Linux 冒烟的「侧栏高亮项」判据。
+    # 起因是实测发现冒烟脚本硬编码的导航 y 表整体偏了半行，
+    # "7 个页面渲染正常"里只有 3 页是真的（page_downloads 与 page_settings 逐字节相同）。
+    # 判据本身（scripts/smoke_nav.py）是个纯图像函数，不需要起 GUI，
+    # 但它依赖 ImageMagick 的 convert：没有就明确 SKIP，不能让它静默变成"没测"。
+    _nav = os.path.join(ROOT, "scripts", "smoke_nav.py")
+    if os.path.exists(_nav):
+        if shutil.which("convert"):
+            r = subprocess.run([sys.executable, _nav, "--selftest"],
+                               capture_output=True, text=True, timeout=180,
+                               cwd=ROOT, stdin=subprocess.DEVNULL)
+            tail = (r.stdout or "").strip().splitlines()[-1:] or ["(无输出)"]
+            print("冒烟导航判据：%s" % tail[0])
+            if r.returncode != 0:
+                print("FAIL smoke_nav selftest 非 0（exit=%d）：%s"
+                      % (r.returncode, (r.stdout or "")[-500:]))
+                return 1
+        else:
+            print("SKIP 冒烟导航判据：本机没有 ImageMagick convert（不是通过，是没测）")
+    else:
+        print("FAIL 找不到 %s —— 判据文件被移动或删除，这条检查退化成空转" % _nav)
         return 1
 
     # 第八十三轮加的两道 PowerShell 门。为什么必须加在本地而不是等 CI：

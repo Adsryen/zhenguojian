@@ -128,6 +128,47 @@ const embedDebugText = computed(() => {
   })
 })
 
+/* 把内嵌现场一次性写进剪贴板。为什么要这个按钮：
+   连续四个 tag 我都是靠用户截图读徽标，而徽标整行很长，**在界面上会被左边缘裁掉**
+   （alpha.31/33 的截图里连「父窗」两字都不在画面内），于是每次都要来回追问。
+   复制出来的是纯文本，还额外带一份 host 的原始 JSON —— 我读到的是数字本身，
+   不是渲染过的句子，省掉"这行是被裁的还是本来就是 0"这类歧义。 */
+const embedCopy = ref<'idle' | 'ok' | 'fail'>('idle')
+
+function embedDiagText(): string {
+  return [
+    `version=${appVersion.value || '?'}`,
+    `badge=${embedDebugText.value}`,
+    `error=${store.error || ''}`,
+    `measured=${embedMeasure.value || 'n/a'}`,
+    `report-error=${embedSetErr.value || 'none'}`,
+    `host=${JSON.stringify(embedHost.value ?? null)}`
+  ].join('\n')
+}
+
+async function copyEmbedDiag() {
+  const text = embedDiagText()
+  embedCopy.value = 'idle'
+  try {
+    await navigator.clipboard.writeText(text)
+    embedCopy.value = 'ok'
+    return
+  } catch {
+    const app = (window as any).go?.main?.App
+    if (app?.ClipboardWrite) {
+      try {
+        await app.ClipboardWrite(text)
+        embedCopy.value = 'ok'
+        return
+      } catch {
+        embedCopy.value = 'fail'
+        return
+      }
+    }
+    embedCopy.value = 'fail'
+  }
+}
+
 /* ── V2-4 内嵌几何上报 ── */
 const stageEl = ref<HTMLElement | null>(null)
 /* 覆盖层穿透带（V2-4b）：标题条/控制条与 .pl-stage 的实际重叠才需要让出命中；
@@ -478,6 +519,12 @@ onBeforeUnmount(() => {
             data-testid="embed-debug"
           >{{ embedDebugText }}<template v-if="store.error">
             · {{ store.error }}</template>
+            <button
+              class="pl-btn tiny"
+              type="button"
+              data-testid="embed-copy-diag"
+              @click="copyEmbedDiag"
+            >{{ embedCopy === 'ok' ? t('player.embedCopied') : embedCopy === 'fail' ? t('player.embedCopyFail') : t('player.embedCopy') }}</button>
             <button
               class="pl-btn tiny"
               type="button"
