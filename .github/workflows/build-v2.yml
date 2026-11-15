@@ -24,12 +24,14 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-        # fetch-tags 不是可选：默认 checkout **不取 tag 对象**，于是
-        # `git for-each-ref refs/tags/<tag>` 恒空，release_notes 设计里的第一优先级
-        # （annotated tag 注释）在 CI 里从来没生效过 —— alpha.33 的 latest.json notes
-        # 就是文件回退那一行，而我从输出上看不出区别。
-        with:
-          fetch-tags: true
+        # ⚠ 这里**不能**开 fetch-tags（62 轮开了，代价是两个 tag 白烧）。
+        # tag 触发时 github.ref 本身就是 refs/tags/<tag>，checkout 会把它算成
+        # refspec「<sha>:refs/tags/<tag>」；fetch-tags 再叠一条
+        # 「refs/tags/<tag>:refs/tags/<tag>」——同一个目的地两个来源，git 直接：
+        #   fatal: Cannot fetch both <sha> and refs/tags/<tag> to refs/tags/<tag>
+        # 本地复现：bash scripts/tag-fetch-repro.sh <tag>（A 段 rc=128 就是这条）。
+        # 默认 checkout 确实不取 tag 对象，但那是单独一步 fetch 的事，
+        # 不是 checkout 的选项：见 windows job 的 "Fetch tag object for release notes"。
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -161,12 +163,28 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-        # fetch-tags 不是可选：默认 checkout **不取 tag 对象**，于是
-        # `git for-each-ref refs/tags/<tag>` 恒空，release_notes 设计里的第一优先级
-        # （annotated tag 注释）在 CI 里从来没生效过 —— alpha.33 的 latest.json notes
-        # 就是文件回退那一行，而我从输出上看不出区别。
-        with:
-          fetch-tags: true
+        # ⚠ 这里**不能**开 fetch-tags（62 轮开了，代价是两个 tag 白烧）。
+        # tag 触发时 github.ref 本身就是 refs/tags/<tag>，checkout 会把它算成
+        # refspec「<sha>:refs/tags/<tag>」；fetch-tags 再叠一条
+        # 「refs/tags/<tag>:refs/tags/<tag>」——同一个目的地两个来源，git 直接：
+        #   fatal: Cannot fetch both <sha> and refs/tags/<tag> to refs/tags/<tag>
+        # 本地复现：bash scripts/tag-fetch-repro.sh <tag>（A 段 rc=128 就是这条）。
+        # 默认 checkout 确实不取 tag 对象，但那是单独一步 fetch 的事，
+        # 不是 checkout 的选项：见 windows job 的 "Fetch tag object for release notes"。
+
+      - name: Fetch tag object for release notes
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        # annotated tag 注释是发布摘要的第一优先级，而默认 checkout 不取 tag 对象。
+        # 单独 fetch 一条 refspec，就不存在「同一目的地两个来源」的冲突。
+        # 取不到必须让 job 红：否则 release_notes 静默退回文件那一行，
+        # 症状是「notes 看着正常但来源不对」，从资产内容上根本看不出来。
+        run: |
+          set -euo pipefail
+          git fetch --force --depth=1 origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+          t=$(git cat-file -t "refs/tags/${GITHUB_REF_NAME}" || echo missing)
+          echo "tag objecttype=$t"
+          if [ "$t" != tag ]; then echo "::error::tag 对象没取到（objecttype=$t）"; exit 1; fi
 
       - uses: actions/setup-go@v5
         with:

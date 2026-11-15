@@ -526,3 +526,59 @@ alpha.35 的徽标会给出 `该像素最上层=…`：
 
 **注意**：`no-probe` 时不要拿这张表下任何 z-order 结论——探测点在一个 1×1 的窗上
 没有意义，所以 Go 侧干脆不探（`Debug()` 里 `w>=2&&h>=2` 才探）。
+
+## 十八、两个 tag 白烧的账：「推上 tag」不等于「出了包」（83 轮）
+
+### 18.1 事实
+- alpha.34（run 43697722376）与 alpha.35（run 43700529505）**两个 job 都死在 `Run actions/checkout@v4`**：
+  ```
+  fatal: Cannot fetch both 734922a54d3e183ac1607d137e09b244bdf7bb47 and refs/tags/v2.0.0-alpha.35 to refs/tags/v2.0.0-alpha.35
+  ```
+  `gh release view` 两个 tag 都是 **release not found**，一个资产都没有。
+- 我却已经对用户说过「请测 alpha.34」「alpha.35 构建中」。用户实际在测的是 **alpha.33**
+  —— 这正好解释了 63 轮那个「徽标里没有 `该像素最上层=`」的谜：**不是新功能没生效，是那个包不存在**。
+- 成因是我 62 轮加的 `fetch-tags: true`：tag 触发时 `github.ref` 本身就是 `refs/tags/<tag>`，
+  checkout 把目的地算成 `refs/tags/<tag>`，fetch-tags 再叠一条同名不同来源的 refspec，
+  git 拒绝「同一目的地两个来源」。**alpha.33 及以前没有这个选项，所以从没失败过。**
+
+### 18.2 我错在哪（不是「CI 抖了」）
+1. 打完 tag 我只核对了「tag 推上去了」，没核对「run 结论」和「资产存在」。
+   上一轮我明明起了 `gh run watch` 的后台 watcher，**却没去读它的结果**就写了回复。
+2. 复现时我第一次把 refspec 写成 `"$SHA"`（目的地不同）→ rc=0，
+   差点得出「本地复现不了，是 CI 环境问题」。目的地相同才是这条错——
+   一次不成功的复现不等于复现不了。
+
+### 18.3 修法（两处，都有本地证据）
+- 撤掉两个 job 的 `fetch-tags`；windows job 单独加一步
+  `git fetch --force --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"`，
+  并且 `git cat-file -t` 不是 `tag` 就直接 exit 1（**取不到注释要让 job 红**，
+  否则 release_notes 会静默退回文件那一行，从资产内容上看不出来）。
+- `scripts/tag-fetch-repro.sh`：A 段用**两条同目的地 refspec**精确复现 CI（实测 rc=128、
+  报错逐字相同）；B/C 段证明修法在浅克隆里能取到 annotated tag 对象，
+  且 `release_notes.py --explain` 给出 `notes-source=annotation`。
+
+### 18.4 新门禁：`scripts/release-check.sh <tag> [--wait]`
+「我说发布了」之前必须跑它。四段判据，全部实测过两个方向：
+
+| 检查 | alpha.34（坏） | alpha.33（好但 notes 来源错） |
+|---|---|---|
+| run 结论 | `failure`，并点名 `Run actions/checkout@v4` | `success` |
+| release + 5 个资产 | 不执行（上一步已红） | 齐 |
+| latest.json 契约 | — | schema/tag/version/sha256/size/url 全过 |
+| **notes 是否用了 tag 注释** | — | **FAIL**：注释首行是「v2.0.0-alpha.33 —— 内嵌几何…」，实际是文件回退那一行 |
+
+最后一行就是 18.1 那条隐身错的**发布级**可见化：以后只要 CI 没取到 tag 对象，
+`release-check` 会直接指着「注释首行 vs 实际」两串字，而不是等我发现用户测的是旧包。
+
+### 18.5 顺带：linux-smoke 的两条自身缺陷（83 轮实测）
+1. 它依赖的 `client-v2-linux` **没有任何脚本产出**，构建命令只活在我的聊天记录里
+   —— 第一次跑用的还是 06:36 的旧产物，而前端 09:46 才重建过。
+   现在脚本自己判新鲜度（`find` 比 mtime）并重建（前端 → make-overlay → go build 带
+   `-X main.buildVersion=$(git describe --tags)`，实测打印 `buildVersion=v2.0.0-alpha.35`）。
+2. 播放按钮的 y **不是常量**：标签换几行、「看到第 N 集」在不在，都会推移它几十像素。
+   固定点 370 对某个剧命中、换剧就打在按钮下方 → `mpv 进程数=0`，
+   看起来像产品回归，其实是我的点击没命中。
+   现在沿 x=283 扫 y=295..445 找主按钮的填充色（实测 `srgb(74,131,255)`，
+   判据 `b>120 && b-r>60 && b-g>40`）取连续 12 个蓝像素的中点；
+   进详情那一步也用「找得到主按钮颜色」当作**已经在详情页**的判据。
+   实测三种布局分别命中 y=322 / y=334，`mpv 进程数=1`，离开播放页后归 0。
