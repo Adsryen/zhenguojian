@@ -16,7 +16,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.24" # 与 zhenguojian/sidecar/go.mod、guoapp-src/native/go.mod 一致
+          go-version: "1.24" # 与 client-v2/go.mod、guoapp-src/native/go.mod 一致
 
       - uses: actions/setup-node@v4
         with:
