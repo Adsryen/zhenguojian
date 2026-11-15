@@ -1,5 +1,9 @@
 # v1 ↔ v2 下载面板对账（第三十三轮）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 方法同 `v1-v2-shortcut-parity.md` / `v1-v2-settings-parity.md`：
 先把 v1 侧**逐行抄全**（`zhenguojian/app/zhenguojian/downloads.py`），再和 v2
 （`client-v2/frontend/src/views/DownloadsView.vue` + `stores/downloads.ts` + Go 侧）比。

@@ -1,5 +1,9 @@
 # v1 ↔ v2 键位对账
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 来源（v1 侧全部逐行核对，不是回忆）：
 `zhenguojian/app/zhenguojian/main.py:1765-1771`、`main.py:1774-1784`、
 `player.py:925-941`（帮助浮层的 Esc/? 与"快捷键互相吃掉"的处理）、

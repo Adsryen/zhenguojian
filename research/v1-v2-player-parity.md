@@ -1,5 +1,9 @@
 # v1 ↔ v2 播放器 + 弹幕对账（inventory-level audit）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 - v1 侧范围：`zhenguojian/app/zhenguojian/player.py`（2354 行，全读）、`danmaku.py`（192 行，全读）、
   `main.py` 播放整合段（1685-2830）、`watchstore.py` save 链、`core_client.py`、`library.py:413-475`、
   `tools.py` danmaku/hwdec 键、`playback_dialog.py`、`widgets_guo.py EpisodeGrid`、`detail_episodes.py`。

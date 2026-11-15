@@ -1,5 +1,9 @@
 # v1↔v2 双调查：设计 token 引用未定义 + 创作者/演职员页对账（2026-11-13）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 方法：全 `src/` 的 `var(--x)` 引用扫描（含回退值判定与注释剥离）、tokens.css/base.css
 逐行读、v1 `ui.py`/`creators.py`/`main.py`/`core_client.py` 逐行读、v2
 `CreatorView.vue`/`DetailView.vue`/`api.ts`/`fixtures.ts`、Go 侧

@@ -1,5 +1,9 @@
 # v1 ↔ v2 设置页条目对账
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 方法同 `research/v1-v2-shortcut-parity.md`：**先把 v1 的行标签逐行抄全**，再和 v2 比。
 v1 侧来源：`zhenguojian/app/zhenguojian/settings_panel.py` 的
 `_combo_row`(681,682) / `_path_row`(776,777) / `_spin_row`(883,884,886) / `_kv_row`(1012-1015)

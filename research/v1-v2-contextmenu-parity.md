@@ -1,5 +1,9 @@
 # v1 ↔ v2 右键菜单对账（清单级对账第五面，也是最后一面）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 v1 侧全文只有一处自定义右键菜单：`widgets.py:705-721`（详情页简介控件）
 ```python
 copy = menu.addAction("复制");              copy.setEnabled(hasSelection())

@@ -1,5 +1,9 @@
 # v1 ↔ v2 Sorani 登录滑块对账（第五十五轮）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 规格来源不是我的转述，而是 v1 自己的测试：
 `zhenguojian/app/zhenguojian/test_sorani_login.py`，361 行、**21 条用例**。
 v2 侧是 `components/SliderCaptcha.vue`（v1 `sorani_login.py:52-58` 常量同款）

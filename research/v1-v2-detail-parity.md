@@ -1,5 +1,9 @@
 # v1 ↔ v2 详情页对账（第三十四轮）
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 同样先逐行抄 v1：`main.py:174-192`（头部按钮条）、`main.py:440-454`（四态文案）、
 `main.py:1539-1546`（预约处理与提示）、`detail_episodes.py:110-160`（分集区批量条）、
 `main.py:266`（全 N 季）。v2 侧：`views/DetailView.vue` + `stores/watch.ts` + `services/local.ts`。

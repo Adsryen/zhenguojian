@@ -1,5 +1,9 @@
 # v1↔v2 行为对账：搜索 / 找剧(discover) / 剧库(library)
 
+> **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
+> `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
+> 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
+
 - 审计日期：2026-11-13（只读盘点，未改任何代码）
 - v1：`zhenguojian/app/zhenguojian/`（PyQt5）+ `guoapp-src/native/core/`（v1 sidecar 核心，v2 通过
   `client-v2/go.mod:52` 的 `replace duanjuapp/native => ../guoapp-src/native` **共用同一份核心**）
