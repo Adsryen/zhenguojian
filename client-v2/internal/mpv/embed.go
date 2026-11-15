@@ -53,10 +53,16 @@ type HostDebug struct {
 	ChildHwnd    string `json:"childHwnd"`
 	ChildVisible bool   `json:"childVisible"`
 	// 子窗屏幕坐标矩形（物理像素）。宽高还是 1 就说明从没被真正摆过。
-	ChildLeft      int  `json:"childLeft"`
-	ChildTop       int  `json:"childTop"`
-	ChildWidth     int  `json:"childWidth"`
-	ChildHeight    int  `json:"childHeight"`
+	ChildLeft   int `json:"childLeft"`
+	ChildTop    int `json:"childTop"`
+	ChildWidth  int `json:"childWidth"`
+	ChildHeight int `json:"childHeight"`
+	// 上报次数（ApplyBounds 被真正调了几次）。
+	// 为什么非加不可：真机徽标「最近上报 0×0」有**两种完全相反的成因**，
+	// 光看数值分不开——① 前端从没调用过 setBounds（线断了/构建是旧的），
+	// ② 调用过但量出来就是 0（stage 还没布局）。修法完全不同，
+	// 而我不能靠猜下一个 tag。计数把「没上报」和「上报了 0」变成可判读的。
+	ApplyCount     int  `json:"applyCount"`
 	LastInX        int  `json:"lastInX"`
 	LastInY        int  `json:"lastInY"`
 	LastInW        int  `json:"lastInW"`

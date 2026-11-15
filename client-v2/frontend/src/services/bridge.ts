@@ -36,7 +36,7 @@ import type {
   WatchRow
 } from './types'
 import { ApiError, clampOpacityPercent } from './contract'
-import type { AttachResult, EmbedHostDebug, ExactApiImpl } from './contract'
+import type { EmbedSetStatus, AttachResult, EmbedHostDebug, ExactApiImpl } from './contract'
 
 /** 真实桥探测：exe 内 window.go 必在；纯浏览器/WebView2 异常时自动降级 local 面，
    避免整页 bridge_missing 死锁（降级会显示顶部提示横幅）。 */
@@ -256,7 +256,12 @@ export const embedBridge = {
       return r
     }
   },
-  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<EmbedSetStatus> => {
+    /* 第六十三轮：这里原来是 `catch {}`，几何上报**失败得毫无痕迹**。
+       真机徽标一直显示「最近上报 0×0」，而我无法区分「没送到 Go」和
+       「送到时就是 0」——这两种成因的修法完全相反。异常不再吞掉，
+       而是带回 ok=false + error，由徽标原样显示。
+       仍然不 throw：上报失败不该打断播放 UI。 */
     try {
       const r = await callGo<{ ok: boolean; host?: EmbedHostDebug }>(
         'PlayerSetBounds', x, y, w, h, show)
@@ -264,8 +269,11 @@ export const embedBridge = {
       if (w > 1 && h > 1) {
         console.info('[embed] setBounds', x, y, w, h, 'show=' + show, JSON.stringify(r?.host ?? null))
       }
-    } catch {
-      /* 几何上报失败不干扰播放 UI（窗口销毁竞态等） */
+      if (!r?.ok) return { ok: false, host: r?.host, error: 'ok=false' }
+      return { ok: true, host: r?.host }
+    } catch (err) {
+      const e = err as Error
+      return { ok: false, error: String(e?.message ?? err ?? 'unknown') }
     }
   },
   /* 覆盖层穿透带（App.PlayerHitBands）：top/bottom=HTML 覆盖层与视频矩形

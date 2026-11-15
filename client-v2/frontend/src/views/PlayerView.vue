@@ -108,7 +108,23 @@ const embedDebugText = computed(() => {
        `=other` = 别人压在上面（多半 Chrome_RenderWidgetHostHWND=WebView2）⇒ airspace/z-order；
        末尾 `(selftest!)` = 探测点不在返回窗口矩形内，这条读数不可信，别按它判案。 */
     top: !h.topAtCenterHwnd ? 'no-probe'
-      : (h.topAtCenterClass || '?') + (h.topIsChild ? '=ours' : '=other') + (h.topContainsProbe ? '' : '(selftest!)')
+      : (h.topAtCenterClass || '?') + (h.topIsChild ? '=ours' : '=other') + (h.topContainsProbe ? '' : '(selftest!)'),
+    // applyCount 来自 Go（上报到达次数）；measured 来自前端（我量到了什么）。
+    // 两者并排才能分开「没送到」和「送到时就是 0」：
+    //   calls=0 + measured=780×650 → 线断了（异常被吞/绑定没有这个方法/构建是旧的）
+    //   calls>0 + measured=0×0      → 布局时机问题，stage 当时没尺寸
+    ver: appVersion.value || '?',
+    calls: h.applyCount ?? 0,
+    measured: embedMeasure.value,
+    setErr: embedSetErr.value || 'none',
+    // 「该不该显示」的四个输入。可见=0 只告诉我子窗是藏着的，不告诉我**为什么**：
+    // 真机上「mpv 在播、时间在走、画面全黑」正是 show 永远为假的形状。
+    // r/l/e/f 依次 = running / loading / error / eof（1=真）。
+    want: videoShouldShow() ? 1 : 0,
+    r: store.running ? 1 : 0,
+    l: store.loading ? 1 : 0,
+    e: store.error ? 1 : 0,
+    f: store.eof ? 1 : 0
   })
 })
 
@@ -120,6 +136,14 @@ const stageEl = ref<HTMLElement | null>(null)
 const topEl = ref<HTMLElement | null>(null)
 const barEl = ref<HTMLElement | null>(null)
 let embedActive = false
+/* 第六十三轮：真机徽标连续两个 tag 只显示「最近上报 0×0」，而我无法区分
+   「setBounds 没送到 Go」和「送到时量到 0」——这两种成因的修法完全相反。
+   下面三个状态把前端这一侧也变成读数：我量到多少、第几次量、送出去有没有失败。
+   再加版本号：同一张截图必须能自证是哪个构建（前两轮我都是靠猜）。 */
+const embedMeasure = ref('none')
+const embedSetErr = ref('')
+const appVersion = ref('')
+let measureSeq = 0
 let stageRO: ResizeObserver | undefined
 let barsRO: ResizeObserver | undefined
 
@@ -153,7 +177,12 @@ async function reportBounds() {
      成功之后才为真 —— 于是「起手摆位」这件事永远不发生，mpv 从 spawn 起
      就在一个创建尺寸 1×1 的隐藏窗上画。现在几何永远照实报，
      可见性交给 show：让位给 DOM 覆盖层是"藏"，不是"抹掉尺寸"。 */
-  await embedApi.setBounds(x, y, w, h, videoShouldShow())
+  measureSeq += 1
+  embedMeasure.value = `${w}x${h}@${dpr}#${measureSeq}`
+  const st = await embedApi.setBounds(x, y, w, h, videoShouldShow())
+  // 回执里的 host 比 attach 那一刻新：摆位之后的子窗矩形、上报计数都在里面
+  if (st.host) embedHost.value = st.host
+  embedSetErr.value = st.ok ? '' : (st.error || 'failed')
   await reportHitBands(el)
 }
 
@@ -394,6 +423,8 @@ onMounted(async () => {
      让这条 IPC 与 PlayerOpen 赛跑 —— 真机徽标实测到的 1×1 就是这么来的
      （加上后端隐藏分支不摆位，两个洞叠在一起）。 */
   await reportBounds()
+  // 版本号进徽标：不再有「这张图是哪个包」这种靠猜的回合
+  api.buildInfo().then(b => { appVersion.value = b.version || 'dev' }).catch(() => {})
   window.addEventListener('keydown', onHotkey)
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
 })

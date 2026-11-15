@@ -154,6 +154,47 @@ def main():
                   "Chrome_RenderWidgetHostHWND=other" in badge and "{top}" not in badge,
                   f"badge={badge[:220]!r}")
 
+            # C6 徽标自证「上报到底送到了没有」。
+            # 为什么这条不能省：真机连续两个 tag 只显示「最近上报 0×0」，
+            # 而这个数**分不开**「没调用 setBounds」与「调用时量到 0」两种相反成因，
+            # 我只能靠猜、又烧掉一个 tag。现在徽标同时给出：
+            #   上报次数（Go 侧 ApplyBounds 计数，经 setBounds 回执回到前端）
+            #   前端量得（我这边量到的尺寸 + 第几次量 + DPR）
+            #   上报异常（bridge 旧写法 catch{} 吞掉的那一类）
+            #   版本号（同一张截图必须能自证是哪个构建）
+            # 断言盯的是**具体数值**，不是"字段存在"：C5 那轮的教训。
+            import re as _re
+            m_calls = _re.search(r"上报(\d+)次", badge)
+            m_meas = _re.search(r"前端量得(\d+)x(\d+)@(\d*\.?\d+)#(\d+)", badge)
+            m_ver = _re.search(r"[·\s]v(\S+?)(?:\s|·|$)", badge)
+            check("C6a 上报次数经回执进入徽标且 >=1（不是 attach 时的旧快照）",
+                  bool(m_calls) and int(m_calls.group(1)) >= 1,
+                  f"calls={m_calls.group(1) if m_calls else 'NO-MATCH'} badge={badge[:200]!r}")
+            check("C6b 前端量得非零尺寸且带测量序号（0×0 会被当成没上报）",
+                  bool(m_meas) and int(m_meas.group(1)) > 1 and int(m_meas.group(2)) > 1
+                  and int(m_meas.group(4)) >= 1,
+                  f"meas={m_meas.groups() if m_meas else 'NO-MATCH'}")
+            check("C6c 上报异常为 none（catch{} 吞异常时这里会亮出原因）",
+                  "上报异常=none" in badge,
+                  f"badge={badge[-160:]!r}")
+            check("C6d 徽标带构建版本（截图自证是哪个包）",
+                  bool(m_ver) and m_ver.group(1) not in ('?', ''),
+                  f"ver={m_ver.group(1) if m_ver else 'NO-MATCH'}")
+            # C6e 两侧数字必须对得上：徽标的「最近上报」应等于「前端量得」。
+            # 为什么单独钉：真机上「上报 0×0」正是靠这两个数不一致才露馅的，
+            # 而 mock 若不镜像 Go 的 Debug 语义，这条会在假现场上通过。
+            m_in = _re.search(r"最近上报 (\d+)×(\d+)", badge)
+            check("C6e 徽标「最近上报」等于「前端量得」（两侧同源，不是各说各话）",
+                  bool(m_in) and bool(m_meas)
+                  and int(m_in.group(1)) == int(m_meas.group(1))
+                  and int(m_in.group(2)) == int(m_meas.group(2)),
+                  f"lastIn={m_in.groups() if m_in else 'NO-MATCH'} measured={m_meas.groups() if m_meas else 'NO-MATCH'}")
+            # C6f 「该显示」四元组渲染成 0/1，不是残留占位符
+            m_show = _re.search(r"该显示=(\d)\(r(\d) l(\d) e(\d) f(\d)\)", badge)
+            check("C6f 徽标带 show 四元组（可见=0 时能看出卡在哪个条件）",
+                  bool(m_show) and "{want}" not in badge,
+                  f"show={m_show.groups() if m_show else 'NO-MATCH'} badge={badge[-120:]!r}")
+
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {
               const mk = (css, txt) => { const d = document.createElement('div');

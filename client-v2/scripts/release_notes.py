@@ -129,7 +129,7 @@ def tag_annotation(tag, cwd=None):
 
 
 def source_of(tag, note_file=None, cwd=None):
-    """(notes, 来源标记)。extract() 是它的包装，CI 用 --explain 把来源打进 stderr。
+    """(notes, 来源标记)。extract() 是它的包装，CI 用 --explain PATH 把来源写进文件。
 
     为什么要暴露来源：alpha.33 我修完编码，看到 notes 是中文就以为成了，
     实际取的是**文件回退**那一行（"首次安装：下载 …"），设计里的第一优先级

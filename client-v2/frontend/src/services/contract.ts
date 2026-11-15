@@ -69,6 +69,10 @@ export function clampOpacityPercent(v: number): number {
 /** 内嵌现场（Go 侧 mpv.HostDebug）。真机「音频有、画面黑」只能靠它定位。 */
 export interface EmbedHostDebug {
   supported?: boolean
+  /* ApplyBounds 真正被调用的次数（Go 侧计数）。
+     「最近上报 0×0」有两种相反的成因：从没调用过 vs 调用时量到 0。
+     光看数值分不开，这一眼就能分开。 */
+  applyCount?: number
   parentHwnd?: string
   parentClass?: string
   childHwnd?: string
@@ -323,6 +327,16 @@ export const GO_BINDINGS: Record<keyof NativeApi, string> = {
 }
 
 /** 内嵌绑定（不在 NativeApi 面里，见 facade embedApi） */
+/** embedApi.setBounds 的回执。
+   ⚠ 为什么不再返回 void：旧写法在 bridge 里 `catch {}` 把异常**整个吞掉**，
+   于是「上报失败」和「上报成功」在前端长得一模一样，徽标只剩 0×0 一个数字，
+   我据此连猜了两个 tag。现在把失败原因带回来，由徽标显示。 */
+export interface EmbedSetStatus {
+  ok: boolean
+  host?: EmbedHostDebug
+  error?: string
+}
+
 export const GO_BINDINGS_EMBED: Record<'attach' | 'setBounds' | 'playerHitBands' | 'detach', string> = {
   attach: 'App.PlayerAttach() → AttachResult{embedded,reason?,host?}',
   setBounds: 'App.PlayerSetBounds(x, y, w, h int, show bool) -- physical pixels; geometry always placed, show only toggles visibility',

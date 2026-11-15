@@ -2,7 +2,19 @@
    不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
    no-op（attach 返回 embedded:false），PlayerView 无需按模式特判——内嵌不可得
    时整条播放链路保持现行行为（mpv 独立窗 / 浏览器无画面）。 */
-import type { AttachResult } from '../contract'
+import type { AttachResult, EmbedHostDebug, EmbedSetStatus } from '../contract'
+
+/* 合成 host：attach 与 setBounds 的回执共用同一份，这样徽标在两条路上读到的
+   字段一致（真实桥上 host 也是同一个 EmbedHost 的 Debug 快照）。 */
+const MOCK_HOST: EmbedHostDebug = {
+  supported: true,
+  parentHwnd: '0xMOCK', parentClass: 'Chrome_WidgetWin_1',
+  childHwnd: '0xMOCKC', childVisible: true,
+  childLeft: 100, childTop: 50, childWidth: 780, childHeight: 600,
+  probeX: 490, probeY: 350,
+  topAtCenterHwnd: '0xMOCKT', topAtCenterClass: 'Chrome_RenderWidgetHostHWND',
+  topIsChild: false, topContainsProbe: true
+}
 
 export const mockEmbedApi = {
   attach: async (): Promise<AttachResult> => {
@@ -15,20 +27,12 @@ export const mockEmbedApi = {
       return {
         embedded: true,
         reason: 'mock-embed',
-        host: {
-          supported: true,
-          parentHwnd: '0xMOCK', parentClass: 'Chrome_WidgetWin_1',
-          childHwnd: '0xMOCKC', childVisible: true,
-          childLeft: 100, childTop: 50, childWidth: 780, childHeight: 600,
-          probeX: 490, probeY: 350,
-          topAtCenterHwnd: '0xMOCKT', topAtCenterClass: 'Chrome_RenderWidgetHostHWND',
-          topIsChild: false, topContainsProbe: true
-        }
+        host: MOCK_HOST
       }
     }
     return { embedded: false, reason: 'mock-embed' }
   },
-  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<EmbedSetStatus> => {
     /* mock/无桥：no-op，但把上报序列记到 window.__zgjBounds 供 headless 断言
        （真实时序契约见 bridge.embedBridge 头注释：几何与 show 分开）。 */
     if (typeof window !== 'undefined') {
@@ -38,7 +42,26 @@ export const mockEmbedApi = {
       rec.last = { x, y, w, h, show }
       if (!show && w > 1 && h > 1) rec.hiddenWithGeometry += 1
       window.__zgjBounds = rec
+      // applyCount 用同一个计数：headless 断言（hitbands C6）才能验到
+      // 「徽标显示的次数」这条链路，而不是只验 mock 自己记的数。
+      // 镜像真实 Debug 的语义：lastIn = 收到的入参原样，换算矩形只在尺寸有效时保留。
+      // 不镜像的话 mock 徽标会永远显示「最近上报 0×0」，跟真机上那条最关键的
+      // 读数一模一样 —— 那会让验证脚本对着一个**假现场**通过（C6e 就是钉这个）。
+      const placed = w > 1 && h > 1
+      return {
+        ok: true,
+        host: {
+          ...MOCK_HOST,
+          applyCount: rec.count,
+          lastInX: x, lastInY: y, lastInW: w, lastInH: h,
+          lastOutVisible: show,
+          lastOutW: placed ? w : 0, lastOutH: placed ? h : 0,
+          childWidth: placed ? w : 1, childHeight: placed ? h : 1,
+          childVisible: show
+        }
+      }
     }
+    return { ok: true }
   },
   /* 覆盖层穿透带：mock/无桥时记录到 window.__zgjHitBands 供 headless 验证断言。 */
   playerHitBands: async (top: number, bottom: number): Promise<void> => {

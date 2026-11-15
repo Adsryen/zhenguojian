@@ -226,6 +226,8 @@ type EmbedHost struct {
 	lastIn Bounds
 	lastR  Rect
 	lastV  bool
+	// ApplyBounds 被调用的次数；只给诊断读（见 HostDebug.ApplyCount 的注释）
+	applyCount int
 }
 
 // NewEmbedHost 发现 Wails 主窗口并在其下创建隐藏的视频承载子窗。
@@ -282,6 +284,7 @@ func (e *EmbedHost) ApplyBounds(b Bounds) error {
 	}
 	r, visible := PlaceDecision(b)
 	e.lastIn, e.lastR, e.lastV = b, r, visible
+	e.applyCount++
 	if r.W < 1 || r.H < 1 {
 		// 前端还没量出 stage（或已归零）：只能整体藏起来，没什么可摆的。
 		procEmbed["ShowWindow"].Call(uintptr(e.child), swHide)
@@ -310,6 +313,7 @@ func (e *EmbedHost) Debug() HostDebug {
 	d := HostDebug{Supported: true,
 		ParentHwnd: fmt.Sprintf("0x%x", uintptr(e.parent)),
 		ChildHwnd:  fmt.Sprintf("0x%x", uintptr(e.child)),
+		ApplyCount: e.applyCount,
 		LastInX:    e.lastIn.X, LastInY: e.lastIn.Y, LastInW: e.lastIn.W, LastInH: e.lastIn.H,
 		LastOutVisible: e.lastV,
 		LastOutX:       e.lastR.X, LastOutY: e.lastR.Y, LastOutW: e.lastR.W, LastOutH: e.lastR.H}

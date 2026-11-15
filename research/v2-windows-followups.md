@@ -458,5 +458,71 @@ host，断言徽标里出现**具体值** `Chrome_RenderWidgetHostHWND=other` �
   ⚠ 这段 PowerShell 本身仍是**待执行**证据：本机无 pwsh，只有 YAML 解析通过，
   真正生效要到下一次 tag 构建在 CI 里跑出来。
 
-本地实测 `python3 client-v2/scripts/release_notes.py --tag v2.0.0-alpha.33 --explain`
-= `notes-source=annotation` + 注释首行，说明脚本侧优先级本来就对，缺的是 CI 的 tag 对象。
+本地实测 `python3 client-v2/scripts/release_notes.py --tag v2.0.0-alpha.33
+--explain /tmp/tc/ns.txt` → stdout 是注释首行、文件里是 `notes-source=annotation`，
+说明脚本侧优先级本来就对，缺的是 CI 的 tag 对象。
+（63 轮把 `--explain` 从「只写 stderr」改成「写文件」：本机没有 pwsh，
+「用数组 -match 筛 stderr」这种 PowerShell 逻辑一行都验不了，
+而 `Get-Content` 读一个文件几乎不会错 —— 可测的部分留在 Python。）
+
+## 十七、为什么 Qt 和参考项目都没这问题（实测对照，63 轮）
+
+用户问：「难道是前端代码的问题？以前 qt 都没这个问题啊，参考项目的 ui 也没出现这个情况啊！！」
+两边都去查了，答案是**三层不同的原因**，不是「前端写得不好」一句能盖住的。
+
+### 17.1 Qt（v1）为什么没有
+v1 的 UI 本身就是原生窗口体系里的东西：`player.py:1543` 交给 mpv 的
+`wid = int(self.surface.winId())` 是一个 **Qt 布局已经量好尺寸的原生子窗**，
+`1452 self.surface.hide()` 只是不可见、几何照旧（Qt 的 hide() 不改 geometry）。
+所以 v1 里根本没有「第二个合成器」——UI 和视频窗在同一套 Win32 窗口里排序。
+
+### 17.2 Wails（v2）为什么有
+Wails 的界面是 **WebView2（Chromium 合成器）** 画的，它自己也是一个子窗
+（类名 `Chrome_RenderWidgetHostHWND`）。我们的 `ZgjVideoHost` 是它的**兄弟**。
+兄弟之间 `SetWindowPos(HWND_TOP)` 只在本进程 z-order 里排序，
+能不能盖过 Chromium 的合成输出，就是所谓 airspace 问题。
+**这一层与前端代码质量无关**，是宿主选型带来的。
+
+### 17.3 参考项目（Electron，同样是 Chromium）为什么也没有
+它没有遇到这问题**不是因为架构更好**，而是它把 airspace 规避做成了设计。
+`apps/desktop/src/main/nativeVideoSurface.ts`（实测原文）：
+
+```ts
+/** An owned, frameless video region. mpv fills this region, never the controls. */
+surface = new BaseWindow({
+  parent, title: '…', width: 1, height: 1,
+  frame: false, show: false, skipTaskbar: true, resizable: false, movable: false,
+  backgroundColor: '#000000', useContentSize: true,
+})
+window.setIgnoreMouseEvents(true, { forward: true })
+const layout = () => {
+  const bounds = surfaceBoundsInScreen(parent.getContentBounds(), lastBounds,
+                                        parent.webContents.getZoomFactor())
+  if (!bounds || !parent.isVisible() || parent.isMinimized()) { hide(); return }
+  window.setBounds(bounds); window.showInactive(); window.moveTop()
+  resolveReady(true)          // ← 「几何就绪」是 promise，不是调用顺序约定
+}
+```
+
+四条它做了、我们没做的：
+
+| 它的做法 | 我们现在的做法 | 差别 |
+|---|---|---|
+| **owned 顶层窗**（`BaseWindow({parent})`） | `WS_CHILD` 子窗 | Windows 保证 owned 窗永远排在 owner 之上，不靠手动抢 z-order；WS_CHILD 只能跟 WebView2 当兄弟比 |
+| layout 挂在父窗 **9 个事件**（move/resize/show/restore/focus/enter-full-screen/leave-full-screen/hide/minimize） | 只挂 `window.addEventListener('resize')` | 移动窗口、全屏、从托盘恢复都不会重摆位 |
+| `surfaceBoundsInScreen` 用 `getZoomFactor()` 换算并**钳进父窗内容区**，量不到有效矩形就 `hide()` | 按 `devicePixelRatio` 换算，不钳父窗 | 越界与零尺寸的边界处理 |
+| `ready` promise **第一次成功 layout 才 resolve**，播放等它 | 靠「attach → setBounds → open」的**调用顺序**约定 | 顺序约定会被任何一次提前 return / 竞态打破，promise 不会 |
+
+### 17.4 这条对照怎么用（决策树）
+alpha.35 的徽标会给出 `该像素最上层=…`：
+
+- `=other`（多半 `Chrome_RenderWidgetHostHWND`）→ **确实是 airspace**，
+  修法照 17.3：换成 owned 顶层窗 + 事件驱动重摆 + ready 门。这是结构性改动，
+  要新建窗口类、消息循环、跟随父窗事件，不能顺手改。
+- `=ours` 而画面仍黑 → 跟 z-order 无关，该查 mpv 有没有往这窗画
+  （`--wid` 是否真的传了、gpu/hwdec/vo 在该窗上的输出），别去动窗口结构。
+- `该像素最上层=no-probe`（子窗还是 1×1）→ 摆位仍然没生效，
+  看同排的 `上报N次` / `前端量得…` / `上报异常=…` 判断断在哪一侧。
+
+**注意**：`no-probe` 时不要拿这张表下任何 z-order 结论——探测点在一个 1×1 的窗上
+没有意义，所以 Go 侧干脆不探（`Debug()` 里 `w>=2&&h>=2` 才探）。

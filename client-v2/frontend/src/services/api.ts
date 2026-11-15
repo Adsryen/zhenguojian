@@ -7,7 +7,7 @@
                 入参槽位精确匹配检查（ExactApiImpl——机制与边界见该文件底部）
    - 真实模式：window.go.main.App.<Method>(...) 返回 JSON 字符串（Go 侧 (string, error)）
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
-import type { AttachResult, NativeApi } from './contract'
+import type { EmbedSetStatus, AttachResult, NativeApi } from './contract'
 import { hasBridge, realApi, embedBridge } from './bridge'
 import { mockApi } from './mock'
 import { mockEmbedApi } from './mock/embed'
@@ -41,9 +41,10 @@ export const embedApi = {
     if (!hasBridge) return { embedded: false }
     return embedBridge.attach()
   },
-  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<EmbedSetStatus> => {
     if (isMock) return mockEmbedApi.setBounds(x, y, w, h, show)
-    if (!hasBridge) return
+    // 无桥也要如实回报「没送出去」，别让调用方以为成功了
+    if (!hasBridge) return { ok: false, error: 'no-bridge' }
     return embedBridge.setBounds(x, y, w, h, show)
   },
   /* 覆盖层穿透带（App.PlayerHitBands）：top/bottom=HTML 覆盖层与视频矩形
