@@ -445,6 +445,73 @@ jobs:
           构建提交：``$sha``（版本内查看：设置 > 关于 > 打包提交）
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
         shell: pwsh
+      - name: Generate latest.json (更新器的元数据资产)
+        # D1 的服务端。为什么要有这个文件：更新器原来读
+        # `https://api.github.com/repos/.../releases`，而实测
+        #   gh-proxy.com/https://api.github.com/... → 403 "API rate limit exceeded for user ID 295646756"
+        #   ghproxy.net/https://api.github.com/... → 403 "Invalid input."
+        #   gh-proxy.com/https://github.com/.../releases.atom → 200
+        # 即公开镜像代理 github.com 的下载、不代理（或共用配额）API。
+        # 所以把"版本元数据"做成**随 release 发布的静态资产**：
+        # 读它只需要 github.com 形状的 URL，镜像链天然可用，不需要 token。
+        # 字段必须与 `client-v2/internal/updater/latest.go` 的
+        # `latestManifest` 逐一对齐（schema/tag/version/prerelease/assets{name,size,sha256,url}），
+        # 那边对 schema 不符、exe 缺 url/size/sha256、version 与 tag 不一致
+        # 都是**明确报错**而不是静默当"无更新"。
+        if: startsWith(github.ref, 'refs/tags/v2.')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag -replace '^v', ''
+          # 预发布与否由 tag 文本判（与 Go 侧 IsPrereleaseTag 同一口径）；
+          # manifest 里的 prerelease 布尔必须与它一致，否则 Go 侧对账报错。
+          $pre = ($tag -match '-(alpha|beta|rc)')
+          $base = "https://github.com/Adsryen/zhenguojian/releases/download/$tag"
+
+          function Asset($path, $name) {
+            if (-not (Test-Path $path)) { throw "latest.json 缺资产源文件: $path" }
+            $item = Get-Item $path
+            # sha256 必须小写 64 位：Go 侧按 64 hex 校验，Get-FileHash 默认给大写
+            $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLower()
+            return [ordered]@{ name = $name; size = $item.Length; sha256 = $sha;
+                               url = "$base/$name" }
+          }
+
+          # notes 取发布说明首行（非空），只给一行摘要，别把整篇塞进元数据
+          $notes = ""
+          if (Test-Path client-v2/build/bin/RELEASE-NOTES.md) {
+            $notes = (Get-Content client-v2/build/bin/RELEASE-NOTES.md |
+                      Where-Object { $_.Trim() -ne "" } | Select-Object -First 1).Trim()
+          }
+
+          $m = [ordered]@{
+            schema      = 1
+            generatedAt = ([DateTime]::UtcNow).ToString("yyyy-MM-ddTHH:mm:ssZ")
+            tag         = $tag
+            version     = $ver
+            prerelease  = [bool]$pre
+            notes       = $notes
+            assets      = [ordered]@{
+              exe        = Asset "zhenGuoJian-v2.exe" "zhenGuoJian-v2.exe"
+              appZip     = Asset "zhenGuoJian-v2-app.zip" "zhenGuoJian-v2-app.zip"
+              runtimeZip = Asset "zhenGuoJian-v2-runtime.zip" "zhenGuoJian-v2-runtime.zip"
+              buildInfo  = Asset "client-v2/build/bin/build-info.json" "build-info.json"
+            }
+          }
+          $json = $m | ConvertTo-Json -Depth 5
+          # ConvertTo-Json 会把布尔写成 true/false、数字原样保留；
+          # 但 -Depth 不够会把 assets 变成字符串，所以这里回读校验一次再放行：
+          # 生成一个 Go 侧必然拒绝的文件比不生成更糟。
+          $back = $json | ConvertFrom-Json
+          if ($back.schema -ne 1 -or -not $back.assets.exe.sha256 -or
+              $back.assets.exe.size -le 0 -or $back.tag -ne $tag) {
+            throw "latest.json 自检失败（schema/exe.sha256/size/tag）"
+          }
+          New-Item -ItemType Directory -Force client-v2/build/bin | Out-Null
+          [IO.File]::WriteAllText("$PWD/client-v2/build/bin/latest.json", $json)
+          Write-Host "latest.json 就绪：tag=$tag prerelease=$pre exe=$($back.assets.exe.size)B"
+
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v2.')
         uses: softprops/action-gh-release@v2
@@ -455,3 +522,4 @@ jobs:
             zhenGuoJian-v2-app.zip
             client-v2/build/bin/build-info.json
             zhenGuoJian-v2-runtime.zip
+            client-v2/build/bin/latest.json

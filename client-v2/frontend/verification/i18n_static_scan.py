@@ -149,22 +149,32 @@ TS_EXEMPT = {
         ("'十'", "同上：中文数字表项（同样收窄为带引号字面量）"),
         ("'百'", "同上"),
     ],
-    "services/api.ts": [
-        ("'在看'", STATUS_REASON),
-        ("'预约中'", STATUS_REASON),
-        ("滑块</text>", "mock 验证码 SVG 画布里的图形文字，VITE_MOCK 专用素材"),
+    # D3 把 api.ts 拆成 bridge/mock/* 之后，这些条款必须跟着搬家。
+    # ⚠ 落点不是照抄拆分者的说法，而是逐个字符串 grep 实测出来的
+    #   （`'在看'` 同时也在 followCheck.ts、`本地文件已不存在` 也在 i18n.ts，
+    #   但条款要挂到"这条豁免本来就在保护谁"那个文件上）。
+    "services/bridge.ts": [
         ("未检测到 Wails 原生桥", "启动诊断文案，进 console 与降级提示；本轮先登记，见 notes R9c"),
+        ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
+    ],
+    "services/mock/player.ts": [
         ("尚未打开播放会话", DIAG_REASON),
+        ("本地文件已不存在", "mock 与 Go `PlayerOpenLocal` 同形的日志串；界面文案走 player.localMissing（按 code 取）"),
+        ("只允许播放下载目录下的成品文件", "同上，对应 Go 的 [outside_root]；界面走 player.localOutside"),
+    ],
+    "services/mock/update.ts": [
         ("mock: 全部候选失败", DIAG_REASON),
         ("mock: 请先完成下载", DIAG_REASON),
         ("mock: zip 资产请手动解压", DIAG_REASON),
-        ("原生方法 ${method} 不存在", "桥诊断（带方法名），开发者可见错误，不进正常 UI"),
-        # mock 面照 Go 复刻的**日志串**：界面按 ApiError.code（local_missing/outside_root）
-        # 从 i18n 取句子，这两句中文永远只进 console/日志，不进 DOM。
-        ("本地文件已不存在", "mock 与 Go `PlayerOpenLocal` 同形的日志串；界面文案走 player.localMissing（按 code 取）"),
-        ("只允许播放下载目录下的成品文件", "同上，对应 Go 的 [outside_root]；界面走 player.localOutside"),
-        # 同一族：mock 的失败注入缝。句子只进 ApiError.message（日志/诊断），
-        # 界面按 catch 分支显示 i18n 的 downloads.saveDanmakuFail。
+    ],
+    "services/mock/sorani.ts": [
+        ("滑块</text>", "mock 验证码 SVG 画布里的图形文字，VITE_MOCK 专用素材"),
+    ],
+    "services/mock/watch.ts": [
+        ("'在看'", STATUS_REASON),
+        ("'预约中'", STATUS_REASON),
+    ],
+    "services/mock/index.ts": [
         ("mock 保存弹幕开关失败", "VITE_MOCK 失败注入的日志串；用户看到的是 downloads.saveDanmakuFail 那句"),
         ("mock detail 故障注入", "VITE_MOCK 专用的故障注入标记：只作为 throw 的 message 存在，"
                                "而 followCheck 的失败分支只统计条数、不把异常文案显示给用户（v1 也是"
@@ -466,7 +476,22 @@ def selftest():
 
 
 def main():
+    # ⚠ 参数解析必须在这里，**不能放在下面**：
+    #   上一版 `args = ap.parse_args()` 落在第 501 行，
+    #   而第 476 行的死条款分支已经在读 `args.rebase` ——
+    #   于是"豁免条款失效"这个本该点名的分支变成
+    #   `UnboundLocalError: local variable 'args' referenced before assignment`，
+    #   工具直接崩，崩得比判红更糟（看不见是哪条失效，也看不出为什么）。
+    #   这条是子代理 D3 报的，我复核后确认：只要有任何一条条款命中数为 0 必现。
     _assert_no_duplicate_keys()
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--selftest", action="store_true",
+                    help="跑内置形状用例（注释/模板/字符串各形状）")
+    ap.add_argument("--list", action="store_true", help="逐条打印违规")
+    ap.add_argument("--rebase", action="store_true",
+                    help="按当前实测打印 BASELINE / TS_BASELINE 字典（还完债后粘贴回来）")
+    args = ap.parse_args()
 
     hits = exemption_hits()
     dead = [f"{t}:{p} 条款 {n!r} 命中 {c}" for (t, p, n), c in hits.items() if c <= 0]
@@ -482,13 +507,8 @@ def main():
     if pairs and not args.rebase:
         return 1
 
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--selftest", action="store_true",
-                    help="跑内置形状用例（注释/模板/字符串各形状）")
-    ap.add_argument("--list", action="store_true", help="逐条打印违规")
-    ap.add_argument("--rebase", action="store_true",
-                    help="按当前实测打印 BASELINE / TS_BASELINE 字典（还完债后粘贴回来）")
-    args = ap.parse_args()
+    if args.selftest:
+        return selftest()
     if args.selftest:
         return selftest()
 

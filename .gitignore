@@ -22,3 +22,8 @@ client-v2/*.syso
 
 # 验证/冒烟脚本的运行日志：本地一次性产物，证据以 verification 目录里的截图为准
 **/verification/*.log
+
+# D2 删除 v1 后，磁盘上还剩 v1 的忽略物（.venv-build 等，约 1.1G）。
+# 它们本来就被 v1 自己的 .gitignore 排除，删掉跟踪文件后目录仍在，
+# 列在这里是为了让 `git status` 保持干净、且一眼看出"这是残留物不是待提交内容"。
+zhenguojian/

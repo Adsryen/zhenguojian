@@ -81,16 +81,22 @@ const embedReason = ref('')
 const embedHost = ref<EmbedHostDebug | null>(null)
 const embedDebugOn = localStorage.getItem('zgj.embedDebug') === '1'
 
+/* ⚠ 这一行我第一版写成中文串拼接，被 `i18n_static_scan.py` 的零硬编码棘轮
+   当场抓到 7 处（它抓的是**界面可见中文**，不管这段是不是调试信息）。
+   抓得对：调试徽标也是界面，英文态下不该吐中文。改成走 i18n 整句参数化。 */
 const embedDebugText = computed(() => {
   const h = embedHost.value
   if (!h) return ''
-  return '父窗 ' + (h.parentClass || '?')
-    + ' · 子窗 ' + (h.childHwnd || '?')
-    + ' · 屏幕矩形 ' + h.childWidth + '×' + h.childHeight + ' @' + h.childLeft + ',' + h.childTop
-    + ' · visible=' + (h.childVisible ? '是' : '否')
-    + ' · 最近上报 ' + h.lastInW + '×' + h.lastInH
-    + ' → 换算 ' + h.lastOutW + '×' + h.lastOutH
-    + '（visible=' + (h.lastOutVisible ? '是' : '否') + '）'
+  return tf('player.embedDebug', {
+    cls: h.parentClass || '?', hwnd: h.childHwnd || '?',
+    // 数值一律 `?? 0`：HostDebug 的字段是可选的（Go 侧任何一步读失败都留零值），
+    // 而 tf 的参数类型不接受 undefined。
+    w: h.childWidth ?? 0, h: h.childHeight ?? 0, x: h.childLeft ?? 0, y: h.childTop ?? 0,
+    vis: h.childVisible ? 1 : 0,
+    inW: h.lastInW ?? 0, inH: h.lastInH ?? 0,
+    outW: h.lastOutW ?? 0, outH: h.lastOutH ?? 0,
+    outVis: h.lastOutVisible ? 1 : 0
+  })
 })
 
 /* ── V2-4 内嵌几何上报 ── */

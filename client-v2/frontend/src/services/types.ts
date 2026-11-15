@@ -1,5 +1,12 @@
 /* v1 行协议数据形状（照抄 zhenguojian/sidecar nativeDrama / catalog / sourceListItem） */
 
+/* ── 三层拆分（2026-11-15）──
+   NativeApi 与 ApiError 的物理家挪到 ./contract（bridge/mock/facade 三层共用的唯一形状来源）；
+   这里保留 re-export，旧 import 路径（'./types'、'@/services/types'）一律继续可用。
+   window.__zgj* 测试缝的 declare global 挪到了 ./mock/window.d.ts（环境声明全工程生效）。 */
+export { ApiError } from './contract'
+export type { NativeApi } from './contract'
+
 export interface Drama {
   metadataSchema?: number
   id: string
@@ -222,23 +229,7 @@ export interface HitBandsRecord {
   last: HitBandsReport | null
 }
 
-declare global {
-  interface Window {
-    /** embedApi.playerHitBands 在 mock/无桥时的落点（真实 exe 不写） */
-    __zgjHitBands?: HitBandsRecord
-    /** mock 验证钩子：置 true 让 embedApi.attach 谎报 embedded:true，
-        以驱动 PlayerView 的 setBounds/hitBands 上报链路（纯浏览器无副作用） */
-    __zgjMockEmbed?: boolean
-    /** mock 验证钩子：mockApi.suggestions 调用计数（联想防抖/门控断言用；真实桥不写） */
-    __zgjSuggestCalls?: number
-    /** mock 验证钩子：mockApi.openDownloadPath 最近一次路径 */
-    __zgjOpenPath?: string
-    /** mock 验证钩子：置 '1' 让 mockApi.soraniLogin 强制失败（M5 登录失败路径断言用） */
-    __zgj?: { mockLoginFail?: string }
-    /** mock 验证钩子：mockApi.soraniLogin 最近一次入参（M8 track 形状断言用；真实桥不写） */
-    __zgjSoraniLastLogin?: SoraniLoginAttempt | null
-  }
-}
+/* window.__zgj* 验证缝声明已挪至 ./mock/window.d.ts（清单见 ./mock/index.ts 头部） */
 
 /** 榜单候选（rankingBoards action；核心按站源可用性过滤，app_runtime.go:457-462。V2-E 侧栏） */
 export interface RankingBoard {
@@ -268,132 +259,7 @@ export interface RankingsResult {
   warning?: string
 }
 
-/** 适配层统一接口：wails 实现与 mock 实现同签名 */
-export interface NativeApi {
-  ping(): Promise<string> | Promise<unknown>
-  dataPath(): Promise<string>
-  listSources(): Promise<SourceListItem[]>
-  setSourceEnabled(slug: string, enabled: boolean): Promise<void>
-  catalog(params: CatalogParams): Promise<CatalogResult>
-  // ── V2-2 剧库推荐（bindings_library.go）：题材个性化推荐一页 + 「全部」tab 壳层页码游标重置 ──
-  recommendations(category: string, force: boolean, more: boolean): Promise<CatalogResult>
-  recommendationPageReset(): Promise<{ ok: boolean }>
-  // ── V2-E 榜单侧栏（bindings_rankings.go）：候选列表 + 单页榜单，应答原样透传 ──
-  rankingBoards(): Promise<RankingBoard[]>
-  rankings(board: string, page: number, force: boolean): Promise<RankingsResult>
-  detail(drama: Drama): Promise<DetailResult>
-  /** 封面管线（Go bindings_cover.go）：核心下载 + HEIC→JPEG 转码，resolve 为 data URL 字符串 */
-  cover(dramaJSON: string, force: boolean): Promise<string>
-  browseFilters(source: string): Promise<BrowseFiltersResult>
-  resolve(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<ResolvePlan>
-  // ── V2-3c 播放桥（app.go「V2-3c 播放绑定」；事件 player:tick/ended/error + danmaku:stats，见 stores/player.ts）──
-  /** 起播：drama/chapter 原样对象交给 Go，Go 内部走核心 resolve；index 1 起始；返回 Snapshot */
-  playerOpen(drama: Drama, chapter: Chapter, index: number, quality?: string): Promise<PlayerSnapshot>
-  /** R22a：播一个下载根下的成品文件（Go `PlayerOpenLocal`，路径校验在核心侧）。
-   *  错误尾巴 `[local_missing]` / `[outside_root]` 由 callGoRaw 剥成 ApiError.code。 */
-  playerOpenLocal(path: string, resumeSeconds: number): Promise<PlayerSnapshot>
-  /** R22a 第①件：本地文件的进度写入（Go `SaveLocalWatch`；v1 save_local_watch 同义）。 */
-  saveLocalWatch(drama: Drama, path: string, position: number, duration: number, finished: boolean): Promise<{ ok: boolean }>
-  playerPlay(): Promise<void>
-  pauseVideo(): Promise<void>
-  seekVideo(positionMs: number): Promise<void>
-  setSpeed(v: number): Promise<void>
-  setVolume(v: number): Promise<void>
-  closeVideo(): Promise<void>
-  playerState(): Promise<PlayerSnapshot>
-  setDanmaku(on: boolean): Promise<void>
-  /** 弹幕不透明度，百分比 20–100（v1 tools.danmaku_opacity 同一量纲）；
-      真桥侧由壳层换算成 0.2–1.0 再交给 App.PlayerDanmakuOpacity。 */
-  setDanmakuOpacity(percent: number): Promise<void>
-  /** 记住「下一季是另一部剧」的入口（v1 mark_next_season）。
-   *  marked=false 表示旧季不在追剧表——照 v1 不谎报成功。 */
-  setNextSeason(dramaID: string, nextDrama: Drama): Promise<{ marked: boolean }>
-  /** R23：把"最新剧数据"交给核心观察器（v1 watchstore.observe_drama）。
-   *  observed=false 表示这条根本不在追剧表（v1 对未追的剧直接 return，连 emit 都不发）。 */
-  observeDrama(drama: Drama): Promise<{ observed: boolean; changed: boolean; row: WatchRow | null }>
-  // durationSec：核心要求 durationMs>0（app_danmaku_all.go:181），0 会被拒
-  danmakuAll(session: string, durationSec: number): Promise<DanmakuWindowResult>
-  // ── watchstore / 日历绑定（Go 进程内持久化；视图迁移为后续切片）──
-  watchlist(): Promise<WatchRow[]>
-  historyList(): Promise<HistoryRow[]>
-  toggleFollow(drama: Drama): Promise<{ followed: boolean }>
-  reserve(drama: Drama): Promise<{ reserved: boolean }>
-  cancelReservation(dramaId: string): Promise<{ ok: boolean }>
-  removeFollow(dramaId: string): Promise<{ ok: boolean }>
-  saveWatch(drama: Drama, episode: number, position: number, duration: number, finished: boolean): Promise<{ ok: boolean }>
-  removeHistory(dramaId: string): Promise<{ ok: boolean }>
-  clearHistory(): Promise<{ ok: boolean }>
-  // ── 看过标记（范围 A：Go bindings_seen.go / seen-library.json，值=epoch 秒）──
-  seenList(): Promise<Record<string, number>>
-  toggleSeen(dramaId: string): Promise<{ on: boolean }>
-  importSeen(entriesJSON: string): Promise<{ added: number }>
-  calendar(date: string, offset: number, gender: number): Promise<CalendarPayload>
-  /** 演职员条（v2-D）：真实桥 = App.DramaCreators（bindings_cast.go）；discovery 未接入时 reject，调用方静默隐藏 */
-  dramaCreators(drama: Drama): Promise<CreatorsResult>
-  /** 创作者页头部（V2-L）：真实桥 = App.CreatorProfile（bindings_creator.go）；
-      discovery 未启用/核心报错时 reject，调用方亮红条 + 重试 */
-  creatorProfile(creator: CreatorEntry): Promise<CreatorProfileResult>
-  /** 创作者作品墙：tab/subTab 传 0 = 核心自动取首个作品分类；
-      sort ∈ 'time_desc'|'hot_desc'；cursor 空串 = 首屏 */
-  creatorWorks(creator: CreatorEntry, tab: number, subTab: number, cursor: string, sort: string): Promise<CreatorWorksSnapshot>
-  // ── V2-4 设置/指纹 ──
-  resourceSettings(): Promise<ResourceSettingsSnapshot>
-  saveResourceSettings(patch: Partial<ResourceSettingsSnapshot>): Promise<unknown>
-  buildInfo(): Promise<BuildInfo>
-  // ── V2-3 下载与合并（bindings_download.go；事件 downloads:update）──
-  downloadList(): Promise<DownloadSnapshot>
-  downloadStart(drama: Drama, entries: DownloadEntry[], quality: number): Promise<{ added: number }>
-  downloadPause(id: string): Promise<{ ok: boolean }>
-  downloadResume(id: string): Promise<{ ok: boolean }>
-  downloadRetry(id: string): Promise<{ ok: boolean }>
-  downloadCancel(id: string): Promise<{ ok: boolean }>
-  downloadArchive(id: string): Promise<{ ok: boolean }>
-  downloadRestore(id: string): Promise<{ ok: boolean }>
-  downloadControlAll(command: 'pauseAll' | 'resumeAll'): Promise<{ ok: boolean }>
-  downloadRemoveBatch(ids: string[]): Promise<{ completed: string[]; failures: Record<string, string> }>
-  downloadSettings(): Promise<DownloadSettingsSnapshot>
-  saveDownloadSettings(concurrency: number, bySource: boolean, mergeVerify: boolean): Promise<DownloadSettingsSnapshot>
-  /** R22a③：单独设「下载时保存弹幕」，不连带改并发（v1 那个勾选框就是即点即存）。 */
-  setDanmakuDownload(on: boolean): Promise<{ danmakuDownload: boolean }>
-  mergeStart(mode: 'season' | 'selected', drama: Drama | null, jobIds: string[]): Promise<{ queued: number; replaced: boolean; episodes: number[] }>
-  /** R22b「按季合并选中」（v1 start_merge_multi → App.MergeStartMulti）。
-   *  勾选的剧由前端给出；季序、命名、`不足 2 集丢掉`、`运行中的季跳过` 全在 Go 算，
-   *  规则表见 internal/downloadsvc/multi.go 与它的单测。 */
-  mergeStartMulti(dramas: Drama[]): Promise<{ queued: number; replaced?: number; skipped?: number; outputs: string[] }>
-  mergeCancel(id: string): Promise<{ ok: boolean }>
-  downloadDirectory(): Promise<DownloadDirectoryInfo>
-  /** 归档目录扫描（App.ArchiveScan → downloadsvc.ScanArchiveRoot；交付 B/C） */
-  archiveScan(): Promise<ArchiveScanResult>
-  // ── 搜索联想（bindings_suggest.go App.Suggest；核心应答 items=string[]，红果专属 ≤10 条，app_suggestions.go:10-21）──
-  /** 切集预缓冲（bindings_suggest.go App.PreloadEpisode；失败静默） */
-  preloadEpisode(drama: Drama, chapter: Chapter, index: number, quality: number): Promise<string>
-  /** 资源管理器打开下载目录/文件（bindings_download_windows.go App.OpenDownloadPath） */
-  openDownloadPath(path: string): Promise<void>
-  suggestions(query: string): Promise<string[]>
-  // ── V-UPD 程序内更新（bindings_update.go；事件 update:available / update:progress）──
-  /** App.vue mount 懒触发启动自动检查（真实桥首次调用起 goroutine；mock 走 localStorage+定时器） */
-  updateStartup(): Promise<{ ok: boolean }>
-  /** 手动检查；force=false 时 30s 冷却回缓存（cooldown=true） */
-  updateCheck(force: boolean): Promise<UpdateCheckResult>
-  /** 当前版本/通道/最近检查/下载状态/设置摘要（UI 轮询面） */
-  updateStatus(): Promise<UpdateStatus>
-  /** 下载（或续传）tag 的资产；asset 空=默认 exe；进度走事件/mock 定时器 */
-  updateDownload(tag: string, asset: string): Promise<{ ok: boolean }>
-  updateCancel(): Promise<{ ok: boolean }>
-  /** 应用已下载更新：exe→重启替换（restarting），zip→manual 指引 */
-  updateApply(): Promise<UpdateApplyResult>
-  updateSettingsGet(): Promise<UpdateSettings>
-  updateSettingsSet(patch: Partial<UpdateSettings>): Promise<UpdateSettings>
-  // ── 青空次元账号（bindings_sorani.go App.SoraniAccount 单绑定，api 层按 command 映射四方法）──
-  /** command ""：登录态 {loggedIn,name} */
-  soraniStatus(): Promise<SoraniStatus>
-  /** command captcha：滑块验证码（图为 base64 data URL，原图 600×360 / 模板 110×360） */
-  soraniCaptcha(): Promise<SoraniCaptcha>
-  /** command login：accountJSON={identifier,password,captchaId,track}（Go 侧再嵌 account 键） */
-  soraniLogin(identifier: string, password: string, captchaId: string, track: SoraniTrack): Promise<SoraniStatus>
-  /** command logout：清会话，返回空态 */
-  soraniLogout(): Promise<SoraniStatus>
-}
+/* NativeApi 已挪至 ./contract.ts（上方 re-export 保留旧路径） */
 
 /** 核心下载根目录（bindings_download.go DownloadDirectory：core action downloadDirectory + os.Stat） */
 export interface DownloadDirectoryInfo {
@@ -608,16 +474,7 @@ export interface BuildInfo {
   version?: string
 }
 
-/** 带协议 code 的错误（discovery_unavailable / source_blocked 等） */
-export class ApiError extends Error {
-  code: string
-  retryAt?: number
-  constructor(message: string, code = '', retryAt?: number) {
-    super(message)
-    this.code = code
-    this.retryAt = retryAt
-  }
-}
+/* ApiError 已挪至 ./contract.ts；本文件顶部 re-export 保旧路径 */
 
 // ── V-UPD 程序内更新（对应 Go internal/updater JSON 面）──
 
