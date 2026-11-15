@@ -402,6 +402,53 @@ def main():
         print("FAIL 找不到 %s —— 判据文件被移动或删除，这条检查退化成空转" % _rs)
         return 1
 
+    # 第八十三轮加的两道 PowerShell 门。为什么必须加在本地而不是等 CI：
+    # alpha.36 的 windows job 死在内联 PowerShell 的一个**语法错**
+    #   ParserError: …ps1:37  Missing closing ')' in expression.
+    # 那段代码是 62 轮写的，之后一直没被执行（先死在 checkout），
+    # 所以"我看了 diff"完全没用——本地跑不到、CI 跑得到，中间隔着一次白烧的 tag
+    # 和一轮人工测试。现在本机装了 pwsh（~/.local/pwsh 7.4.6），这两件事都能在本地验：
+    #   门 A：workflow 里每段 shell:pwsh 的 run 都过 PowerShell Parser（不执行）；
+    #   门 B：gen_latest_json.ps1 自己的 -SelfTest（11 条，含"annotated tag + 文件回退
+    #         = 拒绝发布"，即 alpha.33 那条隐身错的可见化）。
+    # 没有 pwsh 时打印 ⚠ 显式跳过——**不能**让它长得像通过。
+    _gate = os.path.join(ROOT, "scripts", "pwsh_syntax_gate.py")
+    _glj = os.path.join(ROOT, "client-v2", "scripts", "gen_latest_json.ps1")
+    _pwsh = os.environ.get("PWSH") or next(
+        (p for p in [os.path.expanduser("~/.local/pwsh/pwsh"), "/usr/bin/pwsh"] if os.path.exists(p)),
+        __import__("shutil").which("pwsh"))
+    if not _pwsh:
+        print("⚠ 内联 PowerShell 两道门：本机没有 pwsh，**未验证**（装 pwsh 或设 PWSH=…）")
+    elif not os.path.exists(_gate):
+        print("FAIL 找不到 %s —— 门文件被移动或删除，这条检查退化成空转" % _gate)
+        return 1
+    else:
+        for label, gate_args in (("pwsh 语法门自检", [_gate, "--selftest"]),
+                                 ("pwsh 语法门（真 workflow）", [_gate]),
+                                 ("gen_latest_json 自检", None)):
+            if gate_args is None:
+                if not os.path.exists(_glj):
+                    print("FAIL 找不到 %s" % _glj)
+                    return 1
+                cmd = [_pwsh, "-NoProfile", "-File", _glj, "-SelfTest"]
+            else:
+                cmd = [sys.executable] + gate_args
+            cwd = ROOT
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
+                               cwd=cwd, stdin=subprocess.DEVNULL,
+                               env=dict(os.environ, PWSH=_pwsh))
+            out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+            # 摘要行按关键字找：pwsh 那条的最后一行是 release_notes 的
+            # `notes-source=file-fallback`（子进程 stderr 透传），拿最后一行会读错。
+            summ = next((ln for ln in reversed(out) if "selftest" in ln or "内联 PowerShell 块" in ln),
+                        out[-1] if out else "(无输出)")
+            print("%s：%s" % (label, summ.strip()))
+            if r.returncode != 0:
+                print("FAIL %s 非 0（exit=%d）：" % (label, r.returncode))
+                for ln in out[-12:]:
+                    print("   ", ln)
+                return 1
+
     # 会话状态文件的对账：里面的数字只能由脚本产生。
     # 我在这个任务里六次凭记忆写错提交数，所以把它做成文件 + 比较器，
     # 而不是继续对自己说"以后现测"。

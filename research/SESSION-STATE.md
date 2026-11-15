@@ -4,12 +4,12 @@
 
 # 会话状态（现测）
 
-生成时间：2026-11-15 10:14:15 +0000
+生成时间：2026-11-15 10:46:25 +0000
 
 | 指标 | 值 | 怎么量的 |
 |---|---|---|
-| 累计提交（相对 `a1a1c89`） | **197** | `git rev-list --count` + 首笔 |
-| HEAD | `734922a` | `git rev-parse --short HEAD` |
+| 累计提交（相对 `a1a1c89`） | **198** | `git rev-list --count` + 首笔 |
+| HEAD | `4dc0e50` | `git rev-parse --short HEAD` |
 | 工作区未提交条目 | 5 | `git status --porcelain` 行数 |
 | 前端验收脚本 | 30 只 | `verification/*_verify.py` |
 | 端口号（独占/冲突） | 34 个 / 0 处冲突 | `ports_audit.audit_dir` |

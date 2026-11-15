@@ -582,3 +582,65 @@ alpha.35 的徽标会给出 `该像素最上层=…`：
    判据 `b>120 && b-r>60 && b-g>40`）取连续 12 个蓝像素的中点；
    进详情那一步也用「找得到主按钮颜色」当作**已经在详情页**的判据。
    实测三种布局分别命中 y=322 / y=334，`mpv 进程数=1`，离开播放页后归 0。
+
+## 十九、内联 PowerShell 也必须本地能跑：alpha.36 死在语法错（83 轮）
+
+### 19.1 事实
+- alpha.36（run 43703147869）：**test-linux success、windows failure**，
+  失败 step = `Generate latest.json (更新器的元数据资产)`，真错逐字：
+  ```
+  ParserError: D:\a\_temp\0faf4236-….ps1:37
+     (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md
+         --explain $srcFile | Select-Object -First 1)
+  Missing closing ')' in expression.
+  ```
+- 这段是 62 轮我为"notes 来源可见"改的。改完之后它**一次都没被执行过**——
+  它排在 checkout 后面，而 checkout 先死了（见十八节）。
+  所以"我看过 diff"在这件事上价值为零：本地跑不到、CI 才跑得到，
+  中间隔着的代价就是又一个白烧的 tag。
+
+### 19.2 修法分两层（不是"下次小心"）
+1. **逻辑搬出 workflow**：新增 `client-v2/scripts/gen_latest_json.ps1`，
+   latest.json 的生成判据全在里面（参数化 -Tag/-BinDir/-NotesFile/-RepoRoot，
+   带 `-SelfTest`）。workflow 里只剩三行胶水：跑 selftest、跑生成、判退码。
+   -SelfTest 11 条实测全过，其中第 11 条是**「annotated tag + notes 来自文件回退 = 拒绝发布」**
+   ——用桩脚本冒充 CI 的坏环境，把 alpha.33 那条隐身错做成会响的硬门。
+   变异实测：把硬门改成 `if ($false)` → 立刻 `FAIL 11 … 根本没报错`（改前这条**没有判据**，
+   门坏了也没人知道）。
+2. **剩下的胶水做语法门**：新增 `scripts/pwsh_syntax_gate.py`，
+   把 workflow 里每段 `shell: pwsh` 的 run 抽出来，交给 PowerShell 自己的
+   `Parser::ParseFile`（不执行）。实测它能在本地复现 CI 的报错：
+   ```
+   FAIL … Generate latest.json (pwsh)
+        36:78 Missing closing ')' in expression.
+   ```
+   （拿 `git show 4dc0e50:.github/workflows/build-v2.yml` 喂给它，rc=1）
+
+### 19.3 本机 pwsh 从此可用
+- 装了 pwsh 7.4.6 到 `~/.local/pwsh`（tarball 解包后要 `chmod +x pwsh`）。
+  **"我本机没有 pwsh 所以这段没法验"这个借口从此不成立**。
+- 两道门都进了 `run_all.py` 预检（现在共九道）；没有 pwsh 时打印
+  `⚠ …**未验证**`，不伪装成通过。
+
+### 19.4 门自己也被抓了两条错（都是我的）
+1. 第一版用 `pwsh -Command <脚本> <路径>` 传参，`$args[0]` 拿不到 →
+   报 `The file could not be read`。后果很坏：**坏块和好块都因为同一个读文件错而红**，
+   S1「坏块被拒绝」看着过了，其实一行源码都没解析。改成走环境变量
+   `ZGJ_PS_PARSE_TARGET`，并把 S2 从"有没有报错"改成**盯报错内容**
+   （不得含 could not be read / TARGET-MISSING），另加 S5 专测"门自己坏了要报错"。
+2. `${{ github.ref_name }}` 原样喂给 Parser 会报
+   `Use `{ instead of { in variable names.`——GitHub 在调用 pwsh **之前**做替换，
+   PowerShell 从不认识它。现在解析前把 `${{ … }}` 换成占位符（S4 钉住不误报）。
+   诚实边界：占位符只消除这一类假错；替换后的**值**带空格/引号会不会破坏写法，
+   这道门管不了，靠"插值一律放在双引号里"的约定。
+3. 顺带又犯一次**变量遮蔽**：我在 `main()` 里用 `for label, args in …` 把
+   CLI 的 `args` 命名空间覆盖成 None，run_all 在脚本列表那行崩
+   （`AttributeError: 'NoneType' object has no attribute 'only'`）。
+   这次是崩、不是假绿，但同类错（R52 也犯过）已经是第二次。
+
+### 19.5 这轮的门禁实测
+- `pwsh_syntax_gate.py --selftest` 6/6；真 workflow 2 段 0 错。
+- `gen_latest_json.ps1 -SelfTest` 11/11（变异体 m1/m2/m3/m4 各抓到对应条）。
+- `run_all.py` 九道预检全过；全量回归结果见提交信息。
+- alpha.37 待用 `scripts/release-check.sh` 核对（四段判据，见 18.4）。
+

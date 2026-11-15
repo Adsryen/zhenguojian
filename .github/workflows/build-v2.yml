@@ -483,14 +483,6 @@ jobs:
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
         shell: pwsh
       - name: Generate latest.json (更新器的元数据资产)
-        # ⚠ 控制台编码必须显式设 UTF-8，否则中文 notes 会 mojibake：
-        #   alpha.32 的 Windows 构建里 release_notes.py --selftest 直接崩在
-        #   cp1252（UnicodeDecodeError 解 git 输出 / UnicodeEncodeError 打中文
-        #   FAIL 行）。脚本内部已强制 UTF-8，但 PowerShell 取
-        #   `& python ... | Select-Object -First 1` 时是按 [Console]::OutputEncoding
-        #   解 python 的 stdout 的 —— notes 现在是中文 tag 注释，这一步不设
-        #   UTF-8 就会把「v2.0.0-alpha.33 —— 内嵌几何…」写坏成乱码进 latest.json。
-        #   判据坏可以报错，编码坏是**静默**的，所以这条门只能装在这里。
         # D1 的服务端。为什么要有这个文件：更新器原来读
         # `https://api.github.com/repos/.../releases`，而实测
         #   gh-proxy.com/https://api.github.com/... → 403 "API rate limit exceeded for user ID 295646756"
@@ -499,91 +491,32 @@ jobs:
         # 即公开镜像代理 github.com 的下载、不代理（或共用配额）API。
         # 所以把"版本元数据"做成**随 release 发布的静态资产**：
         # 读它只需要 github.com 形状的 URL，镜像链天然可用，不需要 token。
-        # 字段必须与 `client-v2/internal/updater/latest.go` 的
-        # `latestManifest` 逐一对齐（schema/tag/version/prerelease/assets{name,size,sha256,url}），
+        # 字段必须与 `client-v2/internal/updater/latest.go` 的 `latestManifest`
+        # 逐一对齐（schema/tag/version/prerelease/assets{name,size,sha256,url}），
         # 那边对 schema 不符、exe 缺 url/size/sha256、version 与 tag 不一致
         # 都是**明确报错**而不是静默当"无更新"。
+        #
+        # ⚠ 判据不在这个文件里，唯一实现是 client-v2/scripts/gen_latest_json.ps1。
+        #   alpha.36 的 windows job 就死在这段**内联 PowerShell 的语法错**：
+        #     ParserError: D:\a\_temp\xxx.ps1:37
+        #     (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md
+        #         --explain $srcFile | Select-Object -First 1)
+        #     Missing closing ')' in expression.
+        #   上一轮修好 checkout 之后，这段才**第一次被真正执行**——内联在 workflow
+        #   里的代码本地一行都跑不到，只能等下一个 tag 来撞，而每个 tag 都是一轮人工测试。
+        #   现在 CI 只做两件事：先跑那个脚本的 -SelfTest（11 条），再调它生成。
+        #   11 条里最关键的是「annotated tag + notes 来自文件回退 = 拒绝发布」，
+        #   它把 alpha.33 那条隐身错（checkout 不取 tag 对象，notes 静默退化）
+        #   变成了发布级失败；实测把硬门改成 if ($false) 后该条立刻红。
+        #   本机装了 pwsh 7.4.6（~/.local/pwsh），所以这段现在**可以本地验**：
+        #   run_all 预检第八道跑它，没有 pwsh 就显式 SKIP（不静默当通过）。
         if: startsWith(github.ref, 'refs/tags/v2.')
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Stop"
-          # 见上面步骤注释：PowerShell 解 python stdout 用的是控制台编码，
-          # Windows runner 默认 cp1252，中文 notes 会静默变乱码。
-          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-          $OutputEncoding = [System.Text.Encoding]::UTF8
-          $tag = "${{ github.ref_name }}"
-          $ver = $tag -replace '^v', ''
-          # 预发布与否由 tag 文本判（与 Go 侧 IsPrereleaseTag 同一口径）；
-          # manifest 里的 prerelease 布尔必须与它一致，否则 Go 侧对账报错。
-          $pre = ($tag -match '-(alpha|beta|rc)')
-          $base = "https://github.com/Adsryen/zhenguojian/releases/download/$tag"
-
-          function Asset($path, $name) {
-            if (-not (Test-Path $path)) { throw "latest.json 缺资产源文件: $path" }
-            $item = Get-Item $path
-            # sha256 必须小写 64 位：Go 侧按 64 hex 校验，Get-FileHash 默认给大写
-            $sha = (Get-FileHash -Algorithm SHA256 $path).Hash.ToLower()
-            return [ordered]@{ name = $name; size = $item.Length; sha256 = $sha;
-                               url = "$base/$name" }
-          }
-
-          # notes 的判据不在这里，唯一实现在 client-v2/scripts/release_notes.py（带 --selftest）。
-          # 上一轮我在这段内联改了一版"跳过 # 标题取第一条非空行"，CI 绿、我也看了
-          # latest.json，结果 notes 是 `| 文件 | 用途 |`（表格头）——
-          # 内联在 PowerShell 里的逻辑没有任何东西能测它，所以"我核过了"并不等于"它对"。
-          # 现在先跑判据自己的 selftest，再生成，判据坏了发布就停。
-          $rs = "client-v2/scripts/release_notes.py"
-          python $rs --selftest
-          if ($LASTEXITCODE -ne 0) { throw "release_notes selftest 失败，不带着坏判据发布" }
-          # 来源走**文件**而不是解析 stderr：我本机没有 pwsh，
-          # 「用数组 -match 筛 stderr」这种 PowerShell 逻辑一行都没法验证；
-          # 而 Get-Content 读一个文件几乎不会错，可测的部分全留在 Python
-          # （selftest 里 explain-file / explain-stdout-is-notes-only 三条钉住）。
-          $srcFile = "$env:RUNNER_TEMP/notes-source.txt"
-          Remove-Item $srcFile -ErrorAction SilentlyContinue
-          $notes = (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md
-                      --explain $srcFile | Select-Object -First 1)
-          if ($LASTEXITCODE -ne 0) { throw "release_notes 取摘要失败 (exit $LASTEXITCODE)" }
-          if (-not $notes) { $notes = "" }
-          $src = ""
-          if (Test-Path $srcFile) { $src = (Get-Content -Raw $srcFile).Trim() }
-          Write-Host "notes $src (len=$(($notes | Out-String).Trim().Length))"
-          # 硬门：tag 对象存在（annotated）却没走 annotation，说明优先级坏了
-          # 或 tag 没取回 —— 这正是 alpha.33 隐身的那条错：
-          # checkout 默认不取 tag 对象，notes 静默退化成文件回退，
-          # 而从 notes 的内容上看不出任何异常。lightweight tag 退回文件是设计内，
-          # 所以这里只钉「有注释却没用它」。
-          $tagType = (& git cat-file -t "refs/tags/$tag" 2>&1) | Select-Object -First 1
-          if (("$tagType" -eq 'tag') -and ($src -notmatch 'annotation')) {
-            throw "tag $tag 是 annotated（%(objecttype)=tag），但 $src —— annotation 优先级没生效，不带着它发布"
-          }
-
-          $m = [ordered]@{
-            schema      = 1
-            generatedAt = ([DateTime]::UtcNow).ToString("yyyy-MM-ddTHH:mm:ssZ")
-            tag         = $tag
-            version     = $ver
-            prerelease  = [bool]$pre
-            notes       = $notes
-            assets      = [ordered]@{
-              exe        = Asset "zhenGuoJian-v2.exe" "zhenGuoJian-v2.exe"
-              appZip     = Asset "zhenGuoJian-v2-app.zip" "zhenGuoJian-v2-app.zip"
-              runtimeZip = Asset "zhenGuoJian-v2-runtime.zip" "zhenGuoJian-v2-runtime.zip"
-              buildInfo  = Asset "client-v2/build/bin/build-info.json" "build-info.json"
-            }
-          }
-          $json = $m | ConvertTo-Json -Depth 5
-          # ConvertTo-Json 会把布尔写成 true/false、数字原样保留；
-          # 但 -Depth 不够会把 assets 变成字符串，所以这里回读校验一次再放行：
-          # 生成一个 Go 侧必然拒绝的文件比不生成更糟。
-          $back = $json | ConvertFrom-Json
-          if ($back.schema -ne 1 -or -not $back.assets.exe.sha256 -or
-              $back.assets.exe.size -le 0 -or $back.tag -ne $tag) {
-            throw "latest.json 自检失败（schema/exe.sha256/size/tag）"
-          }
-          New-Item -ItemType Directory -Force client-v2/build/bin | Out-Null
-          [IO.File]::WriteAllText("$PWD/client-v2/build/bin/latest.json", $json)
-          Write-Host "latest.json 就绪：tag=$tag prerelease=$pre exe=$($back.assets.exe.size)B"
+          pwsh -NoProfile -File client-v2/scripts/gen_latest_json.ps1 -SelfTest
+          if ($LASTEXITCODE -ne 0) { throw "gen_latest_json selftest 失败，不带着坏判据发布" }
+          pwsh -NoProfile -File client-v2/scripts/gen_latest_json.ps1 -Tag "${{ github.ref_name }}" -BinDir client-v2/build/bin -RepoRoot .
+          if ($LASTEXITCODE -ne 0) { throw "latest.json 生成失败 (exit $LASTEXITCODE)" }
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/v2.')
