@@ -154,3 +154,42 @@
 
 **黑屏那条还没定位**，等 alpha.29 的 `[embed]` 现场数据。
 它不属于 D1–D5，但优先级高于本计划里任何一项 —— 数据一到我就先修它。
+
+
+---
+
+## 执行状态（第六轮收尾）
+
+| 项 | 状态 | 实证 |
+|---|---|---|
+| **D2** v1 移除 | ✅ 完成 | tag `v1-final`；master 删 `zhenguojian/`；CI 两 job ✓；`scripts/v1show.sh` |
+| **D3** services 三分 | ✅ 完成 | `run_all` 30/30、typecheck 0、负注入 `ContractMismatch` 生效 |
+| **D1** 更新器 latest.json | ✅ 完成（客户端 + CI 产出） | `internal/updater` 42→**60/60**；`GOOS=windows go vet` rc=0 |
+| **D5** 退出并发化 | ✅ 完成 | 根包 `-count=2` ✓、`internal/tray` ✓、变异测试 10 个变体全红 |
+| **D4** monorepo 化 | ⏸ 按计划暂缓 | 等 D2/D3 稳定后再评估 |
+| **D6** nsis | ❌ 未做（建议不做） | —— |
+
+## 期间额外修掉的两个真 bug（都不是计划里的，是并发跑出来的）
+
+1. **合并取消竞态**（`downloadsvc`）：running 已置、`entry.cancel` 未登记的窗口里
+   取消被静默丢弃却返回 ok。由恢复硬门后 Windows 的"偶发红"追出，
+   **没有重跑到绿**。已修 + 确定性测试。
+2. **诊断代码自己截断日志**：`grep … | head -40` 在 `pipefail` 下吃 SIGPIPE
+   → errexit 终止步骤，导致"打印失败原因"反而让日志断在诊断之前。
+   两处（另一处 `sed | head -12`）已兜住。
+
+## 新增待决（D7）
+
+**退出时 downloads 步骤可能被 2s 预算放弃**，从而跳过末尾那次
+`merges.state.json` 落盘（串行在某个区间内本来还能落）。
+两个消法：把 downloads 也标 terminal（最坏回到 5s，把延迟请回来），
+或调小 downloadsvc 内部那个 5s 等待。
+当前选择是"保留 2s 预算 + 写进注释与日志"。需要你定。
+
+## 一条方法论收获（写进这里，因为它改变速度）
+
+`GAPS §七` 那条"本机没有可用 Go 工具链"是**未验证的环境假设**，
+本轮被推翻：`GOTOOLCHAIN=go1.25.3` 可用，`internal/...` 全量 **16 秒**跑完，
+`GOOS=windows go vet` 可用。之前每轮为 Go 编译错付 10–20 分钟 CI 等待，
+本轮白跑 3 次才追到根因。
+**结论：环境假设也要当成"待验证事实"来对待**，否则它会一直收租。
