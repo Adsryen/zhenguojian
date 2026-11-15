@@ -1,5 +1,8 @@
 # v1↔v2 行为对账：搜索 / 找剧(discover) / 剧库(library)
 
+> （D3 拆分后 `services/api.ts` 只剩 57 行 facade，原行号随内容搬到 `bridge.ts` / `mock/*`；旧引用已按「取旧行原文→在新树里 grep」逐条重指向，非手写）
+
+
 > **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
 > `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
 > 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
@@ -120,16 +123,16 @@
 | S13 | 失败：状态块「搜索失败：」+原因+「重试」按钮 | SearchView.vue:367-370；i18n.ts:241 | ✅（+重试=➕） |
 | S14 | 单源结果**不按 id 去重**；扇出组内也不去重；loadMore concat 不去重 | SearchView.vue:237/255；searchAll.ts:98 | ❌（v1 widgets.py:600-601 去重） |
 | S15 | 「全部来源」扇出：目标= `enabled && implemented` 源、保持 orderedSources 顺序（红果置顶）；并发≤4；各源 page1、lane=`search:<slug>` 互不取消；组头=站源名+18++`N 条`；组内失败行=「该源搜索失败：<原因（剥 [code] 尾缀）>」+单源重试；全败→顶部条+全部重试；空组=「该源无匹配结果」；组到先渲染（骨架先行）；勾选态持久化 `zgj.search.all` | SearchView.vue:197-209、226-231、265-271、281-288；searchAll.ts:16-18、34-47、51-63、66-69、82-124；SearchGroups.vue:60-85 | ➕ v2 新功能（v1 明确单源；实现自洽） |
-| S16 | mock/DEGRADED（无桥→自动落 mock 面）时：搜索页**不显示任何“示例数据/降级”横幅，也不透传 mockCatalog 自带的 warning**；discover/library 会显示 | api.ts:1065-1069、491-493；fixtures.ts:536-554（warning :552）；DiscoverView.vue:179；LibraryView.vue:80-82 | ❌ 谎报面：搜索页 mock 数据无标识 |
+| S16 | mock/DEGRADED（无桥→自动落 mock 面）时：搜索页**不显示任何“示例数据/降级”横幅，也不透传 mockCatalog 自带的 warning**；discover/library 会显示 | mock/sorani.ts:91、491-493；fixtures.ts:536-554（warning :552）；DiscoverView.vue:179；LibraryView.vue:80-82 | ❌ 谎报面：搜索页 mock 数据无标识 |
 | S17 | 点结果 → `router.push(detailRoute(d))` | SearchView.vue:377/388 | ✅（机制=路由替代覆盖页，c 类） |
-| S18 | 联想请求次数验证钩子 `window.__zgjSuggestCalls`（mock 面计数）；扇出故障钩子 `window.__zgjSearchFault` | api.ts:971-974；searchAll.ts:72-79 | （钉锚点，见表 3） |
+| S18 | 联想请求次数验证钩子 `window.__zgjSuggestCalls`（mock 面计数）；扇出故障钩子 `window.__zgjSearchFault` | mock/index.ts:184；searchAll.ts:72-79 | （钉锚点，见表 3） |
 
 ### 2B. DiscoverView.vue
 
 | # | v2 行为 | 出处 | 对齐 |
 |---|---|---|---|
 | D1 | 标题 + SourceSwitch + 「刷新」按钮；**没有页内搜索框** | DiscoverView.vue:256-267；v1 browse_panel.py:129-131 | ❌ 页内搜索入口缺失 |
-| D2 | 芯片行：数据=`browseFilters(source, '')`，红果取 genre 组∩GENRE_TAB_IDS、其它源取 category 组，前插「全部」；失败/缺 overlay → **兜底 hongguo 三体裁**（`discovery_unavailable` 时静默，仅 console.info） | DiscoverView.vue:85-97、134-152；discovery_stub.go:26-36；api.ts:274 | ⚠（有芯片；兜底表对非红果源会发起核心不认的 category→报错，见表3 B-d） |
+| D2 | 芯片行：数据=`browseFilters(source, '')`，红果取 genre 组∩GENRE_TAB_IDS、其它源取 category 组，前插「全部」；失败/缺 overlay → **兜底 hongguo 三体裁**（`discovery_unavailable` 时静默，仅 console.info） | DiscoverView.vue:85-97、134-152；discovery_stub.go:26-36；bridge.ts:114 | ⚠（有芯片；兜底表对非红果源会发起核心不认的 category→报错，见表3 B-d） |
 | D3/D5/D6 | 多维筛选面板/摘要/重置/收起/面板缓存：**全无** | DiscoverView.vue 全文无相应模板/状态 | ❌ v2 缺失（Go 侧 BrowseFiltered 绑定在 app.go:248-260 已有，前端 0 处调用） |
 | D7 | 数据请求=`catalog(source, category=chip, page, lane='discover')`：页码自增；`hasMore=!!res.hasMore`（首屏）→`&& !!more.length`（追加）；**无 nextOffset>offset 前进校验**、空 1 页即停 | DiscoverView.vue:154-217（:168-178、:196-207） | ⚠ 数据面/游标语义均与 v1 browseFiltered(sessionId) 不同（b 类，见 B-a） |
 | D8 | hero：已按用户反馈移除（注释 + 验收脚本断言不存在） | DiscoverView.vue:6；discover_hero_verify.py:11、142-148 | ➕b（有记录的取舍） |
@@ -148,7 +151,7 @@
 | L1 | 页头：标题+**SourceSwitch**+「刷新」+（窄屏）榜单抽屉开关；分类=chips（browseFilters genre∩GENRE_IDS，失败兜底静态 4 项，展示名走 i18n） | LibraryView.vue:429-456、56-77、94-110 | ⚠（v1 页头无站源开关，见 B-c） |
 | L2 | 挂载即 loadChips+loadFirst（红果首屏自然带上）；榜单侧栏并行初始化 | LibraryView.vue:412-421 | ✅ |
 | L3 | 「全部」tab：**前端自持游标**（allPage 成功后才 +1；失败不+1 不重发；用 `res.page` 校正核心游标）——但 `source=store.currentSlug || 'hongguo'` 跟随当前源；v1 恒红果。Go 壳 `Recommendations("")` 也实现了同款（source 传空→actions.go 兜底 hongguo），但前端「全部」走的是 api.catalog，**没用 Go 壳这条** | LibraryView.vue:141-150、175；对照 core_client.py:278-301+344、library.go:54-92 | ⚠❌（表3 B-c/B-b） |
-| L4 | 具体分类=`api.recommendations(category,force,more)`→核心 recommendations（仍红果专属） | LibraryView.vue:142-144；api.ts:261；bindings_library.go:24-31 | ✅ |
+| L4 | 具体分类=`api.recommendations(category,force,more)`→核心 recommendations（仍红果专属） | LibraryView.vue:142-144；bridge.ts:101；bindings_library.go:24-31 | ✅ |
 | L5 | more 去重=knownIds（只含已上屏；无 pending 概念，因为不分批）；一次全量上屏（虚拟滚动代替 50/批） | LibraryView.vue:116-139；对照 recommendation_panel.py:79、146-151 | ✅ 语义等价（分批=c 类，见 B-f） |
 | L6 | 连续 2 零新增页停（serverMore=false）；hasMore=服务器 hasMore | LibraryView.vue:46-47、134-138 | ✅ |
 | L7 | 状态行 `已加载 {n} 部 · 下滑继续浏览/已全部加载`（i18n）+ `retryPending` 时 `加载失败：{m}` | LibraryView.vue:84-90、511；i18n.ts:266-270 | ✅ |
@@ -167,7 +170,7 @@
 | G3 | `App.BrowseFilters/BrowseFiltered` 存在但走 discovery 通道；**默认构建返回 code=discovery_unavailable**，`-tags v2overlay` 才接真实现；前端只用了 BrowseFilters，**BrowseFiltered 前端 0 处使用** | app.go:239-260；engine.go:69-73、132-133；discovery_stub.go:26-36；discovery_overlay.go:1-19；`grep browseFiltered client-v2/frontend/src` = 0 |
 | G4 | `App.Recommendations/RecommendationPageReset`：category=""→catalog(lane=library) 页码走查 + generation 提交保护（v1 core_client 同款）；非空→recommendations action | bindings_library.go:24-38；library.go:50-99；library_test.go:57/105/119/150 |
 | G5 | `App.Rankings/RankingBoards` 位置参数透传核心；页面 500 上限交核心；测试在 rankings_test.go | bindings_rankings.go:26-41；rankings.go:46-58 |
-| G6 | 核心错误统一带 `[code]` 尾，callGoRaw 剥掉并保留 ApiError.code | engine.go:40-51；api.ts:77-90 |
+| G6 | 核心错误统一带 `[code]` 尾，callGoRaw 剥掉并保留 ApiError.code | engine.go:40-51；bridge.ts:58 |
 | G7 | ListSources 逐行透传核心字段（enabled 缺省补 true、name 缺省回退 displayName/slug）——**与 v1 不同：不覆写 implemented**（v1 main.py:1003 强制 True） | actions.go:41-69；对照 core_client.py:363-377、main.py:1003 |
 | G8 | creatorWorks/creatorProfile 绑定存在（bindings_creator.go），属创作者页，三面未调用 | app.go（grep 无调用）|
 
@@ -185,7 +188,7 @@
 | id | 差异 | v1 证据 | v2 证据 | 最小修法建议 | 钉住的断言 |
 |---|---|---|---|---|---|
 | A-a | **搜索页丢弃 catalog.warning**：0 结果时 v1 用 warning 当空态标题（如红果受限提示、黄豆 warm 提示） | main.py:1453-1455 | SearchView.vue:235-239（未读 res.warning）、379-381 | 单源 doSearch 里 `warning.value=res.warning??''`；空态 `warning || t('search.noResult')` | 扩展 `searchall_verify.py` 或 suggest_verify：mock 下 mockCatalog 恒有 warning（fixtures.ts:552）→ 造 0 结果词，断言空态文本含「示例数据」；Go 不需要 |
-| A-b | **搜索页在 mock/DEGRADED 下面无标注**：无桥自动落 mock 面却显示为正常结果（discover/library 都有横幅） | v1 无 mock 面（核心没起直接报「本地核心尚未启动」core_client.py:236-237） | api.ts:1065-1067；SearchView 无 banner（grep `banner\|MOCK\|DEGRADED` SearchView.vue = 0） | 抄 DiscoverView.vue:179 的 `res.warning || MOCK/DEGRADED` 横幅 | Playwright（VITE_MOCK=1）：/#/search 搜索后断言页面存在「示例数据」文案 |
+| A-b | **搜索页在 mock/DEGRADED 下面无标注**：无桥自动落 mock 面却显示为正常结果（discover/library 都有横幅） | v1 无 mock 面（核心没起直接报「本地核心尚未启动」core_client.py:236-237） | mock/sorani.ts:91；SearchView 无 banner（grep `banner\|MOCK\|DEGRADED` SearchView.vue = 0） | 抄 DiscoverView.vue:179 的 `res.warning || MOCK/DEGRADED` 横幅 | Playwright（VITE_MOCK=1）：/#/search 搜索后断言页面存在「示例数据」文案 |
 | A-c | **搜索无结果计数行**：v1 有「共 N 部 / 共 0 部」 | widgets.py:625-636、main.py:1457 | SearchView 无 | 结果上方加 `tf('search.count',{n})` 行（新增键 zh/en 成对） | 断言搜索后存在 `共 \d+ 部`/`N titles` 文本 |
 | A-d | **追加不去重**：找剧/搜索翻页与扇出组间重复 id 会重复渲染；v1 墙与网格都按 id 去重 | poster_wall.py:650-662、widgets.py:600-601 | DiscoverView.vue:205（concat）、SearchView.vue:255、searchAll.ts:98 | append 时 `Set<id>` 过滤（Library 已是范例：LibraryView.vue:127-133） | 新 mock 钩子 `__zgjDiscoverInjectCatalog='dup'` 返回上页同 id；断言 DOM 卡数不增（照 discover_hero_verify.py 的钩子用法） |
 | A-e | **找剧翻页失败后无法恢复**：toast 一闪、hasMore 永久置 false，无原地重试 | browse_panel.py:406-409、417-421（retry_page+重试按钮） | DiscoverView.vue:208-214 | 失败置 `moreError`，渲染「加载失败：m ·重试加载」（复用 library.loadFailedMsg/retryLoad 两键），点击沿用 page 游标 | Playwright：`__zgjSearchFault` 不适用（catalog 单源面），建议新钩子 `__zgjDiscover.failOnce`；断言重试后卡数增长 |
@@ -226,7 +229,7 @@
 | C7 | 详情覆盖页 + 页签切换（open_detail / tabs.setCurrentWidget，main.py:1438、1315） | `router.push(detailRoute(d))` | SPA 路由 |
 | C8 | recommendations 一次全量返回 + 前端 50/批渐进渲染（recommendation_panel.py:13、146-151） | 一次全量 + 虚拟化渲染（LibraryView.vue:116-139） | 渲染性能策略不同、可见结果集一致 |
 | C9 | 图占位=预绘 QPixmap、主题切换 reload_theme 族（main.py:889） | CSS token + `<img>` | QSS/自绘专属 |
-| C10 | v1 无“mock/DEGRADED”态（sidecar 起不来直接拒启动，core_client.py:236-237） | api.ts:1065-1067 无桥降级 mock + 横幅 | v2 headless 验收需要；只要求“标注诚实”（A-b） |
+| C10 | v1 无“mock/DEGRADED”态（sidecar 起不来直接拒启动，core_client.py:236-237） | mock/sorani.ts:91 无桥降级 mock + 横幅 | v2 headless 验收需要；只要求“标注诚实”（A-b） |
 | C11 | v1 `_normalise_source_list` 把核心 implemented **强制改写为 True**（main.py:1003），弹层“未接入拒切”只对表外 slug 生效 | v2 逐字段透传核心 implemented（actions.go:41-69），SourceSwitch 真实禁用 | v2 修对了方向；若要“逐字对齐 v1”反而应保留 bug——建议保持 v2 行为，仅需知悉差异（不是缺陷） |
 
 ---

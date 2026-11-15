@@ -1,5 +1,8 @@
 # v1 ↔ v2 播放器 + 弹幕对账（inventory-level audit）
 
+> （D3 拆分后 `services/api.ts` 只剩 57 行 facade，原行号随内容搬到 `bridge.ts` / `mock/*`；旧引用已按「取旧行原文→在新树里 grep」逐条重指向，非手写）
+
+
 > **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
 > `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
 > 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
@@ -267,7 +270,7 @@
 9. **12h/会话过期**：核心侧 playbackSession 过期（app_danmaku.go:12）后的弹幕报错在 v2 note/退避链里的实际表现。
 10. **keep-open 下 end-file 缺席**：v2 依赖 property eof-reached 兜底（无 v1 的 tick cached 三通道轮询兜底，v1 player.py:2339-2342）；极端 mpv 版本不发事件时 v2 会漏 ended——真机各 mpv 版本要跑一遍。
 
-**mock 面下成立、别当真机结论的断言清单**（本仓 CI 绿≠行为对）：player_verify ①-⑧ 全部跑在 dev:mock+stub runtime；`__zgjLocalMissing/__zgjLocalOutside` 只是错误码注入缝（api.ts:825-853 自注「mock 没真实目录，不假装实现守卫」）；eof 位是 mock 扩展字段（types 注释 399-401，真实后端不发 snapshot.eof）；danmakuCount=80 是 fixtures 铺底；mockDanmakuAll/演示时钟；`v1 的 finished/commit/flush、抽样、MinGap` 全部只有 Go 单测的假时钟等价物。
+**mock 面下成立、别当真机结论的断言清单**（本仓 CI 绿≠行为对）：player_verify ①-⑧ 全部跑在 dev:mock+stub runtime；`__zgjLocalMissing/__zgjLocalOutside` 只是错误码注入缝（mock/watch.ts:82-100 自注「mock 没真实目录，不假装实现守卫」）；eof 位是 mock 扩展字段（types 注释 399-401，真实后端不发 snapshot.eof）；danmakuCount=80 是 fixtures 铺底；mockDanmakuAll/演示时钟；`v1 的 finished/commit/flush、抽样、MinGap` 全部只有 Go 单测的假时钟等价物。
 
 ---
 

@@ -1,5 +1,8 @@
 # v1↔v2 双调查：设计 token 引用未定义 + 创作者/演职员页对账（2026-11-13）
 
+> （D3 拆分后 `services/api.ts` 只剩 57 行 facade，原行号随内容搬到 `bridge.ts` / `mock/*`；旧引用已按「取旧行原文→在新树里 grep」逐条重指向，非手写）
+
+
 > **v1 源码已从 master 移除（D2，tag `v1-final`）**。本文里的 `文件:行号` 一律指该 tag，取法：
 > `scripts/v1show.sh main.py 2511,2522`（`--list` 看有哪些文件）。
 > 用 tag 而不是分支：分支会被推进，行号引用就会悄悄指错地方。
@@ -205,7 +208,7 @@ surface-2 的值。`--guo-font-mono` 则是仓内从未有过的概念（v1 字�
 代码位点：
 - v1：`creators.py`（CreatorCard:53 / CastStrip:104 / _WorksGrid:194 / CreatorPage:289）、
   `main.py:315-352,354-380,398,421`、`core_client.py:360,438,441`。
-- v2：`DetailView.vue:363-397,596-620`、`CreatorView.vue` 全、`api.ts:318-322,913-924`、
+- v2：`DetailView.vue:363-397,596-620`、`CreatorView.vue` 全、`bridge.ts:158,913-924`、
   `fixtures.ts:203-294`、`bindings_creator.go`/`bindings_cast.go`（client-v2 根）、
   `internal/native/engine.go:73`（discoveryActions 表）、`discovery_stub.go:23-32`
   （默认构建=discovery_unavailable）、`discovery_overlay.go:18`、共用的核心
@@ -237,7 +240,7 @@ surface-2 的值。`--guo-font-mono` 则是仓内从未有过的概念（v1 字�
 | 19 | tab/子 tab | 先摆占位项「全部作品」(0,0)（creators.py:334）再按 tabs 重建；无 subTabs 时合成 `[{id:0,name:"全部"}]` → 标签「%s 全部」（:345-346）；combo 恒可见 | `tabChoices` 扁平「tab sub」；无 subTabs 时标签只有 tab.name（CreatorView.vue:97-102）；选项 ≤1 时下拉整个隐藏（template:331）；核心 tab=0=自动选首个、非法 tab 报「作品分类已更新，请重新打开个人作品页」（discovery.go:214-247） | 需要决定（标签措辞/占位差异，轻） |
 | 20 | 中英双语 | 无 en（creators.py 全中文硬编码；ui.py 亦无 i18n 层） | creator.* 25 键 + detail 60 键 **zh/en 全存在**（i18n.ts 两张表逐一核，无一露键名）；「露键名」门禁已硬拦（t() 缺键回退键名 i18n.ts:1414-1416 → run_all.py:246-260 判红） | v2 新增能力；本轮范围内**未复现**键名露出 |
 | 21 | 数据通道可用性 | v1 sidecar 构建期 overlay 常含 discovery（core_client.py:360,438-441 直连） | v2 双态：v2overlay 构建 → 真数据（discovery_overlay.go:18-20）；**默认构建 → `code=discovery_unavailable`**（discovery_stub.go:23-32）→ 创作者页红条可重试、演员条静默缺位（两个 bindings 文件透传错误） | 平台差异（构建变体）；发版若漏 overlay，两页恒空态 |
-| 22 | mock 面 | —（v1 无 mock 层） | `creatorWorks` mock **忽略 tab/subTab**（api.ts:921；fixtures.ts:271-294：分页 3+4、hot=池反转、u_nv 抛错；profile 失败钩子 `zgj.creatorFail`）；门禁 C3/C4/C8 只钉排序/分页/空态（creator_verify.py docstring:20-30） | 可直接修（mock 补 tab 维度；分类切换在 mock 下不可观测） |
+| 22 | mock 面 | —（v1 无 mock 层） | `creatorWorks` mock **忽略 tab/subTab**（mock/watch.ts:155；fixtures.ts:271-294：分页 3+4、hot=池反转、u_nv 抛错；profile 失败钩子 `zgj.creatorFail`）；门禁 C3/C4/C8 只钉排序/分页/空态（creator_verify.py docstring:20-30） | 可直接修（mock 补 tab 维度；分类切换在 mock 下不可观测） |
 | 23 | 卡片 tooltip | 「%s %s，查看作品」accessibleName（creators.py:64）+poster_tooltip(name/description)；头像加载失败 tooltip 换成「头像暂未加载成功，仍可点击查看作品。」（:69-72） | cast-item `:title` = 「role · description」，缺则 name（DetailView.vue:610）；无加载失败 tooltip（骨架=首字圆，:614-615） | 平台差异/轻（内容构成不同但都有 hover 文案） |
 
 ### 2.2 「v1 有 v2 无」清单（本维度上）

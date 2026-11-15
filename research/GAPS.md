@@ -1,5 +1,8 @@
 # 还差什么（第五十九轮总账）
 
+> （D3 拆分后 `services/api.ts` 只剩 57 行 facade，原行号随内容搬到 `bridge.ts` / `mock/*`；旧引用已按「取旧行原文→在新树里 grep」逐条重指向，非手写）
+
+
 盘点方法：不看我自己写过的叙述，逐条回仓库核。
 分四类：**要你拍板的** / **只能真机验的** / **子代理正在查的** / **清单本身的过期项**。
 
@@ -104,7 +107,7 @@ PRD 里三条 `[ ]` 是**过期勾选**而不是未做：
   （含 0.05–1.0 钳位与 ASS alpha 反向）、i18n `player.danmakuOpacity*` 中英文成对、
   验收 `player_verify.py` 有断言。**只剩真机观感复验**（已在 followups 第 12 节登记）。
 - **R6 SetNextSeason**：理由写的是「`grep SetNextSeason client-v2` 为空」，
-  现在它出现在 `bindings_watchstore.go`、`services/api.ts:295`、
+  现在它出现在 `bindings_watchstore.go`、`services/bridge.ts:135`、
   `services/nextSeason.ts`、`bindings_watchstore_test.go` —— 早做完并测过了。
 - **R9 i18n 静态棘轮**：理由写「现 32 处」，实跑是
   `界面中文 0 处 / 基线 0 处`（BASELINE 已是空表，新增任何一处直接红）。
