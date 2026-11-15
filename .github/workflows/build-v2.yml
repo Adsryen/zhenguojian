@@ -90,7 +90,8 @@ jobs:
             declared=$(printf '%s\n' "$wanted" | grep -c 'Test' || true)
             if [ "$list_rc" -ne 0 ]; then
               echo "::error title=$pkg 列不出用例::go test -list 失败（exit $list_rc）"
-              sed 's/^/    /' "$RUNNER_TEMP/list-err.txt" | head -12
+              # 同下面 FAIL 打印那一族的坑：pipefail + head 关管道 → SIGPIPE → errexit
+              { sed 's/^/    /' "$RUNNER_TEMP/list-err.txt" || true; } | { head -12 || true; }
               gate_fail=1
             fi
             if ls "$dir"/*_test.go >/dev/null 2>&1 && [ "$declared" -eq 0 ]; then
@@ -111,7 +112,13 @@ jobs:
             printf '%-30s 执行 %3s / 声明 %3s  exit %s\n' "$dir" "$ran" "$declared" "$rc"
             if [ "$rc" -ne 0 ]; then
               echo "::error title=$pkg 有失败用例::exit $rc"
-              grep -E '^--- FAIL: Test' -A 6 "$RUNNER_TEMP/pkg-v.txt" | head -40
+              # ⚠ 这一行原本会**自己把脚本打断**：`grep … | head -40` 在
+              #   `set -eo pipefail` 下，head 读满 40 行就关闭管道 → grep 吃 SIGPIPE
+              #   返回非零 → errexit 终止整个步骤。
+              #   于是"打印失败原因"的诊断反而让日志断在诊断之前
+              #   （本轮实测：日志停在 danmaku 之后，downloadsvc 的失败用例名一个字都没出来）。
+              #   诊断代码必须比被测代码更耐失败，所以显式兜住。
+              { grep -E '^--- FAIL: Test' -A 6 "$RUNNER_TEMP/pkg-v.txt" || true; } | { head -40 || true; }
               gate_fail=1
             fi
             if [ "$ran" -ne "$declared" ]; then

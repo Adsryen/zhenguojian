@@ -616,8 +616,22 @@ func TestMergeCancelInRegistrationWindow(t *testing.T) {
 	h := newHarness(t)
 	mergeFixture(t, h)
 	h.exec.blockOn = "-f concat"
+	// ⚠ 我第一版在这里假设 `mergeFixture` 会建出条目，直接去 merges 里找 ——
+	//   实际 `mergeFixture`（本文件上面那个函数）只装核心 handler 和假文件，
+	//   条目是 `MergeStart` 建的。CI 因此红了一次。
+	//   教训：**照抄别的用例的 ID，不等于照抄了它的前置条件。**
+	ctx := context.Background()
+	h.svc.OnStartup(ctx)
+	defer h.svc.OnShutdown(ctx)
+	if _, err := h.svc.MergeStart("season", map[string]any{"id": "d1"}, nil); err != nil {
+		t.Fatalf("MergeStart: %v", err)
+	}
+	waitFor(t, func() bool {
+		m, ok := h.mergeState("d1#001-002")
+		return ok && m["state"] == MergeRunning
+	}, "应进入 running")
 
-	// 手工造出那个窗口：条目已 running，但 cancel 还没登记
+	// 手工退回那个窗口：状态是 running，但 cancel 视为尚未登记
 	h.svc.mu.Lock()
 	h.svc.loadMergesLocked()
 	var e *MergeEntry
@@ -628,9 +642,8 @@ func TestMergeCancelInRegistrationWindow(t *testing.T) {
 	}
 	if e == nil {
 		h.svc.mu.Unlock()
-		t.Fatal("fixture 没建出预期条目")
+		t.Fatal("条目没建出来")
 	}
-	e.State = MergeRunning
 	e.cancel = nil
 	h.svc.mu.Unlock()
 
