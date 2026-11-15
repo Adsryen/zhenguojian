@@ -675,3 +675,56 @@ alpha.35 的徽标会给出 `该像素最上层=…`：
   `--wait`，那时 GitHub 还没建出 run，脚本直接判"没有任何 build-v2 运行"退出。
   `--wait` 的语义必须包含**等 run 出现**（现在 15s 一次、最长 5 分钟）。
 
+## 二十、alpha.38：资产目录搞混，以及"selftest 全绿而生产路径必炸"是怎么可能的
+### 20.1 事实
+- alpha.38（run 43707569205）windows failure。selftest **11/11 通过**、
+  `notes-source=annotation` 正常，紧接着生产路径抛：
+  ```
+  Exception: …\client-v2\scripts\gen_latest_json.ps1:51
+     latest.json 缺资产源文件: client-v2\build\bin\zhenGuoJian-v2.exe
+  ```
+- 根因是我 83 轮搬代码时造的错：**四个资产并不在同一个目录**。
+  `Assemble runtime zip + single exe` 步用的是相对 cwd（仓库根）的裸文件名
+  （`Copy-Item client-v2\build\bin\client-v2.exe zhenGuoJian-v2.exe`、
+  `Compress-Archive … -DestinationPath 'zhenGuoJian-v2-app.zip'` 等），
+  只有 `build-info.json` 与 `latest.json` 在 `client-v2/build/bin/`。
+  `Publish release` 步的 files 列表逐字可证。旧内联版写的是根目录相对路径，
+  所以 alpha.33 能过；我把它们统一成 `$BinDir` 等于自己造了个错。
+
+### 20.2 为什么 11 条判据一条都没抓到
+因为夹具把四个资产**全塞进同一个 `$bin`**。也就是说 selftest 验的是
+"我的假设"（资产同目录），不是 CI 的真实布局。判据越写越多，
+只要夹具的布局错，它们就一起绿。**覆盖面不等于保真度。**
+
+### 20.3 修法（三条，都有实测）
+1. `New-Manifest` 拆出 `-PackageDir`（exe + 两个 zip）与 `-BinDir`
+   （build-info.json、RELEASE-NOTES.md、latest.json 输出）；
+   workflow 那句改成 `-PackageDir . -BinDir client-v2/build/bin -RepoRoot .`。
+2. 夹具改成**按 CI 真实布局分两个目录**（`pkg/` 与 `bin/`）。
+3. 新增 case 12「打包资产不在 BinDir 时必须拒绝」当回归钉：
+   把 `-PackageDir` 误写成 `$BinDir` 立刻红。
+   写它的时候我自己又踩一个错：续行符用了反斜杠 `\`。
+   PowerShell 的续行符是反引号 `` ` ``，`\` 会被当成**一个普通参数**，
+   Parser 完全不报错，于是表现为运行期
+   `Cannot bind argument to parameter 'Path' because it is an empty string.`
+   —— 上面那道 Parser 门对这类错天生无效，因为它语法合法。
+
+### 20.4 因此给 pwsh_syntax_gate.py 补了一道纯文本门
+- `continuation_lint(text)`：代码部分（去掉行尾 `#` 注释、跳过 `<# … #>` 块）
+  以 ` \` 结尾就点名。覆盖 `client-v2/scripts/*.ps1`、`scripts/*.ps1`
+  以及 workflow 内联 pwsh 段；**不依赖 pwsh**，所以放在 pwsh 可用性判断之前跑。
+- selftest 9 条（新增 S6 坏写法被点名、S7 反引号/注释不误报、S6b 真脚本干净）。
+- 真 workflow 实测：反斜杠续行 0 处，内联 2 段 0 语法错。
+
+### 20.5 本轮实测
+- `gen_latest_json -SelfTest`：本机 **12/12**、模拟 Windows runner（空 HOME + cp1252）**12/12**。
+- **正向**：假 CI 树（仓库根放 exe+两 zip，client-v2/build/bin 放 build-info.json）
+  用新脚本 + 新调用 → rc=0，`latest.json 就绪：tag=v2.0.0-alpha.33 prerelease=True
+  notes来源=v2.0.0-alpha.33 —— 内嵌几何起手就摆位`，四个资产 key 齐。
+- **反向（先错后对）**：我第一版"反向检查"只把 `-PackageDir` 省略掉，
+  结果 rc=0 —— 因为默认值 `.` 在 CI 里本来就是仓库根，**我测的根本不是那个 bug**。
+  改成拿 `git show HEAD:` 的旧脚本 + 旧调用跑，才逐字复现出
+  `缺资产源文件: client-v2\build\bin\zhenGuoJian-v2.exe`（连行号 51 都一样）。
+  教训：**反向检查必须复刻出错的那份代码，不是复刻我以为的出错方式。**
+- go-local test internal 9 包全 ok、winvet rc=0、vue-tsc rc=0。
+

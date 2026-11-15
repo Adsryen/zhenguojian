@@ -13,10 +13,21 @@ gen_latest_json.ps1 —— latest.json 的唯一实现（CI 只调用这个文�
 
 用法：
   pwsh -NoProfile -File gen_latest_json.ps1 -SelfTest
-  pwsh -NoProfile -File gen_latest_json.ps1 -Tag v2.0.0-alpha.37 -BinDir client-v2/build/bin
+  pwsh -NoProfile -File gen_latest_json.ps1 -Tag v2.0.0-alpha.37 `
+       -PackageDir . -BinDir client-v2/build/bin
 #>
 param(
   [string]$Tag = "",
+  # ⚠ 两个目录不是一回事，alpha.38 就是把它们合成一个才发布的失败：
+  #   PackageDir = 仓库根（CI 步骤默认 cwd），打包产物 zhenGuoJian-v2.exe /
+  #                -app.zip / -runtime.zip 落在这里（见 workflow 的
+  #                "Assemble runtime zip + single exe" 步：Copy-Item 的目的路径
+  #                是相对 cwd 的裸文件名；Publish release 的 files 列表也这么写）。
+  #   BinDir     = client-v2/build/bin，只有 build-info.json 与 RELEASE-NOTES.md
+  #                在这里，latest.json 也写在这里。
+  # 旧的内联版写的是相对 cwd 的裸文件名，所以 alpha.33 能过；我把四个资产统一成
+  # $BinDir 时等于自己造了个错。
+  [string]$PackageDir = ".",
   [string]$BinDir = "client-v2/build/bin",
   [string]$NotesFile = "",
   [string]$OutFile = "",
@@ -71,8 +82,8 @@ function Get-Notes {
 }
 
 function New-Manifest {
-  param([string]$Tag, [string]$BinDir, [string]$NotesFile, [string]$NotesScript,
-         [string]$RepoRoot, [string]$TempDir)
+  param([string]$Tag, [string]$PackageDir, [string]$BinDir, [string]$NotesFile,
+         [string]$NotesScript, [string]$RepoRoot, [string]$TempDir)
   $ver = $Tag -replace '^v', ''
   # 预发布与否由 tag 文本判（与 Go 侧 IsPrereleaseTag 同一口径）；
   # manifest 里的 prerelease 布尔必须与它一致，否则 Go 侧对账报错。
@@ -87,9 +98,9 @@ function New-Manifest {
     prerelease  = $pre
     notes       = $n.notes
     assets      = [ordered]@{
-      exe        = Get-Asset (Join-Path $BinDir "zhenGuoJian-v2.exe") "zhenGuoJian-v2.exe" $base
-      appZip     = Get-Asset (Join-Path $BinDir "zhenGuoJian-v2-app.zip") "zhenGuoJian-v2-app.zip" $base
-      runtimeZip = Get-Asset (Join-Path $BinDir "zhenGuoJian-v2-runtime.zip") "zhenGuoJian-v2-runtime.zip" $base
+      exe        = Get-Asset (Join-Path $PackageDir "zhenGuoJian-v2.exe") "zhenGuoJian-v2.exe" $base
+      appZip     = Get-Asset (Join-Path $PackageDir "zhenGuoJian-v2-app.zip") "zhenGuoJian-v2-app.zip" $base
+      runtimeZip = Get-Asset (Join-Path $PackageDir "zhenGuoJian-v2-runtime.zip") "zhenGuoJian-v2-runtime.zip" $base
       buildInfo  = Get-Asset (Join-Path $BinDir "build-info.json") "build-info.json" $base
     }
   }
@@ -126,22 +137,27 @@ function Invoke-SelfTest {
   $repo = Join-Path $tmp "repo"; New-Item -ItemType Directory -Force $repo | Out-Null
   $notesScript = (Resolve-Path (Join-Path $PSScriptRoot "release_notes.py")).Path
 
-  # 假资产
-  Set-Content -Encoding utf8NoBOM -Path (Join-Path $bin "zhenGuoJian-v2.exe") -Value "EXE-FAKE"
-  Set-Content -Encoding utf8NoBOM -Path (Join-Path $bin "zhenGuoJian-v2-app.zip") -Value "APP-FAKE"
-  Set-Content -Encoding utf8NoBOM -Path (Join-Path $bin "zhenGuoJian-v2-runtime.zip") -Value "RT-FAKE"
+  # 假资产 —— **必须按 CI 的真实布局分两个目录放**（alpha.38 的教训）：
+  #   pkg/  仓库根：exe + 两个 zip
+  #   bin/  build/bin：build-info.json + RELEASE-NOTES.md
+  # 以前四个资产全塞 $bin，selftest 对"目录搞混"这类错完全无感：
+  # 它 11/11 全绿的同时，生产路径正在 CI 上报"缺资产源文件"。
+  $pkg = Join-Path $tmp "pkg"; New-Item -ItemType Directory -Force $pkg | Out-Null
+  Set-Content -Encoding utf8NoBOM -Path (Join-Path $pkg "zhenGuoJian-v2.exe") -Value "EXE-FAKE"
+  Set-Content -Encoding utf8NoBOM -Path (Join-Path $pkg "zhenGuoJian-v2-app.zip") -Value "APP-FAKE"
+  Set-Content -Encoding utf8NoBOM -Path (Join-Path $pkg "zhenGuoJian-v2-runtime.zip") -Value "RT-FAKE"
   Set-Content -Encoding utf8NoBOM -Path (Join-Path $bin "build-info.json") -Value '{"revision":"deadbeef"}'
   $nf = Join-Path $bin "RELEASE-NOTES.md"
   Set-Content -Encoding utf8NoBOM -Path $nf -Value @("# 标题", "", "这是发布说明的第一段正文。")
 
   # 1) happy path（无 git tag → 文件回退）
-  $m = New-Manifest -Tag "v2.0.0-alpha.99" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
+  $m = New-Manifest -Tag "v2.0.0-alpha.99" -PackageDir $pkg -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                     -RepoRoot $repo -TempDir $tmp
   if ($m.schema -eq 1 -and $m.tag -eq "v2.0.0-alpha.99" -and $m.version -eq "2.0.0-alpha.99") {
     ok "1 字段：schema/tag/version 一致"
   } else { bad "1 字段" ($m | ConvertTo-Json -Depth 5) }
   if ($m.prerelease -eq $true) { ok "2 prerelease：alpha 判真" } else { bad "2 prerelease" "alpha 判成了假" }
-  $m2 = New-Manifest -Tag "v2.0.0" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
+  $m2 = New-Manifest -Tag "v2.0.0" -PackageDir $pkg -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                      -RepoRoot $repo -TempDir $tmp
   if ($m2.prerelease -eq $false) { ok "3 prerelease：正式版判假" } else { bad "3 prerelease" "v2.0.0 判成了真" }
   if ($m.notes -eq "这是发布说明的第一段正文。") { ok "4 notes 取自说明文件正文（不是标题）" }
@@ -159,10 +175,10 @@ function Invoke-SelfTest {
   else { bad "7 Depth" "assets 被压成字符串了" }
 
   # 8) 缺资产必须拒绝，不能生成一个 Go 侧必然报错的文件
-  $miss = Join-Path $tmp "bin2"; Copy-Item -Recurse $bin $miss
+  $miss = Join-Path $tmp "pkg2"; Copy-Item -Recurse $pkg $miss
   Remove-Item (Join-Path $miss "zhenGuoJian-v2-runtime.zip") -Force
   expect-throw "8 缺 runtime.zip 被拒绝" {
-    New-Manifest -Tag "v2.0.0-alpha.99" -BinDir $miss -NotesFile $nf -NotesScript $notesScript `
+    New-Manifest -Tag "v2.0.0-alpha.99" -PackageDir $miss -BinDir $miss -NotesFile $nf -NotesScript $notesScript `
                  -RepoRoot $repo -TempDir $tmp
   } "缺资产源文件"
 
@@ -189,7 +205,7 @@ function Invoke-SelfTest {
   # 夹具自证：tag 对象真的存在，否则后面全是空转
   $t = Run-Git @("-C", $g, "cat-file", "-t", "refs/tags/v9.9.9-alpha.1") "tag 对象检查"
   if (($t | Select-Object -First 1) -ne 'tag') { throw "夹具坏了：v9.9.9-alpha.1 不是 annotated tag（得到 $($t)）" }
-  $m9 = New-Manifest -Tag "v9.9.9-alpha.1" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
+  $m9 = New-Manifest -Tag "v9.9.9-alpha.1" -PackageDir $pkg -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                      -RepoRoot $g -TempDir $tmp
   if ($m9.notes -eq "v9.9.9-alpha.1 —— 注释首行是摘要") { ok "9 annotated tag 注释优先于文件" }
   else { bad "9 优先级" "实际=[$($m9.notes)]" }
@@ -198,7 +214,7 @@ function Invoke-SelfTest {
   Run-Git (@("-C", $g, "tag", "v9.9.9-alpha.2")) "git tag（lightweight）" | Out-Null
   $t2 = Run-Git @("-C", $g, "cat-file", "-t", "refs/tags/v9.9.9-alpha.2") "lightweight 检查"
   if (($t2 | Select-Object -First 1) -eq 'tag') { throw "夹具坏了：v9.9.9-alpha.2 本该是 lightweight commit" }
-  $m10 = New-Manifest -Tag "v9.9.9-alpha.2" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
+  $m10 = New-Manifest -Tag "v9.9.9-alpha.2" -PackageDir $pkg -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                       -RepoRoot $g -TempDir $tmp
   if ($m10.notes -eq "这是发布说明的第一段正文。") { ok "10 lightweight tag 退回文件，不被硬门误伤" }
   else { bad "10 lightweight" "实际=[$($m10.notes)]" }
@@ -226,9 +242,17 @@ sys.stderr.write("notes-source=file-fallback\n")
 print(notes)
 '@
   expect-throw "11 annotated tag + 文件回退 = 拒绝发布" {
-    New-Manifest -Tag "v9.9.9-alpha.1" -BinDir $bin -NotesFile $nf -NotesScript $stub `
+    New-Manifest -Tag "v9.9.9-alpha.1" -PackageDir $pkg -BinDir $bin -NotesFile $nf -NotesScript $stub `
                  -RepoRoot $g -TempDir $tmp
   } "annotation 优先级没生效"
+
+  # 12) 两个目录必须是**分别生效**的：把打包资产所在目录换成 build/bin，
+  #     必须报"缺资产源文件"。这条就是 alpha.38 那个错的回归钉 ——
+  #     没有它，把 $PackageDir 误写成 $BinDir 时 selftest 照样全绿。
+  expect-throw "12 打包资产不在 BinDir 时拒绝（目录不能混用）" {
+    New-Manifest -Tag "v2.0.0-alpha.99" -PackageDir $bin -BinDir $bin -NotesFile $nf `
+                 -NotesScript $notesScript -RepoRoot $repo -TempDir $tmp
+  } "缺资产源文件"
 
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
   Write-Host ""
@@ -245,7 +269,7 @@ if (-not $Tag) { Write-Error "要么给 -Tag，要么给 -SelfTest"; exit 2 }
 # Join-Path 空串会直接抛 "Cannot bind argument to parameter 'Path' because it is null"，
 # 所以这里兜到系统临时目录。
 if (-not $TempDir) { $TempDir = [IO.Path]::GetTempPath() }
-$m = New-Manifest -Tag $Tag -BinDir $BinDir -NotesFile $NotesFile -NotesScript $NotesScript `
+$m = New-Manifest -Tag $Tag -PackageDir $PackageDir -BinDir $BinDir -NotesFile $NotesFile -NotesScript $NotesScript `
                   -RepoRoot $RepoRoot -TempDir $TempDir
 $json = $m | ConvertTo-Json -Depth 5
 $back = $json | ConvertFrom-Json

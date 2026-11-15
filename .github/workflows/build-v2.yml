@@ -504,8 +504,17 @@ jobs:
         #     Missing closing ')' in expression.
         #   上一轮修好 checkout 之后，这段才**第一次被真正执行**——内联在 workflow
         #   里的代码本地一行都跑不到，只能等下一个 tag 来撞，而每个 tag 都是一轮人工测试。
-        #   现在 CI 只做两件事：先跑那个脚本的 -SelfTest（11 条），再调它生成。
-        #   11 条里最关键的是「annotated tag + notes 来自文件回退 = 拒绝发布」，
+        #   现在 CI 只做两件事：先跑那个脚本的 -SelfTest（12 条），再调它生成。
+        #   ⚠ alpha.38 的教训：把判据搬进 .ps1 时我以为四个资产都在 build/bin，
+        #   于是 -BinDir 一个参数包打天下，生产路径报「缺资产源文件:
+        #   client-v2\build\bin\zhenGuoJian-v2.exe」。实际上 exe 和两个 zip
+        #   是 "Assemble runtime zip + single exe" 步用**相对 cwd 的裸文件名**
+        #   产在仓库根的（Publish 步的 files 列表可证），只有 build-info.json
+        #   和 latest.json 在 build/bin。所以这里必须传两个目录。
+        #   而 selftest 当时 11/11 全绿——因为它把四个资产全塞一个目录，
+        #   对「目录搞混」完全无感。现在夹具按 CI 真实布局分 pkg/ 与 bin/，
+        #   并加了 case 12「打包资产不在 BinDir 时必须拒绝」当回归钉。
+        #   12 条里最关键的是「annotated tag + notes 来自文件回退 = 拒绝发布」，
         #   它把 alpha.33 那条隐身错（checkout 不取 tag 对象，notes 静默退化）
         #   变成了发布级失败；实测把硬门改成 if ($false) 后该条立刻红。
         #   本机装了 pwsh 7.4.6（~/.local/pwsh），所以这段现在**可以本地验**：
@@ -515,7 +524,7 @@ jobs:
         run: |
           pwsh -NoProfile -File client-v2/scripts/gen_latest_json.ps1 -SelfTest
           if ($LASTEXITCODE -ne 0) { throw "gen_latest_json selftest 失败，不带着坏判据发布" }
-          pwsh -NoProfile -File client-v2/scripts/gen_latest_json.ps1 -Tag "${{ github.ref_name }}" -BinDir client-v2/build/bin -RepoRoot .
+          pwsh -NoProfile -File client-v2/scripts/gen_latest_json.ps1 -Tag "${{ github.ref_name }}" -PackageDir . -BinDir client-v2/build/bin -RepoRoot .
           if ($LASTEXITCODE -ne 0) { throw "latest.json 生成失败 (exit $LASTEXITCODE)" }
 
       - name: Publish release

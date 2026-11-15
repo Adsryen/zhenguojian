@@ -127,6 +127,35 @@ $notes = $lines | Select-Object -First 1
 '''
 
 
+def continuation_lint(text):
+    """PowerShell 的续行符是反引号 `，**不是** 反斜杠。
+
+    83 轮我自己踩的：给 gen_latest_json.ps1 加 case 12 时按 shell 习惯写了
+    `... -NotesFile $nf \\` + 换行。Parser 不报错（`\\` 被当成一个普通参数），
+    于是它表现为运行期的 `Cannot bind argument to parameter 'Path' because it
+    is an empty string.` —— 上面那道 Parser 门抓不到这类错，因为它语法合法。
+    判据：代码部分（去掉行尾 # 注释、跳过 <# … #> 块）以 ` \\` 结尾。
+    """
+    hits = []
+    in_block = False
+    for i, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if in_block:
+            if "#>" in stripped:
+                in_block = False
+            continue
+        if stripped.startswith("<#"):
+            if "#>" not in stripped:
+                in_block = True
+            continue
+        code = stripped.split("#")[0].rstrip() if "#" in stripped else stripped.rstrip()
+        if code.endswith("\\"):
+            hits.append((i, stripped[:110]))
+    return hits
+
+
 def selftest(pwsh):
     n_ok = n_bad = 0
 
@@ -165,6 +194,21 @@ def selftest(pwsh):
     chk("S5 目标文件缺失时门自己报错（退码 2 + TARGET-MISSING）",
         r5.returncode == 2 and "TARGET-MISSING" in (r5.stdout or ""),
         f"rc={r5.returncode} out={(r5.stdout or '').strip()[:120]}")
+    # S6/S7：反斜杠续行门。Parser 抓不到（语法合法），只能靠文本判据。
+    #   S6 坏写法必须点名；S7 反引号续行与注释里的反斜杠不得误报。
+    bad_bs = continuation_lint('New-Manifest -Tag t -NotesFile $nf \\\n  -TempDir $tmp\n')
+    chk("S6 反斜杠续行被点名", bool(bad_bs) and bad_bs[0][0] == 1, str(bad_bs))
+    ok_bs = continuation_lint('New-Manifest -Tag t -NotesFile $nf `\n  -TempDir $tmp\n'
+                              '# 用法：cmd a \\\n'
+                              '<#\n  pwsh -File x.ps1 -Tag v1 \\\n#>\n')
+    chk("S7 反引号续行/注释里的反斜杠不误报", not ok_bs, str(ok_bs))
+    # S6b：门对真实脚本文件也要能跑（gen_latest_json.ps1 现在应该是干净的）
+    real = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "client-v2", "scripts", "gen_latest_json.ps1")
+    if os.path.exists(real):
+        with open(real, encoding="utf-8") as f:
+            hits = continuation_lint(f.read())
+        chk("S6b 真脚本 gen_latest_json.ps1 无反斜杠续行", not hits, str(hits))
     print(f"\npwsh_syntax_gate selftest: {n_ok} 通过 / {n_bad} 失败")
     return 1 if n_bad else 0
 
@@ -175,6 +219,40 @@ def main():
     if "--selftest" in args:
         return selftest(pwsh)
     files = [a for a in args if not a.startswith("-")] or DEFAULT_WORKFLOWS
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # 反斜杠续行门：纯 Python，**不需要 pwsh 也能跑**，所以放在 pwsh 可用性判断之前。
+    # 覆盖两处：仓库里的 *.ps1，以及 workflow 内联的 pwsh 段。
+    lint_targets = []
+    for dirpath in ("client-v2/scripts", "scripts"):
+        d = os.path.join(root, dirpath)
+        if os.path.isdir(d):
+            for name in sorted(os.listdir(d)):
+                if name.endswith(".ps1"):
+                    lint_targets.append((os.path.join(dirpath, name), None))
+    lint_bad = 0
+    for rel, _ in lint_targets:
+        try:
+            with open(os.path.join(root, rel), encoding="utf-8") as fh:
+                hits = continuation_lint(fh.read())
+        except UnicodeDecodeError:
+            hits = [("?", "文件不是 UTF-8")]
+        if hits:
+            lint_bad += 1
+            print(f"FAIL 反斜杠续行 {rel}: {hits}")
+    for f in files:
+        blocks = extract_blocks(f)
+        if blocks is None:
+            continue
+        for ident, shell, run in blocks:
+            hits = continuation_lint(run)
+            if hits:
+                lint_bad += 1
+                print(f"FAIL 反斜杠续行 {ident}: {hits}")
+    if lint_bad:
+        print(f"\n反斜杠续行：{lint_bad} 处 —— PowerShell 续行符是反引号 `，"
+              "反斜杠会被当成一个普通参数，Parser 不报错但运行期必坏")
+        return 1
+    print(f"反斜杠续行：0 处（{len(lint_targets)} 个 .ps1 + workflow 内联段）")
     if not pwsh:
         print("SKIP pwsh 语法门：本机没有 pwsh（装 pwsh 7 或设 PWSH=/path/to/pwsh）。"
               "注意这是显式跳过，不代表 workflow 里的内联 PowerShell 没问题。")
