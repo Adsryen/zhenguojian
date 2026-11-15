@@ -317,3 +317,33 @@ runtime.zip 139MB / build-info.json）。
 进播放 → **关视频窗**（不点页面关闭）→ 再播下一集 → 点页面「关闭」→ 再播一次。
 外加：视频区角落那句「画面未内嵌…」的**原因文本**，以及
 `zhenGuoJian-v2.exe --selftest` 的完整输出（alpha.26 那次还没跑）。
+
+---
+
+## 十六、拿到 `[embed]` 徽标后的判读表（写在这之前先核对徽标实际字段）
+
+徽标由 `PlayerView.vue:92 embedDebugText` 组成，字段就是 `mpv.HostDebug`：
+`cls`=父窗类名、`hwnd`=子窗句柄、`x/y/w/h`=子窗**屏幕**矩形、`vis`=IsWindowVisible、
+`inW/inH`=最后一次上报的 bounds（物理像素）、`outW/outH/outVis`=换算后的结果。
+判读按这个顺序走，**每一步都能把可能性砍一半**：
+
+| 现场 | 结论 | 下一步 |
+|---|---|---|
+| `inW=0` 或 `inH=0` | 前端从没成功上报几何 | 查 `PlayerSetBounds` 调用时机（attach 之后、首帧之前）与 `.pl-stage` 尺寸 |
+| `inW>0` 但 `outVis=0` | 换算判成"隐藏"（`VideoRect` 里 W/H<1） | DPR/客户区换算错，不是 z-order 问题 |
+| `outVis=1` 且 `vis=1`、`w/h>0`，但 `x/y` 落在屏幕外或负值 | 坐标基准错（客户区 vs 屏幕） | 换算要减客户区原点 |
+| `hwnd=0` | 子窗没建成/已销毁 | 看 `embedReason`（RegisterClassExW 那类 Win32 错误在这里） |
+| 以上都正常 | 才是真·airspace/z-order 问题 | 见下面那个二选一判据 |
+
+**最后一行才需要那个关键二选一**，它只靠肉眼就能分：
+
+- **DOM 播放键覆盖层还看得见**（画面区域内是网页在画）⇒ 子窗没压在 WebView2 之上。
+  `SetWindowPos(HWND_TOP)` 只在**同一个父窗的兄弟之间**排序；
+  若 `cls` 显示我们挂的父窗不是 WebView2 的兄弟（层级差了一层），
+  置顶再多次也排不到它上面 —— 修法是把子窗挂到 WebView2 的**同一个父**下，
+  或反过来把 WebView2 让出这块矩形。
+- **覆盖层被盖住了、但整块是黑的** ⇒ 子窗已经在最上，是 **mpv 没往这个窗画**。
+  方向变成 `--wid` 与 spawn 的时序（`SetWid` 是否在 mpv 起进程之前生效）、
+  以及 mpv 是否自己另开了顶层窗（看任务栏/窗口列表里有没有第二个 mpv 窗）。
+
+alpha.31 起徽标默认常驻，所以这两条不用猜，用户回传一张图就能定。
