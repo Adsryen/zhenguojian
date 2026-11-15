@@ -61,6 +61,11 @@ def hit_bands(page):
     return page.evaluate("()=> window.__zgjHitBands ?? null")
 
 
+def bounds_rec(page):
+    """embedApi.setBounds 的上报序列（mock 面记录，见 services/mock/embed.ts）。"""
+    return page.evaluate("()=> window.__zgjBounds ?? null")
+
+
 def expected_overlap(rects):
     """按页面实测矩形算期望穿透带（物理像素，与 PlayerView 同一公式）。"""
     dpr = rects["dpr"]
@@ -112,6 +117,30 @@ def main():
             check("B3 穿透带≈实测重叠×DPR（±1px 取整容差）",
                   last2 is not None and abs(last2["top"] - expB[0]) <= 1 and abs(last2["bottom"] - expB[1]) <= 1,
                   f"reported={last2} expected={expB} dpr={rects2['dpr']}")
+
+            # ── 场景 C：几何与可见性分开上报 ──
+            # 钉的是第六十一轮真机数据定出的根因：旧 reportBounds 在 running 之前
+            # 上报 0×0（"零尺寸=隐藏"），而旧 ApplyBounds 的隐藏分支只 SW_HIDE
+            # 不 MoveWindow —— 子窗从创建起一直是 1×1，mpv 早在 spawn 前就被
+            # SetWid 指到它，GL drawable 也就一直是 1×1（徽标实测 1×1 @328,147）。
+            bd = bounds_rec(page)
+            blast = bd["last"] if bd else None
+            stage2 = rects2["stage"]
+            cfirst = bd["first"] if bd else None
+            check("C1 起手（PlayerOpen 之前那次）就摆真实几何且 show=false",
+                  cfirst is not None and cfirst["w"] > 1 and cfirst["h"] > 1 and cfirst["show"] is False,
+                  f"first={cfirst}")
+            check("C2 隐藏态也照实摆位（存在 show=false 且 w>1 的上报）",
+                  bd is not None and bd["hiddenWithGeometry"] >= 1,
+                  f"rec={bd}")
+            check("C3 上报尺寸≈stage 实测×DPR（±2px 取整容差）",
+                  blast is not None
+                  and abs(blast["w"] - round((stage2["right"] - stage2["left"]) * rects2["dpr"])) <= 2
+                  and abs(blast["h"] - round((stage2["bottom"] - stage2["top"]) * rects2["dpr"])) <= 2,
+                  f"bounds={blast} stage={stage2} dpr={rects2['dpr']}")
+            check("C4 running 翻转后 show 变真（可见性由 show 表达，不再靠抹掉尺寸）",
+                  blast is not None and blast["show"] is True,
+                  f"bounds={blast}")
 
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {

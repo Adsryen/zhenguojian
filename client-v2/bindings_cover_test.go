@@ -46,8 +46,21 @@ func TestCheckLocalPlayable(t *testing.T) {
 func TestNormalizeForContainment(t *testing.T) {
 	// Windows 语义：大小写不同仍是同一个目录，不能把自家成品拒掉。
 	r, a := normalizeForContainment(`C:\Downloads`, `c:\downloads\合并\a.mp4`, true)
-	if rel, err := filepath.Rel(r, a); err != nil || rel == ".." || strings.HasPrefix(rel, "..") {
-		t.Fatalf("Windows 折叠后应判定在根内，得 rel=%q err=%v", rel, err)
+	if !strings.HasPrefix(a, r) {
+		t.Fatalf("折叠后子路径必须以根为前缀：root=%q abs=%q", r, a)
+	}
+	if rest := a[len(r):]; !strings.HasPrefix(rest, `\`) && !strings.HasPrefix(rest, `/`) {
+		t.Fatalf("前缀命中但不是真目录边界（`C:\\DownloadsX` 那种）：rest=%q", rest)
+	}
+	// ⚠ 这里原来直接拿 filepath.Rel 判"在根内"，在 Linux 上必红：
+	// Go 的 filepath.Rel 只认 `/`，反斜杠在它眼里是普通字符，
+	// `c:\downloads\合并\a.mp4` 相对 `C:\Downloads` 就成了 `../c:\downloads\...`。
+	// 也就是说这条断言**只在 Windows 上有意义**，而 Windows 单测我本机跑不了 ——
+	// 于是把它降级成上面那组平台无关的字符串判据，Rel 只在真 Windows 上补跑。
+	if runtime.GOOS == "windows" {
+		if rel, err := filepath.Rel(r, a); err != nil || strings.HasPrefix(rel, "..") {
+			t.Fatalf("Windows 上 Rel 应判定在根内，得 rel=%q err=%v", rel, err)
+		}
 	}
 	// 大小写敏感的语义（Linux/macOS 那侧）：折叠关掉后，两个字符串必须真的不同。
 	// ⚠ 上一版这里写的是 `filepath.Rel(r2, a2)` 应该越界 —— 在 Windows runner 上必红，

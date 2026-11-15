@@ -256,13 +256,13 @@ export const embedBridge = {
       return r
     }
   },
-  setBounds: async (x: number, y: number, w: number, h: number): Promise<void> => {
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
     try {
       const r = await callGo<{ ok: boolean; host?: EmbedHostDebug }>(
-        'PlayerSetBounds', x, y, w, h)
+        'PlayerSetBounds', x, y, w, h, show)
       // 只报"有尺寸的那几次"，否则每次几何变化都打一条会把控制台刷满
       if (w > 1 && h > 1) {
-        console.info('[embed] setBounds', x, y, w, h, JSON.stringify(r?.host ?? null))
+        console.info('[embed] setBounds', x, y, w, h, 'show=' + show, JSON.stringify(r?.host ?? null))
       }
     } catch {
       /* 几何上报失败不干扰播放 UI（窗口销毁竞态等） */

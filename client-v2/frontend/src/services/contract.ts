@@ -315,7 +315,7 @@ export const GO_BINDINGS: Record<keyof NativeApi, string> = {
 /** 内嵌绑定（不在 NativeApi 面里，见 facade embedApi） */
 export const GO_BINDINGS_EMBED: Record<'attach' | 'setBounds' | 'playerHitBands' | 'detach', string> = {
   attach: 'App.PlayerAttach() → AttachResult{embedded,reason?,host?}',
-  setBounds: 'App.PlayerSetBounds(x, y, w, h int) -- physical pixels, zero size = hidden',
+  setBounds: 'App.PlayerSetBounds(x, y, w, h int, show bool) -- physical pixels; geometry always placed, show only toggles visibility',
   playerHitBands: 'App.PlayerHitBands(top, bottom float64) error',
   detach: 'App.PlayerDetach()'
 }

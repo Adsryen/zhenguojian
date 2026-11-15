@@ -10,8 +10,17 @@ export const mockEmbedApi = {
     // 驱动 PlayerView 的 bounds/hitBands 上报链路（真实 exe 恒 isMock=false）。
     return { embedded: typeof window !== 'undefined' && !!window.__zgjMockEmbed, reason: 'mock-embed' }
   },
-  setBounds: async (_x: number, _y: number, _w: number, _h: number): Promise<void> => {
-    /* mock/无桥：几何上报 no-op（真实时序契约见 bridge.embedBridge 头注释） */
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
+    /* mock/无桥：no-op，但把上报序列记到 window.__zgjBounds 供 headless 断言
+       （真实时序契约见 bridge.embedBridge 头注释：几何与 show 分开）。 */
+    if (typeof window !== 'undefined') {
+      const rec = window.__zgjBounds ?? { count: 0, first: null, last: null, hiddenWithGeometry: 0 }
+      rec.count += 1
+      if (!rec.first) rec.first = { x, y, w, h, show }
+      rec.last = { x, y, w, h, show }
+      if (!show && w > 1 && h > 1) rec.hiddenWithGeometry += 1
+      window.__zgjBounds = rec
+    }
   },
   /* 覆盖层穿透带：mock/无桥时记录到 window.__zgjHitBands 供 headless 验证断言。 */
   playerHitBands: async (top: number, bottom: number): Promise<void> => {

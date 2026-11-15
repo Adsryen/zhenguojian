@@ -330,7 +330,7 @@ runtime.zip 139MB / build-info.json）。
 | 现场 | 结论 | 下一步 |
 |---|---|---|
 | `inW=0` 或 `inH=0` | 前端从没成功上报几何 | 查 `PlayerSetBounds` 调用时机（attach 之后、首帧之前）与 `.pl-stage` 尺寸 |
-| `inW>0` 但 `outVis=0` | 换算判成"隐藏"（`VideoRect` 里 W/H<1） | DPR/客户区换算错，不是 z-order 问题 |
+| `inW>0` 但 `outVis=0` | **61 轮之后**这条只意味着前端把 `show` 报成了 false（`PlaceDecision` = 尺寸有效 **且** `Show`）；旧代码在这里是"换算判成隐藏" | 看有没有「播放失败」/`running` 没翻真；尺寸本身是对的 |
 | `outVis=1` 且 `vis=1`、`w/h>0`，但 `x/y` 落在屏幕外或负值 | 坐标基准错（客户区 vs 屏幕） | 换算要减客户区原点 |
 | `hwnd=0` | 子窗没建成/已销毁 | 看 `embedReason`（RegisterClassExW 那类 Win32 错误在这里） |
 | 以上都正常 | 才是真·airspace/z-order 问题 | 见下面那个二选一判据 |
@@ -347,3 +347,48 @@ runtime.zip 139MB / build-info.json）。
   以及 mpv 是否自己另开了顶层窗（看任务栏/窗口列表里有没有第二个 mpv 窗）。
 
 alpha.31 起徽标默认常驻，所以这两条不用猜，用户回传一张图就能定。
+
+### 61 轮实测结果：这张表的第一行把我带偏了一次
+
+alpha.31 的徽标回来了，现场是
+
+```
+子窗 wailsWindow · 子窗 0x161706 · 屏幕矩形 1×1 @328,147 · 可见=0 · 最近上报 0×0 → 换算 0×0 (可见=0)
+```
+
+按第一行读会得出「前端从没成功上报几何」。**错**：同一张图上还有「播放失败」，
+而 `PlayerView.vue` 的 `videoShouldShow()` 是
+`store.running && !store.loading && !store.error && !store.eof` ——
+播放失败 ⇒ `error` 非空 ⇒ `reportBounds()` **主动**上报 `0×0` 让位给 DOM。
+所以 `0×0` 是"播放失败"的**结果**，不是原因。判读表缺了这条反推，补上：
+
+> **看 `inW=0` 之前先看有没有「播放失败」。** 有失败就先查失败，
+> 几何为零可能只是同一件事的影子。（徽标自 61 轮起会把 `store.error` 一起带出来。）
+
+顺着这条往下查，挖出两个**必然发生**的顺序缺陷（与是否 z-order 无关）：
+
+1. `embed_windows.go` 的 `ApplyBounds` 在隐藏分支里**只 `ShowWindow(SW_HIDE)`、
+   从不 `MoveWindow`** —— 于是子窗永远停在创建时的 1×1；
+2. 前端旧约定把"隐藏"编码成 `0×0`，而 `running` 只能在 `PlayerOpen` **成功之后**
+   才为真 —— 于是 `PlayerOpen` 之前那次"起手摆位"（`PlayerView.vue` onMounted 里的
+   `reportBounds()`）报的永远是 `0×0`，而且那行还是 `void` 不是 `await`，
+   与 `PlayerOpen` 赛跑。
+
+合起来的后果：**mpv 每次都是在「1×1 且隐藏」的子窗上 spawn 的**。
+`--wid` 指向的 drawable 是 1×1，之后即便 resize 也不保证重建 swapchain ——
+这和"attach 成功、子窗已建、拿到 --wid、就是没画面"完全对得上。
+
+修法是把**几何与可见性拆成两件事**：`mpv.Bounds` 新增 `Show`，
+`PlaceDecision`（纯函数，Linux 可跑单测）返回 `(rect, visible)`，
+`ApplyBounds` 只要量得出尺寸就 `MoveWindow`，`Show=false` 只负责 `SW_HIDE`；
+前端 `reportBounds()` 一律照实上报，起手那次改成 `await`。
+`PlayerSetBounds` 因此多一个参数（`contract.GO_BINDINGS_EMBED` 同步）。
+
+顺带补了两件门禁的账：
+
+- `GO_BINDINGS_EMBED` 此前**全仓零引用** —— 一张写着时序契约的表没人核对过。
+  现在 `evidence_audit.py` 有方向 G 拿它跟 `app.go` 的真实签名对账（selftest 34/34）。
+- `hitbands_verify.py` 的场景 C 一开始只断言 `last`，反向验证（塞回旧行为）
+  实测 **C1/C3/C4 全绿、只有 C2 红** —— 因为 running 之后 `last` 本来就是真尺寸。
+  已把 mock 的记录加上 `first`，C1 改盯**第一次上报**，重跑反向验证 C1+C2 双红。
+  又一次「绿 ≠ 覆盖」。

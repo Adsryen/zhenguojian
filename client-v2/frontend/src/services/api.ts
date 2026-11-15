@@ -29,8 +29,10 @@ export type { EmbedHostDebug, AttachResult } from './contract'
    不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
    no-op（attach 返回 embedded:false），PlayerView 无需按模式特判——内嵌不可得
    时整条播放链路保持现行行为（mpv 独立窗 / 浏览器无画面）。
-   时序契约：PlayerAttach → PlayerOpen（spawn 前 SetWid 生效）→ 几何/状态变化
-   PlayerSetBounds（物理像素，零尺寸=隐藏）→ 离开 PlayerDetach。
+   时序契约：PlayerAttach → PlayerSetBounds（真实几何 + show=false 起手摆位）
+   → PlayerOpen（spawn 前 SetWid 生效）→ 状态变化重报 show → 离开 PlayerDetach。
+   ⚠ 几何与可见性分开上报：只要量得出尺寸就摆位，show 只决定看不看得见。
+   旧约定「零尺寸=隐藏」让隐藏态永远不摆位，mpv 于是拿到创建尺寸的 1×1 drawable。
    分支顺序与拆分前逐行一致：isMock → mock 面（./mock/embed）；无桥 → 直接降级；
    真桥 → ./bridge 的 embedBridge。 */
 export const embedApi = {
@@ -39,9 +41,10 @@ export const embedApi = {
     if (!hasBridge) return { embedded: false }
     return embedBridge.attach()
   },
-  setBounds: async (x: number, y: number, w: number, h: number): Promise<void> => {
-    if (isMock || !hasBridge) return
-    return embedBridge.setBounds(x, y, w, h)
+  setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
+    if (isMock) return mockEmbedApi.setBounds(x, y, w, h, show)
+    if (!hasBridge) return
+    return embedBridge.setBounds(x, y, w, h, show)
   },
   /* 覆盖层穿透带（App.PlayerHitBands）：top/bottom=HTML 覆盖层与视频矩形
      的实际重叠高度（物理像素），0=该侧不禁。桥缺失/mock 记录到

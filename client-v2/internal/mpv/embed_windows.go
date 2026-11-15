@@ -269,23 +269,32 @@ func (e *EmbedHost) HWND() uintptr {
 	return uintptr(e.child)
 }
 
-// ApplyBounds 按前端上报几何移动/显示子窗；零尺寸隐藏整棵子树（含 mpv 窗）。
-// 每次显示都 SetWindowPos(HWND_TOP) 把子窗提到 WebView2 兄弟窗之上
-// （airspace：原生子窗绘制永远盖过 DOM，故视频矩形内的 DOM 不可见/不可点）。
+// ApplyBounds 按前端上报几何摆放子窗，并按 Bounds.Show 决定显隐。
+// 几何与可见性是两条独立的动作：只要量出了尺寸就 MoveWindow（哪怕当前要藏），
+// 零尺寸才整体 SW_HIDE。每次显示都 SetWindowPos(HWND_TOP) 把子窗提到 WebView2
+// 兄弟窗之上（airspace：原生子窗绘制永远盖过 DOM，故视频矩形内的 DOM 不可见/不可点）。
 func (e *EmbedHost) ApplyBounds(b Bounds) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.child == 0 {
 		return errors.New("mpv: 子窗已销毁")
 	}
-	r, visible := VideoRect(b)
+	r, visible := PlaceDecision(b)
 	e.lastIn, e.lastR, e.lastV = b, r, visible
+	if r.W < 1 || r.H < 1 {
+		// 前端还没量出 stage（或已归零）：只能整体藏起来，没什么可摆的。
+		procEmbed["ShowWindow"].Call(uintptr(e.child), swHide)
+		return nil
+	}
+	// ⚠ 关键改动（旧代码在这里 `if !visible { SW_HIDE; return }`，
+	// 于是隐藏态永远不 MoveWindow，子窗停在创建时的 1×1）：
+	// 尺寸照摆，可见性单独按 Show 决定。mpv 的 drawable 因此从起手上就是真实尺寸。
+	procEmbed["MoveWindow"].Call(uintptr(e.child), uintptr(r.X), uintptr(r.Y), uintptr(r.W), uintptr(r.H), 1)
 	if !visible {
 		procEmbed["ShowWindow"].Call(uintptr(e.child), swHide)
 		return nil
 	}
 	// MoveWindow(bMove=true) → SW_SHOWNA（显示不夺焦）→ 提 z-order。
-	procEmbed["MoveWindow"].Call(uintptr(e.child), uintptr(r.X), uintptr(r.Y), uintptr(r.W), uintptr(r.H), 1)
 	procEmbed["ShowWindow"].Call(uintptr(e.child), swShowNA)
 	procEmbed["SetWindowPos"].Call(uintptr(e.child), uintptr(hwndTop), 0, 0, 0, 0,
 		uintptr(swpNoSize|swpNoMove|swpNoActivate))

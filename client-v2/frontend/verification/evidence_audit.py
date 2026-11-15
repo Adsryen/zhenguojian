@@ -212,6 +212,47 @@ def classify(bindings, called, mentioned, go_test_text):
     return tiers
 
 
+
+def _norm_params(p):
+    return ' '.join(t.strip() for t in p.split(',') if t.strip())
+
+
+def embed_signature_audit(root=ROOT, frontend=FRONTEND):
+    """对账 contract.GO_BINDINGS_EMBED 与 app.go 里真实的方法签名。
+
+    第六十一轮加的：那张表此前**全仓零引用**（grep 只有它自己的声明行），
+    也就是说它写什么都不没人管 —— 而我刚把 PlayerSetBounds 从 4 参改成 5 参。
+    「登记了签名但没人核对」正是这个项目反复栽的那类洞（引擎在、线没接）。
+    返回 (rows, bad)：rows=[(key, 声明串, 实际串)]，bad=[(key, 说明)]。
+    """
+    app_go = os.path.join(root, 'app.go')
+    ct = os.path.join(frontend, 'src', 'services', 'contract.ts')
+    if not (os.path.exists(app_go) and os.path.exists(ct)):
+        return [], []
+    go_text = open(app_go, encoding='utf-8', errors='replace').read()
+    ts_text = open(ct, encoding='utf-8', errors='replace').read()
+    m = re.search(r'GO_BINDINGS_EMBED[^{]*\{(.*?)\n\}', ts_text, re.S)
+    if not m:
+        return [], [('GO_BINDINGS_EMBED', 'contract.ts 里找不到这张表')]
+    rows, bad = [], []
+    for key, decl in re.findall(r"(\w+)\s*:\s*'([^']+)'", m.group(1)):
+        mm = re.match(r'App\.(\w+)\s*\(([^)]*)\)', decl)
+        if not mm:
+            bad.append((key, '声明串解析不出 App.Name(params)：%s' % decl[:60]))
+            continue
+        name, want = mm.group(1), _norm_params(mm.group(2))
+        gm = re.search(r'func \(a \*App\) %s\s*\(([^)]*)\)' % re.escape(name), go_text)
+        if not gm:
+            bad.append((key, 'app.go 里没有 App.%s' % name))
+            rows.append((key, decl, '-'))
+            continue
+        got = _norm_params(gm.group(1))
+        rows.append((key, decl, 'App.%s(%s)' % (name, got)))
+        if got != want:
+            bad.append((key, '参数不一致：表=%s 实际=%s' % (want, got)))
+    return rows, bad
+
+
 def audit(root=ROOT, frontend=FRONTEND):
     bindings = parse_go_bindings(root)
     called, mentioned, ts_paths = parse_ts_calls(frontend)
@@ -353,6 +394,34 @@ def _selftest():
         t("D5 真实仓库里 %s 必须被判为有调用" % nm, nm in called_real or nm in men_real,
           "漏了就是解析器又退化了一种写法")
 
+    # G：签名对账 —— 临时目录造一对匹配/不匹配的样本
+    import shutil
+    tmpg = tempfile.mkdtemp(prefix='evg_')
+    try:
+        os.makedirs(os.path.join(tmpg, 'frontend', 'src', 'services'), exist_ok=True)
+        ctg = os.path.join(tmpg, 'frontend', 'src', 'services', 'contract.ts')
+        ag = os.path.join(tmpg, 'app.go')
+        open(ctg, 'w', encoding='utf-8').write(
+            "export const GO_BINDINGS_EMBED = {\n"
+            "  setBounds: 'App.PlayerSetBounds(x, y, w, h int, show bool) -- ok',\n"
+            "  detach: 'App.PlayerDetach()'\n}\n")
+        open(ag, 'w', encoding='utf-8').write(
+            "func (a *App) PlayerSetBounds(x, y, w, h int, show bool) (string, error) { return \"\", nil }\n"
+            "func (a *App) PlayerDetach() {}\n")
+        r1, b1 = embed_signature_audit(tmpg, os.path.join(tmpg, 'frontend'))
+        t('G0 一致时不报红', len(r1) == 2 and not b1, '%d/%s' % (len(r1), b1))
+        open(ag, 'w', encoding='utf-8').write(
+            "func (a *App) PlayerSetBounds(x, y, w, h int) (string, error) { return \"\", nil }\n")
+        r2, b2 = embed_signature_audit(tmpg, os.path.join(tmpg, 'frontend'))
+        t('G1 少一个参数必须红', any(k == 'setBounds' for k, _ in b2), str(b2))
+        t('G2 Go 里缺方法也要红', any(k == 'detach' for k, _ in b2), str(b2))
+    finally:
+        shutil.rmtree(tmpg, ignore_errors=True)
+    # 真实仓库：这张表必须与 app.go 对得上（第六十一轮改签名后没人核对过）
+    rr, rb = embed_signature_audit()
+    t('G3 真实仓库内嵌签名全部一致', not rb, str(rb))
+    t('G4 真实仓库抓到 4 条内嵌签名', len(rr) == 4, len(rr))
+
     total = counts[0]
     print("\n===== evidence_audit --selftest: %d/%d PASS =====" % (total - len(fails), total))
     return 1 if fails else 0
@@ -387,6 +456,20 @@ def main():
     print("\n方向 B：Go 有、前端没调（只登记不判红，删不删是 API 决定）：")
     for n in res["not_called"]:
         print("  - %-22s %s" % (n, res["tiers"][n]))
+
+    embed_bad = False
+    rows, bad = embed_signature_audit()
+    if rows:
+        print("\n方向 G：内嵌绑定签名对账（contract.GO_BINDINGS_EMBED ↔ app.go）")
+        for k, decl, actual in rows:
+            print("  %-14s 表: %-56s 实: %s" % (k, decl[:56], actual))
+    if bad:
+        print("\nFAIL 内嵌绑定签名与 Go 实际不符（这张表是时序契约的唯一文字记录）：")
+        for k, why in bad:
+            print("  - %s：%s" % (k, why))
+        embed_bad = True
+    elif rows:
+        print("\nPASS 方向 G：%d 条内嵌签名与 app.go 一致" % len(rows))
 
     print("\n证据等级分布：")
     for tier, cnt in sorted(res["distribution"].items(), key=lambda kv: -kv[1]):

@@ -189,6 +189,72 @@ def selftest():  # 分母必须把两组用例都算进去——
     return 1 if bad else 0
 
 
+
+def _listener_pid(port):
+    """返回监听该端口的进程 pid（取不到就 None）。"""
+    import subprocess
+
+    try:
+        out = subprocess.run(["ss", "-ltnp", "sport = :%d" % int(port)],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return None
+    # ⚠ 第一版我按空格切 token 找 `pid=`，永远找不到：
+    # ss 把它写成 `users:(("MainThread",pid=2421791,fd=24))` **一整块**，
+    # 没有空格。结果 _listener_pid 恒 None，预检"什么都没占"，
+    # 而 5206 上明明有个 vite —— 又是一个 vacuous 判据（第 N 次）。
+    for line in out.splitlines()[1:]:
+        m2 = re.search(r"pid=(\d+)", line)
+        if m2:
+            return int(m2.group(1))
+    return None
+
+
+def _proc_cmdline(pid):
+    try:
+        with open("/proc/%d/cmdline" % pid, "rb") as f:
+            return f.read().replace(b"\0", b" ").decode("utf-8", "replace").strip()
+    except Exception:
+        return ""
+
+
+def _reap_stray(ports):
+    """清掉声明端口上残留的 harness vite；别人的进程一律不碰。"""
+    import os as _os
+    import signal as _signal
+    import time as _time
+
+    stray, foreign = [], []
+    for port in sorted(int(x) for x in ports):
+        pid = _listener_pid(port)
+        if not pid:
+            continue
+        cmd = _proc_cmdline(pid)
+        owned = ("vite" in cmd) and ("--port %d" % port in cmd or "--port=%d" % port in cmd)
+        if not owned:
+            foreign.append((port, pid, cmd[:120] or "(读不到 cmdline)"))
+            continue
+        try:
+            _os.kill(pid, _signal.SIGTERM)
+        except Exception:
+            foreign.append((port, pid, "kill 失败：" + cmd[:80]))
+            continue
+        deadline = _time.time() + 5
+        while _time.time() < deadline and _listener_pid(port) == pid:
+            _time.sleep(0.2)
+        if _listener_pid(port) == pid:
+            try:
+                _os.kill(pid, _signal.SIGKILL)
+            except Exception:
+                pass
+            _time.sleep(0.5)
+        if _listener_pid(port):
+            foreign.append((port, pid, "收不掉，仍监听"))
+        else:
+            stray.append((port, pid))
+    return stray, foreign
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--only", default="", help="只跑名字含该子串的脚本")
@@ -223,6 +289,35 @@ def main():
               "跑 `python3 ports_audit.py --selftest` 确认抽取判据没退化。")
         return 1
     print(f"端口预检 OK：{len(_owner)} 个号被 {len(_per)} 个脚本独占，无争用")
+
+    # 第六十一轮补：**占用**预检。撞号预检只看"规格上有没有两个人要同一个号"，
+    # 看不见"上一轮被打断留下的服务器正占着号"。本轮真的因此白跑了一小时：
+    # 5206 被 59 分钟前那次 `timeout` 打断留下的 vite 占着，
+    # detail_reserve_verify 开局就报「端口 5206 已被占用」，
+    # 而 run_all 已经按顺序跑完了前面 20 多个脚本。
+    # 现在开工前先把这些号上的**自家 vite** 收掉；不是 vite 的一律不碰
+    # （那是用户的东西，宁可停下来问）。
+    stray, foreign = _reap_stray(_owner)
+    for port, pid in stray:
+        print(f"  预检收口：端口 {port} 上残留 vite(pid={pid}) 已终止")
+    if foreign:
+        print("FAIL 端口被**非 harness 进程**占用，我不杀别人的东西：")
+        for port, pid, cmd in foreign:
+            print(f"  {port} ← pid={pid} {cmd}")
+        print("处置：自己确认后再清，或给脚本换号。")
+        return 1
+
+    # 收口机制自己的自检（纯 Python，不起 vite，约 2 秒）：
+    # 第五十六轮我只加 atexit 就以为解决了泄漏，本轮发现 SIGTERM 根本不走 atexit。
+    import subprocess
+    _ds = subprocess.run([sys.executable, os.path.join(HERE, "_devserver.py"), "--selftest"],
+                         capture_output=True, text=True, timeout=120)
+    _ds_line = [l for l in _ds.stdout.splitlines() if "selftest" in l]
+    print("devserver 收口自检：%s" % (_ds_line[-1] if _ds_line else _ds.stdout.strip()[:120]))
+    if _ds.returncode != 0:
+        print("FAIL devserver 收口自检没过，泄漏会复发，先修它：")
+        print(_ds.stdout)
+        return 1
     # spec 表对账**只提示不拦路**：文档落后不是测试完整性问题，
     # 用它卡住全量回归会让人开始绕过门禁（比没门禁更糟）。
     # 要硬拦就单独跑 `ports_audit.py --check-spec`（我提交文档前自己跑）。

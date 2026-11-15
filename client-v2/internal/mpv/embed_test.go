@@ -38,6 +38,41 @@ func TestVideoRect(t *testing.T) {
 	}
 }
 
+func TestPlaceDecision(t *testing.T) {
+	t.Parallel()
+	// 钉住第六十一轮真机数据定出的那条分离：「摆多大」与「看不看得见」是两件事。
+	// 旧约定把隐藏编码成 0×0，而 ApplyBounds 的隐藏分支又不 MoveWindow，
+	// 于是子窗永远停在创建时的 1×1，mpv 从 spawn 起就在 1×1 drawable 上画。
+	cases := []struct {
+		name    string
+		in      Bounds
+		want    Rect
+		visible bool
+	}{
+		{"隐藏态仍要摆位（回归钉：旧行为等价于 Rect{}）",
+			Bounds{X: 320, Y: 140, W: 900, H: 520, Show: false}, Rect{320, 140, 900, 520}, false},
+		{"可见", Bounds{X: 320, Y: 140, W: 900, H: 520, Show: true}, Rect{320, 140, 900, 520}, true},
+		{"零尺寸没有可摆的几何", Bounds{X: 1, Y: 1, W: 0, H: 0, Show: true}, Rect{}, false},
+		{"show=true 也救不了退化尺寸", Bounds{W: 900, H: 0, Show: true}, Rect{}, false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			got, visible := PlaceDecision(c.in)
+			if visible != c.visible {
+				t.Fatalf("visible=%v, want %v", visible, c.visible)
+			}
+			if got != c.want {
+				t.Fatalf("rect=%+v, want %+v", got, c.want)
+			}
+			// 结构不变式：有效尺寸不得被改写 —— 防的是"以后有人又把隐藏和尺寸合回一件事"。
+			if c.in.W >= 1 && c.in.H >= 1 && got != (Rect{c.in.X, c.in.Y, c.in.W, c.in.H}) {
+				t.Fatalf("有效尺寸被改写：in=%+v rect=%+v", c.in, got)
+			}
+		})
+	}
+}
+
 func TestPickHostWindow(t *testing.T) {
 	t.Parallel()
 	const self, other uint32 = 4000, 9000

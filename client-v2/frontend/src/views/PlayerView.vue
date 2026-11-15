@@ -133,19 +133,19 @@ async function reportHitBands(el: HTMLElement) {
 async function reportBounds() {
   if (!embedActive) return
   const el = stageEl.value
-  if (!el || !videoShouldShow()) {
-    await embedApi.setBounds(0, 0, 0, 0)
-    if (el) await reportHitBands(el) // 隐藏态也刷新带：host 已 SW_HIDE，值仅作状态同步
-    return
-  }
+  if (!el) return
   const r = el.getBoundingClientRect()
   const dpr = window.devicePixelRatio || 1
-  await embedApi.setBounds(
-    Math.round(r.left * dpr),
-    Math.round(r.top * dpr),
-    Math.round(r.width * dpr),
-    Math.round(r.height * dpr)
-  )
+  const x = Math.round(r.left * dpr)
+  const y = Math.round(r.top * dpr)
+  const w = Math.round(r.width * dpr)
+  const h = Math.round(r.height * dpr)
+  /* 第六十一轮真机数据（徽标 1×1 @328,147 · 可见=0 · 最近上报 0×0）定出的修法：
+     旧写法在 videoShouldShow() 为假时上报 0×0，而 running 只能在 PlayerOpen
+     成功之后才为真 —— 于是「起手摆位」这件事永远不发生，mpv 从 spawn 起
+     就在一个创建尺寸 1×1 的隐藏窗上画。现在几何永远照实报，
+     可见性交给 show：让位给 DOM 覆盖层是"藏"，不是"抹掉尺寸"。 */
+  await embedApi.setBounds(x, y, w, h, videoShouldShow())
   await reportHitBands(el)
 }
 
@@ -381,7 +381,11 @@ onMounted(async () => {
     if (barEl.value) barsRO.observe(barEl.value)
     window.addEventListener('resize', onStageResize)
   }
-  void reportBounds() // 隐藏态起手（running 尚未翻转，防陈旧矩形残留）
+  /* ⚠ 必须 await，不能 void：bootFromQuery 会走到 PlayerOpen→mpv spawn，
+     而 spawn 那一刻窗口尺寸就是 mpv 的 drawable。旧写法 `void reportBounds()`
+     让这条 IPC 与 PlayerOpen 赛跑 —— 真机徽标实测到的 1×1 就是这么来的
+     （加上后端隐藏分支不摆位，两个洞叠在一起）。 */
+  await reportBounds()
   window.addEventListener('keydown', onHotkey)
   await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
 })
@@ -433,7 +437,8 @@ onBeforeUnmount(() => {
             v-if="embedDebugOn && embedHost"
             class="pl-hint embed-debug"
             data-testid="embed-debug"
-          >{{ embedDebugText }}
+          >{{ embedDebugText }}<template v-if="store.error">
+            · {{ store.error }}</template>
             <button
               class="pl-btn tiny"
               type="button"

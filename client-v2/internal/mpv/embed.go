@@ -72,6 +72,21 @@ type HostDebug struct {
 // （前端已按 devicePixelRatio 换算）。W/H 小于 1 视为隐藏请求。
 type Bounds struct {
 	X, Y, W, H int
+	// Show 是「此刻要不要看得见」，与几何是两件事。
+	// 第六十一轮真机数据（徽标：子窗 1×1 @328,147 · 可见=0 · 最近上报 0×0）
+	// 证明把它们混成一件是黑屏的成因：旧约定「零尺寸=隐藏」让前端在
+	// running 之前只能上报 0×0，而旧 ApplyBounds 的隐藏分支又只 SW_HIDE
+	// 不 MoveWindow —— 于是子窗从创建起一直是 1×1，而 mpv 早在
+	// PlayerOpen 之前就被 SetWid 指向它，GL drawable 也就一直是 1×1。
+	Show bool
+}
+
+// PlaceDecision 把「摆多大」与「是否可见」拆开（纯函数，Linux 可跑单测）。
+// 返回 rect 有效（W/H≥1）时，无论可见与否都必须真的 MoveWindow —— 这是
+// mpv 能画的前提；Show=false 只决定 SW_HIDE，不决定尺寸。
+func PlaceDecision(b Bounds) (Rect, bool) {
+	r, ok := VideoRect(b)
+	return r, ok && b.Show
 }
 
 // Rect 是换算后的目标窗体几何。

@@ -685,10 +685,13 @@ func (a *App) PlayerClosePlayer() (string, error) { return "", a.playerSvc.Stop(
 
 // ---------- V2-4 播放画面内嵌（PlayerAttach/PlayerSetBounds/PlayerDetach） ----------
 //
-// 时序契约（PlayerView.vue 保证）：进入播放页 → PlayerAttach →（spawn 前
-// SetWid 生效）→ PlayerOpen → 每次容器几何变化/状态切换 PlayerSetBounds →
+// 时序契约（PlayerView.vue 保证）：进入播放页 → PlayerAttach →
+// PlayerSetBounds(真实几何, show=false) 起手摆位 →（spawn 前 SetWid 生效）
+// → PlayerOpen → 每次容器几何变化/状态切换重报 PlayerSetBounds →
 // 离开页面 PlayerDetach（隐藏子窗，实例留复用）。ZHENGUO_NO_EMBED=1 或
 // 非 Windows 平台 attach 返回 embedded:false，播放链路整体退化为现行独立窗。
+// ⚠ 起手必须先摆位再 open：mpv 的 drawable 取自 spawn 那一刻的窗口尺寸，
+// 先 1×1 后 resize 不保证重建（第六十一轮真机黑屏的成因）。
 
 // PlayerAttach 建立/复用视频承载子窗并把其 HWND 交给播放服务。
 // 返回 JSON {embedded bool, reason string}；失败不报 error——回退是正常分支。
@@ -710,15 +713,18 @@ func (a *App) PlayerAttach() (string, error) {
 	return marshalJSON(map[string]any{"embedded": true, "host": a.embed.Debug()})
 }
 
-// PlayerSetBounds 按视频容器矩形移动/显隐子窗（物理像素，相对主窗客户区；
-// W/H <1 表示隐藏画面，让位给 DOM 覆盖层）。
-func (a *App) PlayerSetBounds(x, y, w, h int) (string, error) {
+// PlayerSetBounds 摆放/显隐视频子窗（物理像素，相对主窗客户区）。
+// show 与几何是两件事：量出尺寸就摆位，show 只决定看不看得见；
+// W/H <1 才是「没有可摆的几何」，此时整窗 SW_HIDE。
+// （旧签名把「隐藏」编码成 0×0，于是隐藏态永远不摆位 —— mpv 起进程时
+// 拿到的是创建尺寸的 1×1 drawable，见 mpv.Bounds.Show 的注释。）
+func (a *App) PlayerSetBounds(x, y, w, h int, show bool) (string, error) {
 	a.embedMu.Lock()
 	defer a.embedMu.Unlock()
 	if a.embed == nil {
 		return marshalJSON(map[string]any{"ok": false})
 	}
-	if err := a.embed.ApplyBounds(mpv.Bounds{X: x, Y: y, W: w, H: h}); err != nil {
+	if err := a.embed.ApplyBounds(mpv.Bounds{X: x, Y: y, W: w, H: h, Show: show}); err != nil {
 		return "", err
 	}
 	return marshalJSON(map[string]any{"ok": true, "host": a.embed.Debug()})

@@ -229,6 +229,27 @@ export interface HitBandsRecord {
   last: HitBandsReport | null
 }
 
+/** window.__zgjBounds：embedApi.setBounds 在 mock 面的上报序列。
+ *  hiddenWithGeometry = 「show=false 但几何是真实尺寸」的次数 —— 这正是
+ *  第六十一轮修的那个前提（隐藏态也要摆位，mpv 才拿得到非 1×1 的 drawable）。 */
+export interface BoundsReport {
+  x: number
+  y: number
+  w: number
+  h: number
+  show: boolean
+}
+
+export interface BoundsRecord {
+  count: number
+  hiddenWithGeometry: number
+  /** 第一次上报 = PlayerOpen 之前的起手摆位，mpv 的 drawable 由它决定。
+   *  断言只盯 last 会漏掉整个缺陷（反向验证实测：旧行为下 last 照样是真尺寸），
+   *  所以 C1 钉的是 first。 */
+  first: BoundsReport | null
+  last: BoundsReport | null
+}
+
 /* window.__zgj* 验证缝声明已挪至 ./mock/window.d.ts（清单见 ./mock/index.ts 头部） */
 
 /** 榜单候选（rankingBoards action；核心按站源可用性过滤，app_runtime.go:457-462。V2-E 侧栏） */

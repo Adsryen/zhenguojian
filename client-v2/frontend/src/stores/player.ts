@@ -264,7 +264,13 @@ export const usePlayerStore = defineStore('player', {
         if (e?.code === 'bridge_missing' || e?.code === 'not_ready' || (!MOCK_MODE && !bridgeAvailable())) {
           await this.startDemo(String(q.title ?? drama.title) || t('player.demoTitle'))
         } else {
-          this.error = e?.message ? tf('player.playFailedMsg', { m: e.message }) : t('player.playFailed')
+          /* 第六十一轮真机截图里只有光秃秃的「播放失败」—— 因为旧写法只认
+             e?.message，异常形状一变（裸字符串以外的对象、message 为空、
+             或 ApiError 剥码后剩空串）原因就整条丢掉，用户念不到、我看不到。
+             现在兜到 String(err) 与 code/name，宁可难看也不留空白。 */
+          const raw = String(e?.message ?? err ?? '')
+          const detail = raw.trim() || e?.code || e?.name || (typeof err === 'object' ? JSON.stringify(err) : '')
+          this.error = detail ? tf('player.playFailedMsg', { m: detail }) : t('player.playFailed')
         }
       } finally {
         this.loading = false

@@ -19,6 +19,7 @@
 import os
 import atexit
 import signal
+import sys
 import socket
 import subprocess
 import time
@@ -53,7 +54,7 @@ def start_dev(front_dir, port, mock, out_dir, name="dev", ready_timeout=60):
         try:
             with urllib.request.urlopen(base + "/", timeout=2) as r:
                 if r.status == 200:
-                    # ⚠ 第五十六轮加的兜底：`start_dev` 成功返回后自己注册 atexit 收口。
+                    # ⚠ 第五十六轮注册 atexit（只管正常退出），第六十一轮补 SIGTERM/SIGINT 收口。
                     # 原因不是"有人手滑"，而是**实测反复踩到的**：
                     # `sorani_verify.py` 与 `update_verify.py` 都没有 try/finally，
                     # 中途抛异常（本轮就是 Playwright 超时）就留下孤儿 vite 占住端口，
@@ -67,12 +68,63 @@ def start_dev(front_dir, port, mock, out_dir, name="dev", ready_timeout=60):
                     # stop_dev 对已停的进程是幂等的（内部异常都吞），所以脚本自己
                     # 显式调 stop_dev 也不冲突。quiet_port=True：解释器退出阶段
                     # 不该因为"端口没关干净"再抛一次异常把真正的失败信息盖掉。
-                    atexit.register(stop_dev, proc, port, name, True)
+                    _MANAGED.append((proc, port, name))
+                    _install_exit_hooks()
                     return proc
         except Exception:
             time.sleep(0.5)
     stop_dev(proc, port, name)
     raise RuntimeError(f"{name} dev server {ready_timeout}s 未就绪，见 {log_path}")
+
+
+# ── 第六十一轮：被信号打断时的收口 ────────────────────────────────────────
+# 第五十六轮我加的是 atexit。atexit 只在**正常退出**时跑：
+# `timeout 120 python3 xxx_verify.py` 发的是 SIGTERM，Python 默认直接终止进程，
+# atexit 一行都不执行 —— 于是 vite 留在端口上。这个洞本轮真的踩到了：
+# 5206 被 59 分钟前那次被打断的 run 占着，detail_reserve_verify 开局就报
+# 「端口 5206 已被占用」，而 run_all 已经白跑了近一小时。
+# 所以光有 atexit 不够，必须把 SIGTERM/SIGINT 也接上。
+_MANAGED = []          # [(proc, port, name)]
+_HOOKED = [False]
+_SIGNAL_HOOKS = True   # 关掉只留 atexit，用于反向验证（见 sigterm_leak_probe）
+
+
+def _reap():
+    """收掉本模块起过、还没收的所有 dev server。重复调用无害。"""
+    while _MANAGED:
+        proc, port, name = _MANAGED.pop(0)
+        try:
+            stop_dev(proc, port, name, True)
+        except Exception:
+            pass
+
+
+def _install_exit_hooks():
+    if _HOOKED[0]:
+        return
+    _HOOKED[0] = True
+    atexit.register(_reap)
+    if not _SIGNAL_HOOKS:
+        return
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        try:
+            prev = signal.getsignal(sig)
+
+            def _handler(signum, frame, _prev=prev):
+                _reap()
+                # 交还给原来的处理逻辑，别改变脚本自己的退出语义
+                if callable(_prev):
+                    _prev(signum, frame)
+                elif _prev is signal.SIG_DFL:
+                    signal.signal(signum, signal.SIG_DFL)
+                    raise SystemExit(128 + signum)
+                else:
+                    raise SystemExit(128 + signum)
+
+            signal.signal(sig, _handler)
+        except (ValueError, OSError, RuntimeError):
+            # 非主线程装不了信号处理器：atexit 仍在，退化为旧行为
+            pass
 
 
 def stop_dev(proc, port, name="dev", quiet_port=False):
@@ -100,3 +152,84 @@ def stop_dev(proc, port, name="dev", quiet_port=False):
         raise RuntimeError(
             f"{name} 退出后端口 {port} 仍在监听——泄漏的 vite 会让下一轮验收出假红灯，"
             f" 请手动 kill 掉 pid：ss -ltnp | grep {port}")
+
+
+# ── 自带自检（run_all 预检会跑；纯 Python，不起 vite）────────────────────
+# 测的是"收口机制"本身，不是 vite：把 stop_dev 换成写标记文件的桩，
+# 用真信号（SIGTERM）打自己，看桩有没有被调用。
+_SELFTEST_CHILD = """
+import os, sys, signal
+sys.path.insert(0, os.environ["ZGJ_VER_DIR"])
+import _devserver as d
+mark = os.environ["ZGJ_REAP_MARK"]
+d.stop_dev = lambda *a, **k: open(mark, "a").write("reap\\n")
+if os.environ.get("ZGJ_NO_SIGNAL") == "1":
+    d._SIGNAL_HOOKS = False
+
+
+class Fake:
+    pid = os.getpid()
+
+
+d._MANAGED.append((Fake(), 0, "selftest"))
+d._install_exit_hooks()
+mode = os.environ["ZGJ_MODE"]
+if mode == "term":
+    os.kill(os.getpid(), signal.SIGTERM)
+elif mode == "exit":
+    sys.exit(0)
+print("SURVIVED")
+"""
+
+
+def _selftest():
+    import subprocess
+    import tempfile
+
+    ver_dir = os.path.dirname(os.path.abspath(__file__))
+    ok = True
+    results = []
+
+    def run(mode, no_signal=False):
+        fd, mark = tempfile.mkstemp(prefix="zgj-reap-")
+        os.close(fd)
+        os.unlink(mark)
+        env = dict(os.environ, ZGJ_VER_DIR=ver_dir, ZGJ_REAP_MARK=mark, ZGJ_MODE=mode)
+        if no_signal:
+            env["ZGJ_NO_SIGNAL"] = "1"
+        r = subprocess.run([sys.executable, "-c", _SELFTEST_CHILD],
+                           env=env, capture_output=True, text=True, timeout=30)
+        reaped = os.path.exists(mark)
+        n = open(mark).read().count("reap") if reaped else 0
+        for f in (mark,):
+            if os.path.exists(f):
+                os.unlink(f)
+        return r, reaped, n
+
+    # A: SIGTERM 打断必须收口（第五十六轮的 atexit 单独做不到）
+    r, reaped, n = run("term")
+    a = reaped and n >= 1
+    results.append(("A SIGTERM 打断后 stop_dev 被调用", a, "reap=%d rc=%d" % (n, r.returncode)))
+    # B: 反向对照——只留 atexit 时确实不收口（证明 A 绿是新处理器带来的）
+    r, reaped, n = run("term", no_signal=True)
+    b = (not reaped)
+    results.append(("B 关掉信号处理器后同一条不打（反向对照）", b, "reap=%d" % n))
+    # C: 正常退出仍由 atexit 收口（别把老保证弄丢）
+    r, reaped, n = run("exit")
+    c = reaped and n >= 1
+    results.append(("C 正常退出仍收口（atexit 未被拆掉）", c, "reap=%d" % n))
+    # D: 信号路径下 stop_dev 只被调一次（重复收口会 killpg 已死进程）
+    r, reaped, n = run("term")
+    d2 = n == 1
+    results.append(("D 一次打断只收口一次", d2, "reap=%d" % n))
+
+    for name, passed, detail in results:
+        print("%s %s (%s)" % ("PASS" if passed else "FAIL", name, detail))
+        ok = ok and passed
+    print("== _devserver selftest: %d/%d PASS ==" % (sum(1 for x in results if x[1]), len(results)))
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(_selftest())
+
