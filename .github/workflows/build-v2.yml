@@ -453,6 +453,14 @@ jobs:
           "@ | Out-File -Encoding utf8 client-v2/build/bin/RELEASE-NOTES.md
         shell: pwsh
       - name: Generate latest.json (更新器的元数据资产)
+        # ⚠ 控制台编码必须显式设 UTF-8，否则中文 notes 会 mojibake：
+        #   alpha.32 的 Windows 构建里 release_notes.py --selftest 直接崩在
+        #   cp1252（UnicodeDecodeError 解 git 输出 / UnicodeEncodeError 打中文
+        #   FAIL 行）。脚本内部已强制 UTF-8，但 PowerShell 取
+        #   `& python ... | Select-Object -First 1` 时是按 [Console]::OutputEncoding
+        #   解 python 的 stdout 的 —— notes 现在是中文 tag 注释，这一步不设
+        #   UTF-8 就会把「v2.0.0-alpha.33 —— 内嵌几何…」写坏成乱码进 latest.json。
+        #   判据坏可以报错，编码坏是**静默**的，所以这条门只能装在这里。
         # D1 的服务端。为什么要有这个文件：更新器原来读
         # `https://api.github.com/repos/.../releases`，而实测
         #   gh-proxy.com/https://api.github.com/... → 403 "API rate limit exceeded for user ID 295646756"
@@ -469,6 +477,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # 见上面步骤注释：PowerShell 解 python stdout 用的是控制台编码，
+          # Windows runner 默认 cp1252，中文 notes 会静默变乱码。
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          $OutputEncoding = [System.Text.Encoding]::UTF8
           $tag = "${{ github.ref_name }}"
           $ver = $tag -replace '^v', ''
           # 预发布与否由 tag 文本判（与 Go 侧 IsPrereleaseTag 同一口径）；

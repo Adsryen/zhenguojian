@@ -384,6 +384,17 @@ alpha.31 的徽标回来了，现场是
 前端 `reportBounds()` 一律照实上报，起手那次改成 `await`。
 `PlayerSetBounds` 因此多一个参数（`contract.GO_BINDINGS_EMBED` 同步）。
 
+**这个修法不是我自己发明的，v1 就是这个顺序**（本轮从 tag `v1-final` 现查）：
+
+- `player.py:1535-1543`：起新会话时先 `_show_poster(...)` 铺海报/上一帧
+  （注释原文「别让画面直接黑一下」），紧接着
+  `wid = int(self.surface.winId())` —— 交给 mpv 的是**已经按布局量好尺寸的
+  原生窗口**，Qt 的 `winId()` 在这里只是拿句柄，不是拿 1×1 占位；
+- `player.py:388`：`args.append("--wid=%d" % int(wid))`，spawn 前就位；
+- `player.py:1536` 注释：「新会话真的出画后 `_swap_in_surface()` 再换回视频窗口」
+  —— **可见性切换发生在首帧之后，几何切换发生在 spawn 之前**，两件事在 v1 里
+  本来就是分开的。v2 旧代码把它们合成一件事（用 0×0 表示"藏"），才同时踩中两个洞。
+
 顺带补了两件门禁的账：
 
 - `GO_BINDINGS_EMBED` 此前**全仓零引用** —— 一张写着时序契约的表没人核对过。

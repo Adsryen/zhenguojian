@@ -36,6 +36,17 @@ import re
 import subprocess
 import sys
 
+# ⚠ Windows runner 的默认 stdout 是 cp1252：本脚本的输出**必然是中文**
+# （tag 注释、发布说明），上一版 CI 就是在 print("FAIL …中文…") 上
+# UnicodeEncodeError 崩掉，而崩在打印 FAIL 的那一刻意味着
+# "判据没过" 这条信息本身也没了。统一改 UTF-8，打不出就替换，绝不因编码崩。
+try:
+    for _f in (sys.stdout, sys.stderr):
+        if hasattr(_f, "reconfigure"):
+            _f.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 MAX_LEN = 200
 
 _SKIP_RES = (
@@ -102,12 +113,14 @@ def tag_annotation(tag, cwd=None):
         #   notes 变成随机一条提交标题。
         t = subprocess.run(
             ["git", "for-each-ref", "--format=%(objecttype)", "refs/tags/" + tag],
-            capture_output=True, text=True, cwd=cwd, timeout=30)
+            capture_output=True, text=True, cwd=cwd, timeout=30,
+            encoding="utf-8", errors="replace")
         if t.returncode != 0 or t.stdout.strip() != "tag":
             return ""
         r = subprocess.run(
             ["git", "for-each-ref", "--format=%(contents)", "refs/tags/" + tag],
-            capture_output=True, text=True, cwd=cwd, timeout=30)
+            capture_output=True, text=True, cwd=cwd, timeout=30,
+            encoding="utf-8", errors="replace")
     except Exception:
         return ""
     if r.returncode != 0:
@@ -122,7 +135,10 @@ def extract(tag, note_file=None, cwd=None):
         return got
     if note_file:
         try:
-            with open(note_file, "r", encoding="utf-8", errors="replace") as f:
+            # utf-8-sig 不是多余：RELEASE-NOTES.md 由 CI 的 PowerShell 写，
+            # pwsh 7 不带 BOM，但 Windows PowerShell 5.1 的 -Encoding utf8 带 ——
+            # 带 BOM 时第一条非空行会是 "\ufeff## 标题"，判据会整条走偏。
+            with open(note_file, "r", encoding="utf-8-sig", errors="replace") as f:
                 return first_prose(f.read())
         except Exception:
             return ""
@@ -172,8 +188,10 @@ def _selftest():
     # 9. extract 的优先级：tag 注释优先于文件
     import tempfile, os
     d = tempfile.mkdtemp()
-    subprocess.run(["git", "init", "-q", d], check=True)
+    subprocess.run(["git", "init", "-q", d], check=True,
+                     encoding="utf-8", errors="replace")
     subprocess.run(["git", "-C", d, "commit", "-q", "--allow-empty", "-m", "base"],
+                     encoding="utf-8", errors="replace",
                    check=True, env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
                                     "PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", "/tmp")})
@@ -206,6 +224,19 @@ def _selftest():
           extract("v-struct", os.path.join(d, "n.md"), cwd=d), "文件里的正文")
     # 10. 不存在的仓库/无文件 → 不抛错
     check("no-repo-no-file", extract("whatever", None, cwd="/tmp"), "")
+    # 11. BOM：Windows PowerShell 5.1 的 -Encoding utf8 会写 BOM，
+    #     读它必须用 utf-8-sig，否则第一条可用正文变成 "\ufeff## 标题"，
+    #     判据会把标题当摘要发出去（静默错，不报错）。
+    bom = os.path.join(d, "bom.md")
+    with open(bom, "w", encoding="utf-8-sig") as f:
+        f.write("## 资产说明\n\n带 BOM 的正文\n")
+    check("bom-note-file", extract("no-such-tag-v0", bom, cwd=d), "带 BOM 的正文")
+    # 12. stdout 必须是 UTF-8：alpha.32 的 Windows 构建就是栽在这里 ——
+    #     print 中文 FAIL 行时 UnicodeEncodeError，**崩在报告失败的那一刻**，
+    #     于是"判据没过"这条信息本身也丢了。这条断言让"去掉 reconfigure"
+    #     在 Windows 上必红（Linux 默认 UTF-8，测不出差异，所以只能当真机门）。
+    enc = (getattr(sys.stdout, "encoding", "") or "").lower().replace("-", "").replace("_", "")
+    check("stdout-is-utf8", enc, "utf8")
 
     print("release_notes selftest: %d 通过 / %d 失败" % (ok, fail))
     return 0 if fail == 0 else 1
