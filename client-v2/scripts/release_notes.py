@@ -128,21 +128,34 @@ def tag_annotation(tag, cwd=None):
     return r.stdout
 
 
-def extract(tag, note_file=None, cwd=None):
-    """按上面的优先级取 notes。永远返回字符串，不抛错（CI 里抛错只会让发布更难排）。"""
-    got = first_prose(tag_annotation(tag, cwd=cwd))
-    if got:
-        return got
+def source_of(tag, note_file=None, cwd=None):
+    """(notes, 来源标记)。extract() 是它的包装，CI 用 --explain 把来源打进 stderr。
+
+    为什么要暴露来源：alpha.33 我修完编码，看到 notes 是中文就以为成了，
+    实际取的是**文件回退**那一行（"首次安装：下载 …"），设计里的第一优先级
+    （annotated tag 注释）在 CI 里根本没跑过 —— actions/checkout 默认不取 tag 对象，
+    `git for-each-ref refs/tags/...` 恒空。这类"第一优先级从来没生效过"的错，
+    只看输出结果永远发现不了，只能把来源本身打出来。
+    """
+    ann = first_prose(tag_annotation(tag, cwd=cwd))
+    if ann:
+        return ann, "annotation"
     if note_file:
         try:
             # utf-8-sig 不是多余：RELEASE-NOTES.md 由 CI 的 PowerShell 写，
             # pwsh 7 不带 BOM，但 Windows PowerShell 5.1 的 -Encoding utf8 带 ——
             # 带 BOM 时第一条非空行会是 "\ufeff## 标题"，判据会整条走偏。
             with open(note_file, "r", encoding="utf-8-sig", errors="replace") as f:
-                return first_prose(f.read())
+                p = first_prose(f.read())
+            return p, ("file" if p else "file-structural-only")
         except Exception:
-            return ""
-    return ""
+            return "", "file-error"
+    return "", "none"
+
+
+def extract(tag, note_file=None, cwd=None):
+    """按优先级取 notes。永远返回字符串，不抛错（CI 里抛错只会让发布更难排）。"""
+    return source_of(tag, note_file, cwd)[0]
 
 
 def _selftest():
@@ -224,6 +237,25 @@ def _selftest():
           extract("v-struct", os.path.join(d, "n.md"), cwd=d), "文件里的正文")
     # 10. 不存在的仓库/无文件 → 不抛错
     check("no-repo-no-file", extract("whatever", None, cwd="/tmp"), "")
+    # 10b. 来源标记：优先级"哪一档真的生效了"必须可见。
+    #      alpha.33 的教训：CI 里 checkout 不取 tag 对象，annotation 恒空，
+    #      输出的 notes 看着像"修好了"，其实走的是文件回退。
+    check("source-annotation", source_of("v-annot", os.path.join(d, "n.md"), cwd=d)[1],
+          "annotation")
+    check("source-file-fallback", source_of("v-light", os.path.join(d, "n.md"), cwd=d)[1], "file")
+    check("source-none", source_of("whatever", None, cwd="/tmp")[1], "none")
+    # 10c. --explain 的**文件**出口：CI 读的就是这个文件，
+    #      所以它必须被断言覆盖（stderr 出口只在我这台机器上有人看）。
+    out = os.path.join(d, "src.txt")
+    import contextlib, io as _io
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main(["--tag", "v-annot", "--file", os.path.join(d, "n.md"),
+                   "--cwd", d, "--explain", out])
+    check("explain-rc0", rc, 0)
+    with open(out, encoding="utf-8") as f:
+        check("explain-file", f.read().strip(), "notes-source=annotation")
+    check("explain-stdout-is-notes-only", buf.getvalue().strip(), "v-annot —— 逃生门")
     # 11. BOM：Windows PowerShell 5.1 的 -Encoding utf8 会写 BOM，
     #     读它必须用 utf-8-sig，否则第一条可用正文变成 "\ufeff## 标题"，
     #     判据会把标题当摘要发出去（静默错，不报错）。
@@ -248,10 +280,25 @@ def main(argv=None):
     ap.add_argument("--file", default=None)
     ap.add_argument("--cwd", default=None)
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--explain", default=None, metavar="PATH",
+                    help="把 notes 的来源标记写到该文件（同时写 stderr）；stdout 仍只有那一行")
     args = ap.parse_args(argv)
     if args.selftest:
         return _selftest()
-    print(extract(args.tag, args.file, cwd=args.cwd))
+    notes, src = source_of(args.tag, args.file, cwd=args.cwd)
+    if args.explain:
+        # 写文件而不是只写 stderr：CI 里 PowerShell 取"来源"这件事，
+        # 用数组 -match 去筛 stderr 是**本地无法验证**的逻辑（我没有 pwsh），
+        # 而 Get-Content 一个文件几乎不会错。把可测的部分留在 Python 这边。
+        line = "notes-source=%s" % src
+        print(line, file=sys.stderr)
+        try:
+            with open(args.explain, "w", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception as exc:
+            print("notes-source=write-failed(%s)" % exc, file=sys.stderr)
+            return 3
+    print(notes)
     return 0
 
 

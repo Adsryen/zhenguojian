@@ -8,7 +8,25 @@ export const mockEmbedApi = {
   attach: async (): Promise<AttachResult> => {
     // 验证钩子：headless 场景置 window.__zgjMockEmbed=true 谎报「内嵌可用」，
     // 驱动 PlayerView 的 bounds/hitBands 上报链路（真实 exe 恒 isMock=false）。
-    return { embedded: typeof window !== 'undefined' && !!window.__zgjMockEmbed, reason: 'mock-embed' }
+    // 顺手带回一份合成 host：徽标的判读字段（含"最上层是谁"）在真实桥之外
+    // 也需要有人端到端验一遍**渲染出来了没有**——上一轮的教训就是
+    // "字段在 Go 侧加了、前端没接"，那种错只有浏览器里才看得见。
+    if (typeof window !== 'undefined' && window.__zgjMockEmbed) {
+      return {
+        embedded: true,
+        reason: 'mock-embed',
+        host: {
+          supported: true,
+          parentHwnd: '0xMOCK', parentClass: 'Chrome_WidgetWin_1',
+          childHwnd: '0xMOCKC', childVisible: true,
+          childLeft: 100, childTop: 50, childWidth: 780, childHeight: 600,
+          probeX: 490, probeY: 350,
+          topAtCenterHwnd: '0xMOCKT', topAtCenterClass: 'Chrome_RenderWidgetHostHWND',
+          topIsChild: false, topContainsProbe: true
+        }
+      }
+    }
+    return { embedded: false, reason: 'mock-embed' }
   },
   setBounds: async (x: number, y: number, w: number, h: number, show: boolean): Promise<void> => {
     /* mock/无桥：no-op，但把上报序列记到 window.__zgjBounds 供 headless 断言

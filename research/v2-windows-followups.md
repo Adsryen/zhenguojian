@@ -403,3 +403,60 @@ alpha.31 的徽标回来了，现场是
   实测 **C1/C3/C4 全绿、只有 C2 红** —— 因为 running 之后 `last` 本来就是真尺寸。
   已把 mock 的记录加上 `first`，C1 改盯**第一次上报**，重跑反向验证 C1+C2 双红。
   又一次「绿 ≠ 覆盖」。
+
+### 62 轮：判读表最后一格不再留给人眼，并且 v1 反证掉一个假设
+
+**（1）新增"谁压着谁"的直读。** 原表最后一格要人看图判断"DOM 覆盖层还看得见吗"，
+这是把判断题留给人。现在直接问系统：取子窗屏幕矩形的**中心点**，
+`RealWindowFromPoint` 返回该像素最靠上的窗口，徽标末尾多出
+
+    · 该像素最上层=Chrome_RenderWidgetHostHWND=other     ← 别人压着我们 ⇒ airspace/z-order
+    · 该像素最上层=ZgjVideoHost=ours                      ← 我们在最上 ⇒ 该怪 mpv 没往这窗画
+    · 该像素最上层=…(selftest!)                           ← 探测点不在返回窗口矩形内，这条读数不可信
+
+第三行的自检位不是装饰：`RealWindowFromPoint` 是**按值传 POINT**（8 字节），x64 下要把
+x 放低 32 位、y 放高 32 位；打包写错不会报错，只会返回**另一个窗口的句柄**——
+一份看起来很可信的假数据。所以回读"返回窗口自己的矩形是否包含探测点"，
+不包含就把这条读数作废。打包函数 `mpv.PackPoint` 是纯算术，
+`embed_test.go` 里钉了 6 组含负数/极值的用例（互换 x/y 必须得到不同结果）。
+
+**（2）v1 反证：「mpv 在隐藏窗上 spawn 所以不画」这个假设不成立。**
+我本来怀疑必须先可见再 spawn。查 tag `v1-final` 的 `player.py`：
+
+    1450  def _show_poster(self, hint=""):
+    1452      self.surface.hide()          ← 交给 mpv 的那个窗，v1 在 spawn 前就是隐藏的
+    1455      self.poster.show()
+    1456      self.poster.raise_()
+    1543      wid = int(self.surface.winId())   ← 紧接着才取句柄交给 mpv
+
+也就是说 v1 同样在**隐藏态**spawn，差别只在它的隐藏窗**有真实尺寸**（Qt 的 hide()
+不改几何）。这正好把 61 轮的修法钉死：要修的是几何，不是可见性。
+`_swap_in_surface()`（1491）在首帧后才 `setVisible(True)` + `raise_()`（1377/1383），
+对应 v2 的 `show=true` 上报里那次 `SW_SHOWNA + SetWindowPos(HWND_TOP)`。
+
+**（3）接线断言。** 这类诊断字段的历史失败模式是"Go 加了、TS 类型加了、前端没接"
+（`GO_BINDINGS_EMBED` 就零引用过）。`hitbands_verify.py` 加 C5：mock attach 带回合成
+host，断言徽标里出现**具体值** `Chrome_RenderWidgetHostHWND=other` 且没有残留 `{top}`。
+反向对照实测：把 `embedHost.value = attach.host ?? null` 改成 `= null` →
+`FAIL C5 | badge=''`、脚本 exit 1。
+
+**（4）notes 的"第一优先级从来没生效过"。** alpha.33 的 Windows 构建绿了，
+`latest.json` 的 notes 也确实是中文，我一度认为编码修完就成了。
+实际取到的是**文件回退**那一行（"首次安装：下载 …"），不是 annotated tag 注释——
+`actions/checkout` 默认不取 tag 对象，`git for-each-ref refs/tags/<tag>` 在 CI 里恒空。
+从输出上看不出区别，所以这次把来源本身暴露出来：
+
+- `release_notes.py` 拆出 `source_of()` 返回 `(notes, 来源)`，CLI 加 `--explain PATH`
+  把来源**写进文件**（stdout 仍只有 notes 那一行）；selftest 加来源断言，17 → **25 通过**
+  （含 `explain-file`、`explain-stdout-is-notes-only`）。
+  为什么走文件：我本机没有 pwsh，「用数组 -match 筛 stderr」这种 PowerShell 逻辑
+  一行都验不了，而 `Get-Content` 读一个文件几乎不会错 —— 可测的部分留在 Python。
+- 两个 job 的 checkout 加 `fetch-tags: true`；
+- CI 步骤打印 `notes notes-source=… (len=…)`，并加硬门：
+  `git cat-file -t refs/tags/<tag>` = `tag`（有注释）而来源不是 annotation → **发布失败**。
+  lightweight tag 退回文件是设计内，所以只钉「有注释却没用它」。
+  ⚠ 这段 PowerShell 本身仍是**待执行**证据：本机无 pwsh，只有 YAML 解析通过，
+  真正生效要到下一次 tag 构建在 CI 里跑出来。
+
+本地实测 `python3 client-v2/scripts/release_notes.py --tag v2.0.0-alpha.33 --explain`
+= `notes-source=annotation` + 注释首行，说明脚本侧优先级本来就对，缺的是 CI 的 tag 对象。

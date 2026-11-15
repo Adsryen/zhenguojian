@@ -100,7 +100,15 @@ const embedDebugText = computed(() => {
     vis: h.childVisible ? 1 : 0,
     inW: h.lastInW ?? 0, inH: h.lastInH ?? 0,
     outW: h.lastOutW ?? 0, outH: h.lastOutH ?? 0,
-    outVis: h.lastOutVisible ? 1 : 0
+    outVis: h.lastOutVisible ? 1 : 0,
+    /* 判读表最后一格（"覆盖层还看得见吗"）从人眼判断改成系统直读：
+       子窗矩形中心那个像素上最靠上的窗口是谁。值一律 ASCII —— 这是界面文本，
+       中文串会被 i18n 静态扫描抓（上一轮真抓过我这种写法）。
+       `=ours` = 子窗压在最上 ⇒ 黑屏该怪 mpv 没往这窗画；
+       `=other` = 别人压在上面（多半 Chrome_RenderWidgetHostHWND=WebView2）⇒ airspace/z-order；
+       末尾 `(selftest!)` = 探测点不在返回窗口矩形内，这条读数不可信，别按它判案。 */
+    top: !h.topAtCenterHwnd ? 'no-probe'
+      : (h.topAtCenterClass || '?') + (h.topIsChild ? '=ours' : '=other') + (h.topContainsProbe ? '' : '(selftest!)')
   })
 })
 

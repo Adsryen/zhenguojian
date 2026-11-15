@@ -6,6 +6,7 @@ package mpv
 
 import (
 	"testing"
+	"unsafe"
 )
 
 func TestVideoRect(t *testing.T) {
@@ -220,5 +221,30 @@ func TestSetHitBandsRoundTrip(t *testing.T) {
 	p.SetVideoHitBands(20, 30)
 	if got := VideoHitBands(); got != (HitBands{Top: 20, Bottom: 30}) {
 		t.Fatalf("Player 透传 got=%+v", got)
+	}
+}
+
+// PackPoint 是"按值传 POINT"的唯一出口，纯算术，所以能在任何平台钉住。
+// 它错不会报错，只会**返回另一个窗口的句柄**——诊断数据看着很可信但是假的，
+// 这类错只能靠断言，不能靠运行时。
+func TestPackPointIsMakelong(t *testing.T) {
+	if unsafe.Sizeof(uintptr(0)) != 8 {
+		t.Skip("uintptr 非 8 字节，打包口径不适用")
+	}
+	cases := []struct{ x, y int32 }{
+		{0, 0}, {1, 2}, {0x7FFF, -1}, {-1, -1}, {-1920, 1080},
+		{0x7FFFFFFF, -0x80000000},
+	}
+	for _, c := range cases {
+		got := uint64(PackPoint(c.x, c.y))
+		if lo, hi := uint32(got&0xFFFFFFFF), uint32(got>>32); lo != uint32(c.x) || hi != uint32(c.y) {
+			t.Errorf("PackPoint(%d,%d)=0x%x：低 32 位=%d 高 32 位=%d，应为 x=%d y=%d",
+				c.x, c.y, got, lo, hi, uint32(c.x), uint32(c.y))
+		}
+	}
+	// x/y 不能对称到互换后同值：互换必须得到不同结果，否则"打包反了"这种错
+	// 在上面的断言里也可能被发现不了（比如我把两行写反但都取 0）。
+	if PackPoint(11, 22) == PackPoint(22, 11) {
+		t.Error("PackPoint(11,22) == PackPoint(22,11)：x/y 没分开")
 	}
 }

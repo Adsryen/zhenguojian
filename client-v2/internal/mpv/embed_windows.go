@@ -48,6 +48,7 @@ func init() {
 		"IsWindowVisible", "RegisterClassExW", "CreateWindowExW", "DefWindowProcW",
 		"MoveWindow", "ShowWindow", "SetWindowPos", "DestroyWindow",
 		"ScreenToClient", "GetClientRect", "GetWindowRect",
+		"RealWindowFromPoint",
 	} {
 		procEmbed[n] = user32Embed.NewProc(n)
 	}
@@ -322,6 +323,24 @@ func (e *EmbedHost) Debug() HostDebug {
 		if ret, _, _ := procEmbed["GetWindowRect"].Call(uintptr(e.child), uintptr(unsafe.Pointer(&rc))); ret != 0 {
 			d.ChildLeft, d.ChildTop = int(rc.Left), int(rc.Top)
 			d.ChildWidth, d.ChildHeight = int(rc.Right-rc.Left), int(rc.Bottom-rc.Top)
+			// 判读表最后一格不再留给人眼：问系统"这个点上谁在最上面"。
+			// 尺寸不足 2×2 时中心点没有意义（多半是没摆位），就不探，
+			// 保持 TopAtCenterHwnd 为空串——空串本身就是"没摆位"的读数。
+			if d.ChildWidth >= 2 && d.ChildHeight >= 2 {
+				px := rc.Left + (rc.Right-rc.Left)/2
+				py := rc.Top + (rc.Bottom-rc.Top)/2
+				d.ProbeX, d.ProbeY = int(px), int(py)
+				top, _, _ := procEmbed["RealWindowFromPoint"].Call(PackPoint(px, py))
+				d.TopAtCenterHwnd = fmt.Sprintf("0x%x", top)
+				if top != 0 {
+					d.TopAtCenterCls = winString(procEmbed["GetClassNameW"], top)
+					d.TopIsChild = top == uintptr(e.child)
+					var tr windows.Rect
+					if r2, _, _ := procEmbed["GetWindowRect"].Call(top, uintptr(unsafe.Pointer(&tr))); r2 != 0 {
+						d.TopContainsProbe = px >= tr.Left && px < tr.Right && py >= tr.Top && py < tr.Bottom
+					}
+				}
+			}
 		}
 	}
 	return d

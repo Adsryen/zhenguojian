@@ -86,6 +86,16 @@ export interface EmbedHostDebug {
   lastOutY?: number
   lastOutW?: number
   lastOutH?: number
+  /* 「这个像素上谁在最上面」直读（判读表最后一格不再靠人眼看覆盖层）。
+     非 Windows / 桥读失败时全为 undefined，徽标显示 ?。 */
+  probeX?: number
+  probeY?: number
+  topAtCenterHwnd?: string
+  topAtCenterClass?: string
+  topIsChild?: boolean
+  /* 自检位：false = 探测点不在返回窗口的矩形里，说明这条读数不可信
+     （POINT 按值打包错了不会报错，只会返回另一个窗口的句柄）。 */
+  topContainsProbe?: boolean
 }
 
 export interface AttachResult {

@@ -24,6 +24,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        # fetch-tags 不是可选：默认 checkout **不取 tag 对象**，于是
+        # `git for-each-ref refs/tags/<tag>` 恒空，release_notes 设计里的第一优先级
+        # （annotated tag 注释）在 CI 里从来没生效过 —— alpha.33 的 latest.json notes
+        # 就是文件回退那一行，而我从输出上看不出区别。
+        with:
+          fetch-tags: true
       - uses: actions/setup-go@v5
         with:
           go-version: "1.24"
@@ -155,6 +161,12 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
+        # fetch-tags 不是可选：默认 checkout **不取 tag 对象**，于是
+        # `git for-each-ref refs/tags/<tag>` 恒空，release_notes 设计里的第一优先级
+        # （annotated tag 注释）在 CI 里从来没生效过 —— alpha.33 的 latest.json notes
+        # 就是文件回退那一行，而我从输出上看不出区别。
+        with:
+          fetch-tags: true
 
       - uses: actions/setup-go@v5
         with:
@@ -505,10 +517,28 @@ jobs:
           $rs = "client-v2/scripts/release_notes.py"
           python $rs --selftest
           if ($LASTEXITCODE -ne 0) { throw "release_notes selftest 失败，不带着坏判据发布" }
-          $notes = (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md |
-                    Select-Object -First 1)
+          # 来源走**文件**而不是解析 stderr：我本机没有 pwsh，
+          # 「用数组 -match 筛 stderr」这种 PowerShell 逻辑一行都没法验证；
+          # 而 Get-Content 读一个文件几乎不会错，可测的部分全留在 Python
+          # （selftest 里 explain-file / explain-stdout-is-notes-only 三条钉住）。
+          $srcFile = "$env:RUNNER_TEMP/notes-source.txt"
+          Remove-Item $srcFile -ErrorAction SilentlyContinue
+          $notes = (& python $rs --tag $tag --file client-v2/build/bin/RELEASE-NOTES.md
+                      --explain $srcFile | Select-Object -First 1)
           if ($LASTEXITCODE -ne 0) { throw "release_notes 取摘要失败 (exit $LASTEXITCODE)" }
           if (-not $notes) { $notes = "" }
+          $src = ""
+          if (Test-Path $srcFile) { $src = (Get-Content -Raw $srcFile).Trim() }
+          Write-Host "notes $src (len=$(($notes | Out-String).Trim().Length))"
+          # 硬门：tag 对象存在（annotated）却没走 annotation，说明优先级坏了
+          # 或 tag 没取回 —— 这正是 alpha.33 隐身的那条错：
+          # checkout 默认不取 tag 对象，notes 静默退化成文件回退，
+          # 而从 notes 的内容上看不出任何异常。lightweight tag 退回文件是设计内，
+          # 所以这里只钉「有注释却没用它」。
+          $tagType = (& git cat-file -t "refs/tags/$tag" 2>&1) | Select-Object -First 1
+          if (("$tagType" -eq 'tag') -and ($src -notmatch 'annotation')) {
+            throw "tag $tag 是 annotated（%(objecttype)=tag），但 $src —— annotation 优先级没生效，不带着它发布"
+          }
 
           $m = [ordered]@{
             schema      = 1

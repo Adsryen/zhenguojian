@@ -66,6 +66,28 @@ type HostDebug struct {
 	LastOutY       int  `json:"lastOutY"`
 	LastOutW       int  `json:"lastOutW"`
 	LastOutH       int  `json:"lastOutH"`
+	// —— 62 轮加的"谁压着谁"直读（airspace 判读表的最后一格）——
+	// 原来那一格要人眼看"DOM 覆盖层还看得见吗"，看得见=子窗没压过 WebView2，
+	// 看不见但全黑=mpv 没往这窗画。这是把判断题留给人。现在直接问系统：
+	// 子窗矩形中心那个像素上，最靠上的窗口是谁。
+	ProbeX          int    `json:"probeX"`
+	ProbeY          int    `json:"probeY"`
+	TopAtCenterHwnd string `json:"topAtCenterHwnd"`
+	TopAtCenterCls  string `json:"topAtCenterClass"`
+	TopIsChild      bool   `json:"topIsChild"`
+	// 自检：RealWindowFromPoint 是按值传 POINT（8 字节），x64 下要把 x 放低 32 位、
+	// y 放高 32 位。打包错了不会报错，只会**返回另一个窗口的句柄**——那就是拿假数据
+	// 下结论。所以这里回读"返回窗口自己的矩形是否真的包含探测点"：
+	// false 说明这条读数不可信（打包错/点跑到屏幕外），别按 TopIsChild 判案。
+	TopContainsProbe bool `json:"topContainsProbe"`
+}
+
+// PackPoint 把屏幕坐标打包成 RealWindowFromPoint/WindowFromPoint 的按值 POINT
+// （低 32 位 x，高 32 位 y，即 Win32 的 MAKELONG 口径）。
+// 单独抽出来是因为它是纯算术，能在任何平台跑断言。
+// 只在 64 位有意义（uintptr 32 位时高位会被截掉），而内嵌本身只有 Windows 实现。
+func PackPoint(x, y int32) uintptr {
+	return uintptr(uint64(uint32(x)) | uint64(uint32(y))<<32) //nolint:unconvert
 }
 
 // Bounds 是视频容器相对宿主窗口客户区的矩形，单位物理像素

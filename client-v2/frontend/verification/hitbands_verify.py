@@ -142,6 +142,18 @@ def main():
                   blast is not None and blast["show"] is True,
                   f"bounds={blast}")
 
+            # C5 徽标端到端：Go 侧新加的"该像素最上层是谁"必须真的显示出来。
+            # 为什么这条不能省：这类诊断字段的历史失败模式是
+            # "Go 加了字段、TS 类型加了、前端没接"（GO_BINDINGS_EMBED 就零引用过），
+            # 那种错在单测和 typecheck 里都不响，只有浏览器里看得见。
+            # mock attach 带回合成 host（Chrome_RenderWidgetHostHWND / topIsChild=false），
+            # 所以断言的是**具体值**，不是"元素存在"。
+            badge = page.locator('[data-testid="embed-debug"]').inner_text() if page.locator(
+                '[data-testid="embed-debug"]').count() else ""
+            check("C5 徽标渲染出「最上层」读数（Go→TS→界面接线通）",
+                  "Chrome_RenderWidgetHostHWND=other" in badge and "{top}" not in badge,
+                  f"badge={badge[:220]!r}")
+
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {
               const mk = (css, txt) => { const d = document.createElement('div');
