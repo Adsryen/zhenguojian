@@ -22,6 +22,7 @@ param(
   [string]$OutFile = "",
   [string]$RepoRoot = ".",
   [string]$NotesScript = "",
+  [string]$TempDir = "",
   [switch]$SelfTest
 )
 
@@ -213,8 +214,12 @@ if ($SelfTest) {
 }
 
 if (-not $Tag) { Write-Error "要么给 -Tag，要么给 -SelfTest"; exit 2 }
+# RUNNER_TEMP 只在 CI 里有；本地跑生产路径（我这就在跑）时它是空串，
+# Join-Path 空串会直接抛 "Cannot bind argument to parameter 'Path' because it is null"，
+# 所以这里兜到系统临时目录。
+if (-not $TempDir) { $TempDir = [IO.Path]::GetTempPath() }
 $m = New-Manifest -Tag $Tag -BinDir $BinDir -NotesFile $NotesFile -NotesScript $NotesScript `
-                  -RepoRoot $RepoRoot -TempDir $env:RUNNER_TEMP
+                  -RepoRoot $RepoRoot -TempDir $TempDir
 $json = $m | ConvertTo-Json -Depth 5
 $back = $json | ConvertFrom-Json
 if ($back.schema -ne 1 -or -not $back.assets.exe.sha256 -or $back.assets.exe.size -le 0 -or $back.tag -ne $Tag) {
