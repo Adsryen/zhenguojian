@@ -167,19 +167,37 @@ function Invoke-SelfTest {
   } "缺资产源文件"
 
   # 9) annotated tag 存在时，notes 必须用注释；用不了就该拒绝发布
+  # ⚠ 这段在 Windows runner 上第一次跑就红了（alpha.37），两条教训：
+  #   a) 建 annotated tag **也要提交者身份**。Linux 开发机有全局 user.name，
+  #      Windows runner 没有（checkout 只设 safe.directory），`git tag -a` 直接失败。
+  #   b) 我把 git 的 stderr 用 `2>&1 | Out-Null` 吞了，于是"设置没成功"在测试里
+  #      表现为"被测行为不对"（case 9 报的是 notes 不对，case 10 甚至假过——
+  #      一个 tag 都没建成的仓库，退回文件当然对）。**夹具必须自证建起来了。**
   $g = Join-Path $tmp "gitrepo"; New-Item -ItemType Directory -Force $g | Out-Null
-  & git -C $g init -q 2>&1 | Out-Null
+  $gitId = @("-c", "user.email=t@t", "-c", "user.name=t")
+  function Run-Git {
+    param([string[]]$a, [string]$what)
+    $o = & git @a 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "$what 失败（exit $LASTEXITCODE）：$($o -join ' / ')" }
+    return $o
+  }
+  Run-Git @("-C", $g, "init", "-q") "git init" | Out-Null
   Set-Content -Encoding utf8NoBOM -Path (Join-Path $g "a.txt") -Value "x"
-  & git -C $g add a.txt 2>&1 | Out-Null
-  & git -C $g -c user.email=t@t -c user.name=t commit -q -m "c" 2>&1 | Out-Null
-  & git -C $g tag -a v9.9.9-alpha.1 -m "v9.9.9-alpha.1 —— 注释首行是摘要" 2>&1 | Out-Null
+  Run-Git (@("-C", $g, "add", "a.txt")) "git add" | Out-Null
+  Run-Git (@("-C", $g) + $gitId + @("commit", "-q", "-m", "c")) "git commit" | Out-Null
+  Run-Git (@("-C", $g) + $gitId + @("tag", "-a", "v9.9.9-alpha.1", "-m", "v9.9.9-alpha.1 —— 注释首行是摘要")) "git tag -a" | Out-Null
+  # 夹具自证：tag 对象真的存在，否则后面全是空转
+  $t = Run-Git @("-C", $g, "cat-file", "-t", "refs/tags/v9.9.9-alpha.1") "tag 对象检查"
+  if (($t | Select-Object -First 1) -ne 'tag') { throw "夹具坏了：v9.9.9-alpha.1 不是 annotated tag（得到 $($t)）" }
   $m9 = New-Manifest -Tag "v9.9.9-alpha.1" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                      -RepoRoot $g -TempDir $tmp
   if ($m9.notes -eq "v9.9.9-alpha.1 —— 注释首行是摘要") { ok "9 annotated tag 注释优先于文件" }
   else { bad "9 优先级" "实际=[$($m9.notes)]" }
 
   # 10) lightweight tag 退回文件是设计内（不许误报）
-  & git -C $g tag v9.9.9-alpha.2 2>&1 | Out-Null
+  Run-Git (@("-C", $g, "tag", "v9.9.9-alpha.2")) "git tag（lightweight）" | Out-Null
+  $t2 = Run-Git @("-C", $g, "cat-file", "-t", "refs/tags/v9.9.9-alpha.2") "lightweight 检查"
+  if (($t2 | Select-Object -First 1) -eq 'tag') { throw "夹具坏了：v9.9.9-alpha.2 本该是 lightweight commit" }
   $m10 = New-Manifest -Tag "v9.9.9-alpha.2" -BinDir $bin -NotesFile $nf -NotesScript $notesScript `
                       -RepoRoot $g -TempDir $tmp
   if ($m10.notes -eq "这是发布说明的第一段正文。") { ok "10 lightweight tag 退回文件，不被硬门误伤" }
@@ -191,6 +209,15 @@ function Invoke-SelfTest {
   $stub = Join-Path $tmp "stub_notes.py"
   Set-Content -Encoding utf8NoBOM -Path $stub -Value @'
 import sys
+# 桩自己也要强制 UTF-8：alpha.37 的 Windows runner 上这个桩崩在
+# UnicodeEncodeError: 'charmap' codec can't encode characters（cp1252 打不出中文），
+# 于是 case 11 报的是"报错内容不对"而不是"门没响"——被测对象没错，是夹具坏了。
+# 这与 82 轮 release_notes.py 在 Windows 上崩是同一类错，我在新代码里又犯了一遍。
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 a = sys.argv
 notes = "这是桩给出的文件回退行。"
 i = a.index("--explain") + 1

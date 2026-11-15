@@ -644,3 +644,34 @@ alpha.35 的徽标会给出 `该像素最上层=…`：
 - `run_all.py` 九道预检全过；全量回归结果见提交信息。
 - alpha.37 待用 `scripts/release-check.sh` 核对（四段判据，见 18.4）。
 
+### 19.6 alpha.37 又红一次——但这次红得有价值，而且我拿到了**本地 Windows 替身**
+- alpha.37（run 43705834656）test-linux success、windows failure，仍是
+  `Generate latest.json`，但失败点变了：**新 selftest 自己在 Windows 上红两条**，
+  于是它按设计拒绝了发布（生产路径根本没跑到）：
+  ```
+  FAIL 9 优先级 | 实际=[这是发布说明的第一段正文。]
+  FAIL 11 annotated tag + 文件回退 = 拒绝发布 | 报错内容不对：release_notes 取摘要失败 (exit 1)
+  gen_latest_json selftest: 9 通过 / 2 失败
+  ```
+- 两条都不是"产品逻辑错"，是**夹具在 Windows 上坏掉**：
+  1. `git tag -a` 需要提交者身份。我的 Linux 开发机有全局 user.name，
+     全新 Windows runner 没有（checkout 只设 safe.directory）→ 建 tag 失败。
+     更坏的是我把 git 的 stderr 用 `2>&1 | Out-Null` 吞了，
+     于是"设置没成功"表现为"被测行为不对"：case 9 报的是 notes 不对，
+     **case 10 甚至假过**（一个 tag 都没建成的仓库，退回文件当然对）。
+  2. case 11 的 python 桩打中文到 stdout，cp1252 直接
+     `UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-11`。
+     这与 82 轮 release_notes.py 在 Windows 上崩是**同一类错，我在新代码里又犯了一遍**。
+- 修法：`Run-Git` 不吞 stderr、非 0 就 throw 并带上原文；每条 git 命令后加
+  **夹具自证**（`cat-file -t` 必须是 tag / 必须不是 tag）；桩里
+  `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`。
+- **本轮最值钱的产出：本地 Windows 替身。**
+  `HOME=<空目录> PYTHONIOENCODING=cp1252 pwsh -File gen_latest_json.ps1 -SelfTest`
+  实测：拿修复前的文件跑，报的两行 FAIL 与 CI 日志**逐字相同**；
+  修复后同一命令 11/11。也就是说这类 Windows 专属夹具错，
+  以后**不需要再烧一个 tag 才能发现**。已作为第十道预检进 run_all
+  （`gen_latest_json 自检（模拟 Windows runner）`，与本机那遍并列跑）。
+- 顺带修 `scripts/release-check.sh` 自己的一条假失败：我在推完 tag 几秒后就跑
+  `--wait`，那时 GitHub 还没建出 run，脚本直接判"没有任何 build-v2 运行"退出。
+  `--wait` 的语义必须包含**等 run 出现**（现在 15s 一次、最长 5 分钟）。
+

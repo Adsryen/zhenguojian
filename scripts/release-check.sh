@@ -30,9 +30,12 @@ SHA=$(git -C "$REPO_DIR" rev-parse "$TAG^{commit}") || fail "本地找不到 tag
 echo "[tag $TAG → sha ${SHA:0:12}]"
 
 # ── 1) 找到这个 commit 上那条 build-v2 run ────────────────────────────────
-RUN_JSON=$(ghq "repos/$OWNER/actions/runs?head_sha=$SHA&per_page=100")
-[ -n "$RUN_JSON" ] || fail "取不到 runs（网络/令牌）"
-RUN=$(python3 - "$RUN_JSON" "$WF" <<'PY'
+# ⚠ 83 轮的教训：我在推完 tag 几秒后就跑 release-check --wait，
+# 那时 GitHub 还没建出 run，脚本直接判「没有任何 build-v2 运行」退出。
+# --wait 的语义必须包含**等 run 出现**，不然这道门在最快的用法下自己就是假失败。
+find_run() {
+  RUN_JSON=$(ghq "repos/$OWNER/actions/runs?head_sha=$SHA&per_page=100")
+  RUN=$(python3 - "$RUN_JSON" "$WF" <<'PY'
 import json,sys
 d=json.loads(sys.argv[1]); want=sys.argv[2]
 rs=[r for r in d.get('workflow_runs',[]) if r['name']==want]
@@ -41,6 +44,15 @@ r=max(rs, key=lambda x: x['id'])
 print(f"{r['id']}|{r['status']}|{r['conclusion']}|{r['html_url']}")
 PY
 )
+}
+find_run
+if [ "$WAIT" = "--wait" ] && [ -z "$RUN" ]; then
+  echo "还没看到 $WF 的 run，等它出现（15s 一次，最长 5 分钟）…"
+  for _ in $(seq 20); do
+    sleep 15; find_run; [ -n "$RUN" ] && break; echo -n "."
+  done
+  echo
+fi
 [ -n "$RUN" ] || fail "这个 commit 上没有任何 $WF 运行——tag 可能没触发工作流（检查 on.push.tags）"
 RUN_ID=${RUN%%|*}; REST=${RUN#*|}; RSTATUS=${REST%%|*}; RCONC=${REST#*|}; RURL=${RCONC#*|}; RCONC=${RCONC%%|*}
 echo "[run $RUN_ID] status=$RSTATUS conclusion=${RCONC:-none}"

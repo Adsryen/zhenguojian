@@ -22,6 +22,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -425,18 +426,34 @@ def main():
     else:
         for label, gate_args in (("pwsh 语法门自检", [_gate, "--selftest"]),
                                  ("pwsh 语法门（真 workflow）", [_gate]),
-                                 ("gen_latest_json 自检", None)):
-            if gate_args is None:
+                                 ("gen_latest_json 自检", None),
+                                 ("gen_latest_json 自检（模拟 Windows runner）", "win")):
+            if gate_args == "win":
+                # 83 轮实测：alpha.37 的 windows job 红两条（case 9 / case 11），
+                # 而同一份代码在本机全绿。差异只有两处——
+                #   ① 全新 runner 没有全局 git 身份（annotated tag 建不起来）；
+                #   ② 控制台/子进程默认 cp1252（中文 stdout 直接 UnicodeEncodeError）。
+                # 用 HOME=空目录 + PYTHONIOENCODING=cp1252 就能在 Linux 上逐字复现：
+                # 拿修复前的文件跑，报的 FAIL 行与 CI 日志**一模一样**。
+                # 所以这道门以后必须两种环境都跑，不能只跑本机这一种。
+                empty_home = os.path.join(tempfile.gettempdir(), "zgj-no-git-home")
+                os.makedirs(empty_home, exist_ok=True)
+                cmd = [_pwsh, "-NoProfile", "-File", _glj, "-SelfTest"]
+                extra_env = dict(HOME=empty_home, USERPROFILE=empty_home,
+                                 PYTHONIOENCODING="cp1252")
+            elif gate_args is None:
                 if not os.path.exists(_glj):
                     print("FAIL 找不到 %s" % _glj)
                     return 1
                 cmd = [_pwsh, "-NoProfile", "-File", _glj, "-SelfTest"]
+                extra_env = {}
             else:
                 cmd = [sys.executable] + gate_args
+                extra_env = {}
             cwd = ROOT
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=300,
                                cwd=cwd, stdin=subprocess.DEVNULL,
-                               env=dict(os.environ, PWSH=_pwsh))
+                               env=dict(os.environ, PWSH=_pwsh, **extra_env))
             out = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
             # 摘要行按关键字找：pwsh 那条的最后一行是 release_notes 的
             # `notes-source=file-fallback`（子进程 stderr 透传），拿最后一行会读错。
