@@ -205,6 +205,11 @@ jobs:
             Remove-Item -Recurse -Force node_modules -ErrorAction SilentlyContinue
           }
           if (-not $inst) { exit 1 }
+          # 第九十六轮门禁补口：CI 此前只 build，typecheck/单测红也能发版
+          # （前端唯一防线一直是本机 run_all 预检，CI 绿≠类型过）。
+          # 两道都在 build 之前：红了整个 release job 死掉，资产零产出。
+          npm run test
+          npx vue-tsc --noEmit
           npm run build
 
       - name: Windows resources (icon/manifest/version)
