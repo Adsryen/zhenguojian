@@ -33,7 +33,6 @@ func testParentProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintp
 func createTestWailsParent(t *testing.T) (windows.HWND, func()) {
 	t.Helper()
 	user32 := windows.NewLazySystemDLL("user32.dll")
-	getStock := user32.NewProc("GetStockObject")
 	reg := user32.NewProc("RegisterClassExW")
 	create := user32.NewProc("CreateWindowExW")
 	show := user32.NewProc("ShowWindow")
@@ -48,7 +47,13 @@ func createTestWailsParent(t *testing.T) (windows.HWND, func()) {
 		t.Fatalf("UTF16PtrFromString(%s): %v", MainWindowTitle, err)
 	}
 	whiteBrush := 5 // 0xFFFFFF / WHITE_BRUSH 常量；父窗背景无所谓
-	bg, _, _ := getStock.Call(uintptr(whiteBrush))
+	// 第九十七轮：GetStockObject 在 gdi32.dll，不在 user32.dll。
+	// 旧写法 `user32.NewProc("GetStockObject")` 在**真 Windows** 上
+	// mustFind 直接 panic（user32 没有该导出）；Wine 6 把它当别名塞进了
+	// user32 才一直没炸——又一个「只在 Wine 编译过、从没在真机跑过」的坑。
+	// 生产代码 embed_windows.go:56 用的就是 gdi32 的 GetStockObject（procEmbed），
+	// 这里照生产取，父窗与子窗同一来源，语义对齐。
+	bg, _, _ := procEmbed["GetStockObject"].Call(uintptr(whiteBrush))
 
 	hInst, errInst := winapi.SelfModule()
 	if errInst != nil {
