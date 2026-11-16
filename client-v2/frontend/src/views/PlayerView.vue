@@ -32,7 +32,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, SPEED_CHOICES, QUALITY_CHOICES } from '@/stores/player'
 import { dramaFromQuery, detailRoute } from '@/services/dramaRef'
-import { api, embedApi, type EmbedHostDebug, type EmbedDiagInfo } from '@/services/api'
+import { api, embedApi, MOCK_MODE, ipcLedgerSummary, type EmbedHostDebug, type EmbedDiagInfo } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
@@ -144,7 +144,7 @@ const embedDebugText = computed(() => {
 const embedCopy = ref<'idle' | 'ok' | 'fail'>('idle')
 
 const embedDiagInfo = ref<EmbedDiagInfo | null>(null)
-function embedDiagText(): string {
+function embedDiagText(pingLine: string, ipcLine: string): string {
   const d = embedDiagInfo.value
   return [
     `version=${appVersion.value || '?'}`,
@@ -152,6 +152,14 @@ function embedDiagText(): string {
     `error=${store.error || ''}`,
     `measured=${embedMeasure.value || 'n/a'}`,
     `report-error=${embedSetErr.value || 'none'}`,
+    /* 第九十七轮 alpha.42 新增两行，把定案缺口补在**复制这一刻**：
+       ping= 现场心跳：复制前 2s 超时的即时 Ping 往返。alpha.41 的 diag 到达
+       而 setBounds 没到——不对称在传输层；现场 Ping 直接回答「此刻 IPC 通不通」
+       （pong<2000=通，timeout=此刻不通）。
+       ipc= 账本：每方法 sent/settled（挂起 P、错误 e）。PlayerSetBounds:3/0P3
+       = 发了 3 次一次没回 = alpha.41 指纹的前端侧读数，与 Go 的 arrived 对撞。 */
+    `ping=${pingLine}`,
+    `ipc=${ipcLine}`,
     /* 第九十六轮：diag= 行把 Go 侧 app.log 的「实际到达次数」带回前端现场。
        arrived 与前端量得的 #N 并排：N>0 而 arrived=0 → IPC 没到 Go；
        arrived==N 而子窗仍 1×1 → 到了 Go 但锁排队/未执行（waitMs 在日志里）。 */
@@ -161,8 +169,27 @@ function embedDiagText(): string {
 }
 
 async function copyEmbedDiag() {
-  const text = embedDiagText()
   embedCopy.value = 'idle'
+  /* 复制前现场取数（第九十七轮）：① 重取 diag——arrived 是计数，取早了会少
+     （用户先点播放再复制的场景）；② 现场 Ping——诊断按钮按下的**这一刻**
+     IPC 还通不通，2s 超时（不 await 挂起：Promise.race 兜底）。 */
+  let freshDiag: EmbedDiagInfo | null = embedDiagInfo.value
+  if (embedActive) {
+    freshDiag = await embedApi.diag().catch(() => null)
+    if (freshDiag) embedDiagInfo.value = freshDiag
+  }
+  const pingMs = await Promise.race<number | 'timeout'>([
+    embedApi.pingLive(),
+    new Promise<'timeout'>(res => setTimeout(() => res('timeout'), 2000))
+  ])
+  const ipcLine = ipcLedgerSummary()
+  /* ping 三态：pong<Nms>=现场通；timeout=2s 内没回（挂起指纹的现场证据）；
+     mock/no-bridge=非真桥路径（pingLive 回 -1），不显示成负数时长。 */
+  let pingLine: string
+  if (pingMs === 'timeout') pingLine = 'timeout'
+  else if (pingMs < 0) pingLine = MOCK_MODE ? 'mock' : 'no-bridge'
+  else pingLine = `pong${Math.round(pingMs)}ms`
+  const text = embedDiagText(pingLine, ipcLine)
   try {
     await navigator.clipboard.writeText(text)
     embedCopy.value = 'ok'
@@ -487,6 +514,19 @@ function onStageResize() {
   void reportBounds()
 }
 
+/* 有界等待：promise 在 ms 内 settle 就用它的结果，否则放弃等待（原 promise
+   继续在后台跑，settle 后仍会更新 embedHost/embedSetErr，无害）。
+   第九十七轮 alpha.42：onMounted 里 `await reportBounds()` 是我为修「起手摆位」
+   加的（第六十一轮），但它有个致命副作用——若 setBounds 的 IPC 挂起（alpha.40/41
+   真机指纹），整条 boot 链被卡死：不 boot、不 spawn、buildInfo 不显、自愈合
+   逃生门永不 arm（它等 running）。挂起的 IPC 不该有卡死 boot 链的权力：
+   起手摆位最多等 1.5s，等不到就继续 boot——spawn 前没摆位顶多是 mpv 在旧
+   几何上画，ResizeObserver/状态 watch 会立刻补报；而 boot 卡死的代价是
+   用户永远黑屏且没有任何自愈路径。 */
+function bounded<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  return Promise.race([p, new Promise<undefined>(res => setTimeout(() => res(undefined), ms))])
+}
+
 onMounted(async () => {
   // attach 必须先于 bootFromQuery→PlayerOpen：mpv spawn 时 --wid 才已就位。
   const attach = await embedApi.attach()
@@ -516,11 +556,12 @@ onMounted(async () => {
     if (barEl.value) barsRO.observe(barEl.value)
     window.addEventListener('resize', onStageResize)
   }
-  /* ⚠ 必须 await，不能 void：bootFromQuery 会走到 PlayerOpen→mpv spawn，
-     而 spawn 那一刻窗口尺寸就是 mpv 的 drawable。旧写法 `void reportBounds()`
-     让这条 IPC 与 PlayerOpen 赛跑 —— 真机徽标实测到的 1×1 就是这么来的
-     （加上后端隐藏分支不摆位，两个洞叠在一起）。 */
-  await reportBounds()
+  /* ⚠ 起手摆位仍要"先于 spawn 的尽力等待"（spawn 那一刻的窗口尺寸就是 mpv
+     的 drawable，旧写法 void 化后与 PlayerOpen 赛跑出 1×1）——但必须**有界**：
+     1.5s 内 settle 最好；挂起就放弃等待继续 boot（reportBounds 是 async void
+     语义的兜底路径，settle 后照样更新 embedHost/embedSetErr，ResizeObserver
+     和状态 watch 也会持续补报）。见 bounded() 的注释：挂起不许卡死 boot 链。 */
+  await bounded(reportBounds(), 1500)
   // 版本号进徽标：不再有「这张图是哪个包」这种靠猜的回合
   api.buildInfo().then(b => { appVersion.value = b.version || 'dev' }).catch(() => {})
   window.addEventListener('keydown', onHotkey)

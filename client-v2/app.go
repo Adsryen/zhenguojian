@@ -726,12 +726,17 @@ func (a *App) PlayerAttach() (string, error) {
 // （旧签名把「隐藏」编码成 0×0，于是隐藏态永远不摆位 —— mpv 起进程时
 // 拿到的是创建尺寸的 1×1 drawable，见 mpv.Bounds.Show 的注释。）
 func (a *App) PlayerSetBounds(x, y, w, h int, show bool) (string, error) {
+	// 第九十七轮 alpha.42：计数挪到锁**前**。alpha.41 真机 arrived=0 时，
+	// 计数器还压在 embedMu.Lock() 之后——分不清「IPC 没到 Go」和「到了但
+	// 卡锁」。现在：函数体一进入就 +1（arrived 从此=「到达过函数体」的
+	// 真值），waitMs 单独记锁排队时长；两个数并排，三种故障形状互斥：
+	//   前端#N>0 + arrived=0     → IPC 投递层丢/挂（看 wails.* 行定案）
+	//   arrived=N + waitMs 大     → 到了 Go，锁被别的持锁者占
+	//   arrived=N + waitMs 小     → 到了也执行了，问题在 ApplyBounds 之后
 	waitStart := time.Now()
+	appLogSetBoundsArrived()
 	a.embedMu.Lock()
 	defer a.embedMu.Unlock()
-	// 到达日志：「前端说发了 N 次」与「Go 实际收到几次」的第一手对照。
-	// waitMs>1000 = 消息到了 Go 但锁被别人占着（排队），与「IPC 没到」
-	// （这里 0 行）是两种完全不同的故障——alpha.40 的矛盾就是分不开这两个。
 	appLogSetBounds(x, y, w, h, show, time.Since(waitStart).Milliseconds())
 	if a.embed == nil {
 		return marshalJSON(map[string]any{"ok": false})

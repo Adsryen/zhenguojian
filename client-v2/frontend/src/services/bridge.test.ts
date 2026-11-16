@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ApiError, clampOpacityPercent } from './contract'
-import { callGoRaw, callGo, embedBridge } from './bridge'
+import { callGoRaw, callGo, embedBridge, ipcLedgerSummary } from './bridge'
 
 describe('ApiError', () => {
   it('code 默认空串、message 原样', () => {
@@ -183,5 +183,58 @@ describe('embedBridge.setBounds 看门狗（挂起不得再显示成 none）', (
     const st = await embedBridge.setBounds(100, 50, 800, 600, true)
     expect(st.ok).toBe(false)
     expect(st.error).toContain('boom')
+  })
+})
+
+/* ── IPC 账本（第九十七轮 alpha.42）──
+   alpha.41 真机指纹「0 参数全到达、5 参数全没到且 promise 全未 settle」
+   需要前端侧的每方法 sent/settled/err 账才能与 Go 的 arrived 对撞。
+   账本挂在 window.__zgjIpcLedger（真机/假窗同路径），callGoRaw 是唯一咽喉。 */
+describe('IPC 账本（callGoRaw 咽喉记账 + ipcLedgerSummary 读数）', () => {
+  beforeEach(() => {
+    uninstallFakeApp()
+    const w = (globalThis as any).window
+    if (w) delete w.__zgjIpcLedger
+  })
+  afterEach(() => {
+    uninstallFakeApp()
+    const w = (globalThis as any).window
+    if (w) delete w.__zgjIpcLedger
+  })
+
+  it('正常调用：sent=settled，无 P/e 尾巴', async () => {
+    installFakeApp({ Ping: () => 'pong' })
+    await callGoRaw('Ping')
+    await callGoRaw('Ping')
+    const line = ipcLedgerSummary()
+    expect(line).toBe('Ping:2/2')
+  })
+
+  it('挂起调用：sent>settled，P 差值显形（alpha.41 指纹的前端侧）', async () => {
+    installFakeApp({
+      Ping: () => 'pong',
+      PlayerSetBounds: () => new Promise(() => { /* 永不 settle */ }),
+    })
+    await callGoRaw('Ping')
+    void callGoRaw('PlayerSetBounds', 1, 2, 3, 4, true) // 挂起，不 await
+    // 让微任务把 sent 记上
+    await new Promise(r => setTimeout(r, 10))
+    const line = ipcLedgerSummary()
+    expect(line).toContain('PlayerSetBounds:1/0P1')
+    expect(line).toContain('Ping:1/1')
+    // 挂起数>0 的排最前（对撞时第一眼看到的就是它）
+    expect(line.indexOf('PlayerSetBounds')).toBeLessThan(line.indexOf('Ping:1/1'))
+  })
+
+  it('被拒调用：e 计数（sent 仍含被拒的那次）', async () => {
+    installFakeApp({ Foo: () => { throw new Error('boom [source_blocked]') } })
+    await callGoRaw('Foo').catch(() => undefined)
+    const line = ipcLedgerSummary()
+    expect(line).toBe('Foo:1/1e1')
+  })
+
+  it('空账本 → "empty"（复制诊断里 ipc=empty 是合法读数，不是断言失败）', () => {
+    installFakeApp({})
+    expect(ipcLedgerSummary()).toBe('empty')
   })
 })

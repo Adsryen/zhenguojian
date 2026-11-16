@@ -32,5 +32,12 @@ declare global {
     /** 看门狗时长覆盖（ms）：bridge.embedBridge.setBounds 的 pending 阈值；
         vitest 单测压到几百 ms；真实 exe 无此键=默认 8000 */
     __zgjBoundsWdMs?: number
+    /* ── 第九十七轮（alpha.42 boot 链韧性）── */
+    /** mock 缝：置 true 让 mockEmbedApi.setBounds 永不 settle（IPC 挂起形状），
+        E2E 场景 E 回归「onMounted 的起手摆位不得卡死 boot 链」；真实 exe 不读 */
+    __zgjMockHangingBounds?: boolean
+    /** IPC 账本（bridge.callGoRaw 咽喉记账，真实 exe 与 mock 面同路径；
+        复制诊断 ipc= 行的数据源；E2E/vitest 断言用） */
+    __zgjIpcLedger?: Record<string, { sent: number; settled: number; err: number }>
   }
 }

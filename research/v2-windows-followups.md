@@ -1045,3 +1045,83 @@ Wine 6 缺 bcryptprimitives.dll（go1.24 二进制跑不了）、PPA 内容层�
 不通（dl.winehq.org 通但 ppa 源被掐）、且即使 Wine 跑通 Win32 几何测试
 也测不到 Wails IPC 层（主嫌疑所在）。执行级证据只能来自：用户实测
 alpha.41 后的 app.log + 复制诊断 diag= 行（不再需要 Ctrl+Shift+F12）。
+
+## 二十七、alpha.41 真机数据逐字段定案 + alpha.42：修自己埋的两个缺陷（97 轮）
+
+用户贴回 alpha.41 复制诊断（revision=f1e374d 已自证 exe 身份）。逐字段
+对照真实代码推演，结论如下——这一版把「猜」变成了「三种互斥形状 +
+现场取证」：
+
+### 27.1 alpha.41 指纹的定案级解读
+
+| 字段 | 读数 | 证明 |
+|---|---|---|
+| `diag` 行 | pid/revision 现场读到 | **IPC 传输整体是通的**，exe 是真 alpha.41 |
+| `error=player: 尚未打开播放会话` | ErrNotOpen | 只从控制方法（Play/Pause/Seek，service.go:536-587）返回，**Open 路径不返回它** → 用户点了视频区 → PlayerPlay（0 参数）到达 Go 且返回了 → 本次会话新产生，非脏状态 |
+| attach/diag/Ping | 全到达 | **0 参数绑定全通** |
+| `PlayerSetBounds` ×3 | `arrived=0` + 上报异常=none（无错误） | **5 参数绑定全没进函数体，promise 全未 settle** |
+| `version=?` | 徽标/复制都是 ? | onMounted 卡在 `await reportBounds()`，其后 buildInfo 未执行 → **bootFromQuery 未执行 → mpv 从未 spawn**（r0 l0 吻合） |
+
+不对称（0 参数通 / 5 参数挂）发生在 **Wails dispatcher 层**
+（ParseArgs/Call，绑定函数体之外）——但 Wails 源码读穿后的推论是：
+ParseArgs 失败 / Call panic 都会被 dispatcher 回执或 recover 打日志，
+**两种已知失败模式都解释不了「promise 永不 settle」**。所以本轮不赌
+根因，改成让产品自证：
+
+### 27.2 两个必须承认的自己埋的缺陷（alpha.42 修）
+
+1. **仪器盲区**：alpha.41 的 `arrived` 计数器压在 `embedMu.Lock()`
+   **之后**——`arrived=0` 分不清「IPC 没到 Go」和「到了但卡锁」。
+   修：`appLogSetBoundsArrived()` 挪到函数体一进入（锁前）；锁后
+   `appLogSetBounds` 只记行不计数。现在三种故障形状**互斥**：
+   - 前端 #N>0 + arrived=0 → IPC 投递层丢/挂（看 app.log 的 wails.* 行）
+   - arrived=N + waitMs 大 → 到了 Go，锁被别的持锁者占
+   - arrived=N + waitMs 小 → 到了也执行了，问题在 ApplyBounds 之后
+2. **boot 链卡死（产品级）**：onMounted 的 `await reportBounds()`
+   （第六十一轮为修「起手摆位」加的）在 setBounds 挂起时把整条 boot
+   链卡死——不 boot、不 spawn、version 不显、自愈合逃生永不 arm（等
+   running）。**用户黑屏时唯一的自愈路径被我自己的 await 关掉了。**
+   修：`bounded(reportBounds(), 1500)`——起手摆位最多等 1.5s（spawn
+   前摆位仍是尽力而为），挂起则放弃等待继续 boot；settle 后照旧更新
+   embedHost/embedSetErr，ResizeObserver/状态 watch 持续补报。
+   E2E 场景 E（`__zgjMockHangingBounds` 缝）直接回归：setBounds 永不
+   settle 时 `pinia player.running===true`（spawn 发生了）且复制诊断
+   `version=dev`（buildInfo 跑过了）——旧无界 await 在这两处都是死的。
+
+### 27.3 alpha.42 取证面（让下一次贴回直接定案）
+
+- **Wails 进程级日志接 app.<pid>.log**：`options.App.Logger` 公开字段
+  接 `wailsLogToAppLog`，`LogLevel=TRACE` 且 `LogLevelProduction=TRACE`
+  （CI tag=production 走后者，默认 ERROR——两个都必须显式设，app_dev.go
+  走 dev tag 与我们无关）。白名单只放行 dispatcher 的关键行：
+  `process message error:`（panic-recover 出口，**含被吞的报错原文**，
+  本指纹头号嫌疑）、`error parsing arguments`、`method '…' not
+  registered` 等；TRACE 只放行 `json call result data:`（每条 IPC 回执）。
+  噪音控制：2MiB 字节上限 + 2000 字符单行截断；app.log+stdout 双写。
+- **前端 IPC 账本**：`callGoRaw` 是全仓 80+ 个 Go 调用的唯一咽喉，
+  在这里记每方法 sent/settled/err（挂 `window.__zgjIpcLedger`）。
+  挂起的调用只算 sent——`sent-settled` 差值就是「在飞/挂起」数。
+  复制诊断新增 `ipc=` 行：`PlayerSetBounds:3/0P3` = 发了 3 次一次没回
+  （alpha.41 指纹的前端侧读数，与 Go arrived 对撞）。
+- **现场 Ping 心跳**：复制诊断前做 2s 超时的即时 Ping 往返 → `ping=`
+  行（pong<Nms>=此刻通 / timeout=此刻不通 / mock|no-bridge=非真桥）。
+  alpha.41 里「diag 到达而 setBounds 没到」的不对称，现场 Ping 直接
+  回答「此刻 IPC 还通不通」。
+- **复制时现场重取 diag**：arrived 是计数，页面挂载时取会偏旧；
+  复制那一刻重取 + ping + 账本三件套同框。
+
+### 27.4 门禁
+
+Go：vet/winvet rc=0、root+internal 测试 ok、gofmt 干净。前端：
+vue-tsc rc=0、vitest 49/49（+4 账本断言：正常 2/2、挂起 1/0P1 且挂起
+排最前、被拒 1/1e1、空账 empty）、hitbands E2E 28/28（+场景 E 三断言；
+E 场景首跑死于新 context 未授 clipboard-read——C7 的原始 ctx 授过，
+照抄补上）。
+
+### 27.5 诚实边界
+
+本提交对 Windows IPC 投递层仍无执行级证据（Linux 上 Wails 的
+postMessage 走 X11/WebKit 通道，与 Windows 的 chrome.webview 不是同一
+条路）。alpha.42 的价值是把「根因未定」变成「根因在三种互斥形状里，
+且产品会自己留下区分证据」——用户下一次贴回复制诊断 + app.log，
+无需再猜、无需再发探针版。

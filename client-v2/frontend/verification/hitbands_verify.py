@@ -286,6 +286,51 @@ def main():
             ctx_d.close()
             ctx_d2.close()
 
+            # ── 场景 E：setBounds 挂起不得卡死 boot 链（第九十七轮 alpha.42）──
+            # 我自己在第六十一轮埋的缺陷：onMounted 里 `await reportBounds()`
+            # 无界等待——setBounds 的 IPC 一旦挂起（alpha.40/41 真机指纹），
+            # 整条 boot 链卡死：不 boot、不 spawn、buildInfo 不显、自愈合逃生
+            # 永不触发。alpha.42 改成 bounded(reportBounds(), 1500)。
+            # mock 缝 __zgjMockHangingBounds 让 mock setBounds 永不 settle，
+            # 等价复刻真机「5 参数消息投递层挂起」。
+            # 判据：E1 boot 链走完（pinia player.running 置真——spawn 发生了）；
+            # E2 复制诊断含 version=dev（buildInfo 跑过了；旧代码此处恒 version=?）
+            #   且 ipc=/ping= 两行存在（alpha.42 新字段已接通，mock 面读数为
+            #   ipc=empty / ping=mock——断言的是**行在**，不是具体值）。
+            ctx_e = browser.new_context(viewport={"width": 1280, "height": 800})
+            # E2 要读剪贴板（复制诊断）——与原始 ctx 同授（C7 同款判据），
+            # 不授则 readText 抛 NotAllowedError（本轮 E 场景首跑就死在这）。
+            ctx_e.grant_permissions(["clipboard-read", "clipboard-write"], origin=BASE)
+            ctx_e.add_init_script(
+                "window.__zgjMockEmbed = true; window.__zgjMockHangingBounds = true; "
+                "window.__zgjAutoFbMs = 60000;")  # 逃生窗拉长，隔离本场景
+            page_e = ctx_e.new_page()
+            page_e.goto(PLAYER_URL)
+            page_e.wait_for_selector(".pl-stage", timeout=15000)
+            page_e.wait_for_function(
+                """() => {
+                  const st = document.querySelector('#app').__vue_app__.config
+                    .globalProperties.$pinia._s.get('player');
+                  return st && st.running === true;
+                }""", timeout=15000)
+            e_running = page_e.evaluate(
+                """() => {
+                  const st = document.querySelector('#app').__vue_app__.config
+                    .globalProperties.$pinia._s.get('player');
+                  return st ? st.running : null;
+                }""")
+            check("E1 setBounds 挂起时 boot 链仍走完（running 置真=spawn 发生了）",
+                  e_running is True, f"running={e_running}")
+            page_e.click('[data-testid="embed-copy-diag"]')
+            page_e.wait_for_timeout(500)
+            clip_e = page_e.evaluate("navigator.clipboard.readText()")
+            check("E2 buildInfo 跑过了（version=dev 而非 ?——旧无界 await 卡死点在此之后）",
+                  "version=dev" in clip_e, f"head={clip_e.splitlines()[0] if clip_e else 'empty'}")
+            check("E2b 复制诊断带 ipc= 与 ping= 行（alpha.42 新字段已接通前端）",
+                  "ipc=" in clip_e and "ping=mock" in clip_e,
+                  f"lines={clip_e.splitlines()[:9]}")
+            ctx_e.close()
+
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {
               const mk = (css, txt) => { const d = document.createElement('div');

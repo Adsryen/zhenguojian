@@ -36,12 +36,20 @@ export const mockEmbedApi = {
     /* mock/无桥：no-op，但把上报序列记到 window.__zgjBounds 供 headless 断言
        （真实时序契约见 bridge.embedBridge 头注释：几何与 show 分开）。 */
     if (typeof window !== 'undefined') {
+      /* 第九十七轮缝 __zgjMockHangingBounds：setBounds 永不返回（IPC 挂起形状）。
+         alpha.42 回归专用：onMounted 的起手摆位若仍 `await reportBounds()` 无界等待，
+         boot 链（bootFromQuery→spawn→running）会被这条挂起的 IPC 卡死——
+         用户黑屏且自愈合逃生永不触发（它等 running）。真机上这条缝对应
+         「Wails 投递层丢/挂 5 参数消息」的 alpha.40/41 指纹。 */
       const rec = window.__zgjBounds ?? { count: 0, first: null, last: null, hiddenWithGeometry: 0 }
       rec.count += 1
       if (!rec.first) rec.first = { x, y, w, h, show }
       rec.last = { x, y, w, h, show }
       if (!show && w > 1 && h > 1) rec.hiddenWithGeometry += 1
       window.__zgjBounds = rec
+      if (window.__zgjMockHangingBounds) {
+        return new Promise<EmbedSetStatus>(() => { /* 永不 settle */ })
+      }
       // applyCount 用同一个计数：headless 断言（hitbands C6）才能验到
       // 「徽标显示的次数」这条链路，而不是只验 mock 自己记的数。
       // 镜像真实 Debug 的语义：lastIn = 收到的入参原样，换算矩形只在尺寸有效时保留。

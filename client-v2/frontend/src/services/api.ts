@@ -8,7 +8,7 @@
    - 真实模式：window.go.main.App.<Method>(...) 返回 JSON 字符串（Go 侧 (string, error)）
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
 import type { EmbedSetStatus, AttachResult, NativeApi, EmbedDiagInfo } from './contract'
-import { hasBridge, realApi, embedBridge } from './bridge'
+import { hasBridge, realApi, embedBridge, callGoRaw } from './bridge'
 import { mockApi } from './mock'
 import { mockEmbedApi } from './mock/embed'
 
@@ -24,6 +24,9 @@ export const MOCK_MODE = isMock
 /* 旧命名再导出：调用方一行不改（'@/services/api' 的全部具名导出原位保留）。 */
 export { ApiError, clampOpacityPercent } from './contract'
 export type { EmbedHostDebug, AttachResult, EmbedDiagInfo } from './contract'
+// 第九十七轮 alpha.42：IPC 账本摘要（复制诊断的 ipc= 行）。走 facade 出口，
+// 组件层不直接 import bridge（与 embedApi 同纪律）。
+export { ipcLedgerSummary } from './bridge'
 
 /* ── V2-4 播放画面内嵌绑定（App.{PlayerAttach,PlayerSetBounds,PlayerHitBands,PlayerDetach}）──
    不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
@@ -69,5 +72,15 @@ export const embedApi = {
     if (isMock) return mockEmbedApi.diag()
     if (!hasBridge) return { version: '', revision: '', pid: 0, arrived: 0, logDir: '', logFail: 'no-bridge' }
     return embedBridge.diag()
+  },
+  /* 现场心跳（第九十七轮 alpha.42）：复制诊断前测一次真实 Ping 往返时长。
+     Ping 是 0 参数绑定——alpha.41 指纹里 0 参数全通、5 参数全挂，现场 Ping
+     直接回答「此刻 IPC 通不通」。mock/无桥回 -1（调用方显示 mock/no-bridge，
+     不显示 timeout——timeout 专指真桥 2s 不返回）。 */
+  pingLive: async (): Promise<number> => {
+    if (isMock || !hasBridge) return -1
+    const t0 = performance.now()
+    await callGoRaw('Ping')
+    return performance.now() - t0
   }
 }

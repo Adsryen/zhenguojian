@@ -9,6 +9,7 @@ import (
 	"zhenguojian/client-v2/internal/updater"
 
 	"github.com/wailsapp/wails/v2"
+	wailslogger "github.com/wailsapp/wails/v2/pkg/logger"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 )
@@ -67,6 +68,20 @@ func main() {
 		Bind: []interface{}{
 			app,
 		},
+		/* 第九十七轮 alpha.42：把 Wails 进程级日志接进 app.<pid>.log（app_log.go）。
+			   alpha.41 真机指纹「0 参数绑定全到达、5 参数 setBounds 全没到」说明
+			   故障点在 Wails dispatcher 层（ParseArgs/Call 在绑定函数体外面），
+			   绑定里的到达日志永远看不到它。dispatcher 的 panic-recover 会打
+			   "process message error: %s -> %s"（含被吞的报错原文）、ParseArgs 失败
+		   会打 "error parsing arguments"——默认这些日志级别 ERROR 起步、且写向
+			   exe 的 stderr（-H=windowsgui 下根本看不见）。TRACE 是为了拿到
+			   "json call result data"（每条 IPC 的回执，定案用）；噪音由
+			   wailsLogToAppLog 的白名单过滤，字节上限+单行截断兜底。
+			   两个级别都要设：CI 构建 tag=production（app_production.go 走
+			   LogLevelProduction，默认 ERROR）；wails dev 走 LogLevel（默认 INFO）。 */
+		Logger:             wailsLogToAppLog{},
+		LogLevel:           wailslogger.TRACE,
+		LogLevelProduction: wailslogger.TRACE,
 	})
 	if err != nil {
 		println("Error:", err.Error())

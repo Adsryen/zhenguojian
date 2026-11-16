@@ -52,9 +52,57 @@ function wailsApp(): Record<string, (...args: any[]) => Promise<string>> {
   return app
 }
 
+/* ── IPC 账本（第九十七轮 alpha.42）────────────────────────────────────────
+
+   alpha.41 真机指纹：attach/diag/Ping（0 参数）全到达、setBounds（5 参数）
+   全没到且 promise 全未 settle。要再定案一层——「丢消息是 setBounds 专属
+   还是所有带参调用都丢」——前端必须留一份**每方法**的发送/结算/错误账。
+   callGoRaw 是全部 Go 调用的唯一咽喉（realApi 80 方法 + embedBridge 全走它），
+   在这里记账覆盖面就是 100%，且零 mock 依赖：真桥/挂起/被拒都会计。
+   只统计进入 callGoRaw 的调用（mock 面在 facade 就分流了，不经过这里——
+   账本读数是「发给真桥的量」，与 diag 的 arrived 对撞正合适）。
+   挂起的调用只算 sent 不算 settled——sent-settled 差值就是「在飞/挂起」数，
+   这是复制诊断里最有用的一行。 */
+type IpcLedgerEntry = { sent: number; settled: number; err: number }
+function ipcLedger(): Record<string, IpcLedgerEntry> {
+  const w = (globalThis as any).window
+  if (w && typeof w === 'object') {
+    if (!w.__zgjIpcLedger) w.__zgjIpcLedger = {}
+    return w.__zgjIpcLedger as Record<string, IpcLedgerEntry>
+  }
+  return {} // node/vitest：无 window 时记在空对象上（单测会直接给假 window）
+}
+function ipcBump(method: string, field: 'sent' | 'settled' | 'err'): void {
+  const e = (ipcLedger()[method] ||= { sent: 0, settled: 0, err: 0 })
+  e[field]++
+}
+/** 复制诊断的 ipc= 行：按 sent 降序取前 15，挂起数（sent-settled）>0 的排最前。 */
+export function ipcLedgerSummary(): string {
+  const rows = Object.entries(ipcLedger())
+    .map(([m, e]) => ({ m, ...e, pending: e.sent - e.settled }))
+    .filter((e) => e.sent > 0)
+    .sort((a, b) => (b.pending - a.pending) || (b.sent - a.sent))
+    .slice(0, 15)
+    .map((e) => `${e.m}:${e.sent}/${e.settled}${e.err ? `e${e.err}` : ''}${e.pending ? `P${e.pending}` : ''}`)
+  return rows.join(' ') || 'empty'
+}
+
 /** Go 侧 bound 方法调用：返回原始字符串（Ping/DataPath 这类非 JSON 值直接用）。
     错误码约定（唯一剥码处）：Go 侧以 `message [code]` 结尾抛错，这里剥出 code 造 ApiError。 */
 export async function callGoRaw(method: string, ...args: any[]): Promise<string> {
+  ipcBump(method, 'sent')
+  try {
+    const raw = await callGoRawInner(method, ...args)
+    ipcBump(method, 'settled')
+    return raw
+  } catch (err) {
+    ipcBump(method, 'settled')
+    ipcBump(method, 'err')
+    throw err
+  }
+}
+
+async function callGoRawInner(method: string, ...args: any[]): Promise<string> {
   const fn = wailsApp()[method]
   if (typeof fn !== 'function') {
     throw new ApiError(`原生方法 ${method} 不存在`, 'bridge_missing')
