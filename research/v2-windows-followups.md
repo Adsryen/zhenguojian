@@ -997,3 +997,51 @@ player 包 TestOpenLocalDoesNotFetchOnlineDanmaku 偶发红（5 次 1 次、
   Linux 用户「点托盘检查更新看不到结果」的**真实体验缺口不是这条**——
   Linux 上根本没有托盘，手动检查走设置页按钮（updateCheck → Check，
   结果直接渲染在设置页结果行，一直好的）。
+
+## 二十六、alpha.40 黑屏静态审计收口：两条挂起假设证伪 + 三件套就位（96 轮）
+
+提交 82c24ba（三件套：Go 到达日志 / 前端看门狗 / 自愈合逃生 + EmbedDiag
+诊断面）。本轮用 Wails v2.10.1 源码（模块缓存
+/home/ryen/go/pkg/mod/github.com/wailsapp/wails/v2@v2.10.1）把最后两条
+「IPC 挂起」候选假设查掉：
+
+### 26.1 证伪：Wails 主 goroutine 串行阻塞
+
+- Windows `internal/frontend/desktop/windows/frontend.go:724`：每条 IPC
+  消息 `go f.dispatchMessage(message)`（独立 goroutine，dispatchMessage
+  内同步 ProcessMessage，'c' 前缀结果走 f.Callback）；Linux
+  `frontend.go:468` 同款 `go func(){ProcessMessage}`。
+- ⇒ 任何慢绑定（PlayerOpen 的分钟级 resolve、updateStartup 的网络重试）
+  都**不阻塞**其他绑定、不卡 UI 消息泵。「一个绑定卡死整个客户端」的
+  无响应解释不成立。
+
+### 26.2 证伪：embedMu 死锁
+
+- 5 个持锁者（app.go PlayerAttach/PlayerSetBounds/PlayerHitBands/
+  PlayerDetach/PlayerForceWindow）锁内调用逐一核对：
+  `mpv.SetHitBands`（embed.go:236）是 `hitBandsPacked.Store(...)` 原子写；
+  ApplyBounds/Debug 是轻 Win32 调用；NewEmbedHost 的 findHostWindow 有
+  2s deadline 上限；PlayerOpen **不**持 embedMu。无锁内阻塞点。
+
+### 26.3 未定案残留（等三件套数据）
+
+alpha.40 的 8 字段矛盾（前端 #3 次无异常 / Go applyCount=0 / version=? /
+e1「尚未打开播放会话」）在静态层面能同时解释的最小模型是**混合时序**：
+#1 setBounds 秒回（回执未带 host）、#2/#3 挂起、buildInfo reject、
+PlayerOpen 之后某控制调用撞 nil player。具体哪条 IPC 在哪一层丢/挂，
+只有三件套的真机数据能分判：
+- app.log `arrived` 计数 vs 前端 `前端量得#N`：N>0 且 arrived=0 →
+  Wails 投递层（WebView2 初始化/消息泵）；arrived==N 且 applyCount=0 →
+  锁排队/执行异常（waitMs 给时长）。
+- 看门狗 `pending>8s` 亮不亮：亮=某条 setBounds 真挂起；不亮=秒回但
+  ok=false（Go 侧降级分支，原因在日志）。
+- 自愈合逃生：无论根因，running 后 8s 子窗未摆 → 用户自动拿到独立窗
+  画面（reason=auto-fallback-unplaced，i18n 文案）。
+
+### 26.4 Windows 侧证据等级（诚实边界）
+
+本提交对 Windows 内嵌行为仍只有编译/vet/纯函数单测级证据，无执行级：
+Wine 6 缺 bcryptprimitives.dll（go1.24 二进制跑不了）、PPA 内容层网络
+不通（dl.winehq.org 通但 ppa 源被掐）、且即使 Wine 跑通 Win32 几何测试
+也测不到 Wails IPC 层（主嫌疑所在）。执行级证据只能来自：用户实测
+alpha.41 后的 app.log + 复制诊断 diag= 行（不再需要 Ctrl+Shift+F12）。
