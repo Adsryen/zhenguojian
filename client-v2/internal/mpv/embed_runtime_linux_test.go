@@ -202,3 +202,92 @@ func TestEmbedHostRuntimeUnderXvfb(t *testing.T) {
 	t.Logf("L5 子窗已销毁")
 	t.Log("L-ALL-PASS")
 }
+
+// TestFindHostWindowXUnderWmReparent 钉死「有 WM 时宿主发现失效」这个回归。
+// 真机断点（93 轮下半，xfwm4 + Xvfb 实测）：WM 把顶层窗 reparent 进自己的
+// frame 后，QueryTree(root) 只能看到 frame，看不到我们的客户端窗 → 发现链
+// 返回 0 → mpv 没拿到 --wid、退化成独立窗（root 下 640x360 mpv 窗）。
+// 修法（findHostWindowX）：候选窗 = EWMH _NET_CLIENT_LIST ∪ QueryTree(root)，
+// 再按 _NET_WM_PID==本进程 且 IsViewable 筛。本测试手工复刻 WM 的两个动作：
+//
+//	① 建一个「frame」顶层窗，把带 pid 的主窗 ReparentWindow 进去；
+//	② 在 root 上写 _NET_CLIENT_LIST=[主窗]（WM 维护的客户端列表）。
+//
+// 断言：发现链仍能选中主窗；子窗建在主窗下（frame 下不行）。
+func TestFindHostWindowXUnderWmReparent(t *testing.T) {
+	if os.Getenv("DISPLAY") == "" {
+		t.Skip("无 DISPLAY：X11 运行时测试跳过（CI 里由 Xvfb 步骤提供）")
+	}
+	parentConn, client := createTestTopLevelX(t)
+	defer func() {
+		xproto.DestroyWindow(parentConn, client)
+		parentConn.Close()
+	}()
+	// ① 建「WM frame」：一个不带本 pid 的普通顶层窗（模拟 xfwm4 的 frame）。
+	frame, err := xproto.NewWindowId(parentConn)
+	if err != nil {
+		t.Fatalf("NewWindowId(frame): %v", err)
+	}
+	info := xproto.Setup(parentConn)
+	screen := info.DefaultScreen(parentConn)
+	cookie := xproto.CreateWindowChecked(parentConn, screen.RootDepth, frame, screen.Root,
+		20, 20, 900, 700, 0,
+		xproto.WindowClassInputOutput, screen.RootVisual, 0, []uint32{})
+	if e := cookie.Check(); e != nil {
+		t.Fatalf("CreateWindow(frame): %v", e)
+	}
+	xproto.MapWindow(parentConn, frame)
+	// ② 把主窗 reparent 进 frame（xfwm4 的真实动作），坐标 0,0 无所谓。
+	if e := xproto.ReparentWindowChecked(parentConn, client, frame, 0, 0).Check(); e != nil {
+		t.Fatalf("ReparentWindow(主窗→frame): %v", e)
+	}
+	// ③ root 上写 _NET_CLIENT_LIST=[主窗]（WM 维护的客户端窗列表）。
+	listAtom, err := xproto.InternAtom(parentConn, false, uint16(len("_NET_CLIENT_LIST")), "_NET_CLIENT_LIST").Reply()
+	if err != nil {
+		t.Fatalf("InternAtom(_NET_CLIENT_LIST): %v", err)
+	}
+	listBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(listBuf, uint32(client))
+	if e := xproto.ChangePropertyChecked(parentConn, xproto.PropModeReplace, screen.Root,
+		listAtom.Atom, xproto.AtomWindow, 32, 1, listBuf).Check(); e != nil {
+		t.Fatalf("ChangeProperty(_NET_CLIENT_LIST): %v", e)
+	}
+	_, err = xproto.GetInputFocus(parentConn).Reply() // 冲刷
+	if err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	// 此刻 QueryTree(root) 里**没有** client（它挂在 frame 下）——
+	// 先断言这个前提成立，否则测的不是我想测的形态。
+	tree, err := xproto.QueryTree(parentConn, screen.Root).Reply()
+	if err != nil {
+		t.Fatalf("QueryTree: %v", err)
+	}
+	inRoot := false
+	for _, w := range tree.Children {
+		if w == client {
+			inRoot = true
+		}
+	}
+	if inRoot {
+		t.Fatalf("测试前提不成立：reparent 后主窗仍在 root 直接子窗里")
+	}
+	// 断言：发现链仍选中主窗。
+	if got := findHostWindowX(parentConn, screen.Root); got != client {
+		t.Fatalf("WM reparent 后宿主发现失效：选中 0x%x（期望 0x%x）——"+
+			"必须读 _NET_CLIENT_LIST 才能在 frame 下找到客户端窗", got, client)
+	}
+	t.Logf("WM reparent 后宿主发现正常：选中主窗 0x%x（frame=0x%x 下）", client, frame)
+	// 再走一遍完整生产路径：子窗必须建在主窗下，不是 frame 下。
+	host, err := NewEmbedHost()
+	if err != nil {
+		t.Fatalf("NewEmbedHost（WM 形态）失败: %v", err)
+	}
+	defer host.Close()
+	if host.parent != client {
+		t.Fatalf("WM 形态下子窗建错父：建在 0x%x 下（期望主窗 0x%x）", host.parent, client)
+	}
+	t.Logf("WM 形态下子窗已建在主窗下 XID=0x%x", host.HWND())
+	// 收尾：还原 reparent（frame 销毁会带走 client，但顺序上不依赖它）。
+	xproto.ReparentWindow(parentConn, client, screen.Root, 10, 10)
+	xproto.DestroyWindow(parentConn, frame)
+}

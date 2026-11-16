@@ -144,23 +144,48 @@ func NewEmbedHost() (*EmbedHost, error) {
 }
 
 // findHostWindowX：_NET_WM_PID == 本进程 pid **且处于 IsViewable** 的顶层窗。
-// 真机探针（Xvfb + 活 app 实跑，/tmp/xprobe）证实 Wails 会建**两个**带本进程
-// pid 的顶层窗：真正的 1280×800 主窗（IsViewable）和一个 10×10 隐形辅助窗
-// （IsUnMapped）；QueryTree 顺序不保证主窗在前，只按 pid 取第一个会选中
-// 辅助窗，子窗就建进 10×10 里、画面永不出现（Linux 首版整链实测的断点）。
-// 所以必须加 MapState 判据：Viewable 的才是能显示画面的宿主。
+//
+// 候选窗来源取「EWMH _NET_CLIENT_LIST ∪ QueryTree(root)」的并集，两条路都走
+// 是为了两种桌面形态都认得宿主：
+//   - 无 WM（裸 Xvfb）：_NET_CLIENT_LIST 不存在 → 回退 QueryTree(root) 的直接
+//     子窗（首版实测的形态）。
+//   - 有 WM（xfwm4/openbox 等）：WM 把顶层窗 **reparent** 进自己的 frame，
+//     QueryTree(root) 看到的是 frame 而不是我们的窗 → 首版在这里失效，
+//     mpv 没拿到 --wid、退化成独立窗（93 轮下半实测的断点）。此时 WM 维护的
+//     _NET_CLIENT_LIST 里恰好列着被 reparent 的**客户端窗**，读它就能找到。
+//
+// 选中判据（两条都得过）：
+//   - _NET_WM_PID == 本进程 pid（Wails 建两个带本 pid 的顶层窗：真主窗
+//     IsViewable + 10x10 隐形辅助窗 IsUnMapped，只按 pid 取第一个会选中
+//     辅助窗 → 必须再加 MapState 判据，Viewable 的才是能显示画面的宿主）；
+//   - MapState == IsViewable。
+//
 // 窗口标题/类名不作判据：类名随可执行文件名变，标题可被改。
 func findHostWindowX(c *xgb.Conn, root xproto.Window) xproto.Window {
-	tree, err := xproto.QueryTree(c, root).Reply()
-	if err != nil {
-		return 0
+	// 1) 候选窗：_NET_CLIENT_LIST（WM 维护）∪ QueryTree(root)（无 WM 回退）。
+	candidates := map[xproto.Window]struct{}{}
+	clientListAtom, err := xproto.InternAtom(c, false, uint16(len("_NET_CLIENT_LIST")), "_NET_CLIENT_LIST").Reply()
+	if err == nil {
+		if prop, e := xproto.GetProperty(c, false, root, clientListAtom.Atom, xproto.AtomWindow, 0, 1024).Reply(); e == nil && prop.Format == 32 {
+			for i := 0; i+4 <= len(prop.Value); i += 4 {
+				w := xproto.Window(binary.LittleEndian.Uint32(prop.Value[i : i+4]))
+				if w != 0 {
+					candidates[w] = struct{}{}
+				}
+			}
+		}
+	}
+	if tree, e := xproto.QueryTree(c, root).Reply(); e == nil {
+		for _, w := range tree.Children {
+			candidates[w] = struct{}{}
+		}
 	}
 	pidAtom, err := xproto.InternAtom(c, false, uint16(len("_NET_WM_PID")), "_NET_WM_PID").Reply()
 	if err != nil {
 		return 0
 	}
 	selfPid := uint32(os.Getpid())
-	for _, w := range tree.Children {
+	for w := range candidates {
 		prop, err := xproto.GetProperty(c, false, w, pidAtom.Atom, xproto.AtomCardinal, 0, 1).Reply()
 		if err != nil || prop.Format != 32 || len(prop.Value) < 4 {
 			continue
