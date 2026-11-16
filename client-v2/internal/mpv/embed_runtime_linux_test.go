@@ -63,6 +63,51 @@ func createTestTopLevelX(t *testing.T) (c *xgb.Conn, w xproto.Window) {
 	return c, w
 }
 
+// createDecoyTopLevelX 建一个 10×10 **未 map** 的同 pid 顶层窗——复刻 Wails 真机
+// 上那个带本进程 pid 的隐形辅助窗（Xvfb 探针实锤 0x200001 10x10 IsUnMapped）。
+// 用来钉死「findHostWindowX 只按 pid 取第一个 → 选中隐形窗」这个回归：
+// 修好的发现链必须跳过它、选中已 map 的主窗。
+func createDecoyTopLevelX(t *testing.T) *xgb.Conn {
+	t.Helper()
+	c, err := xgb.NewConn()
+	if err != nil {
+		t.Skipf("无 X 显示可连（%v）：X11 运行时测试跳过", err)
+	}
+	info := xproto.Setup(c)
+	screen := info.DefaultScreen(c)
+	w, err := xproto.NewWindowId(c)
+	if err != nil {
+		c.Close()
+		t.Fatalf("NewWindowId(诱饵): %v", err)
+	}
+	// 10×10，建了但**不** MapWindow（保持 Unmapped，正是真机辅助窗的状态）。
+	cookie := xproto.CreateWindowChecked(c, screen.RootDepth, w, screen.Root,
+		5, 5, 10, 10, 0,
+		xproto.WindowClassInputOutput, screen.RootVisual,
+		0, []uint32{})
+	if e := cookie.Check(); e != nil {
+		c.Close()
+		t.Fatalf("CreateWindow(诱饵): %v", e)
+	}
+	atom, err := xproto.InternAtom(c, false, uint16(len("_NET_WM_PID")), "_NET_WM_PID").Reply()
+	if err != nil {
+		c.Close()
+		t.Fatalf("InternAtom(诱饵): %v", err)
+	}
+	pidBuf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(pidBuf, uint32(os.Getpid()))
+	if e := xproto.ChangePropertyChecked(c, xproto.PropModeReplace, w, atom.Atom, xproto.AtomCardinal, 32, 1, pidBuf).Check(); e != nil {
+		c.Close()
+		t.Fatalf("ChangeProperty(诱饵 _NET_WM_PID): %v", e)
+	}
+	_, err = xproto.GetInputFocus(c).Reply() // 冲刷
+	if err != nil {
+		c.Close()
+		t.Fatalf("flush(诱饵): %v", err)
+	}
+	return c
+}
+
 // TestEmbedHostRuntimeUnderXvfb 跑真实的 NewEmbedHost → ApplyBounds → Debug 链。
 // 判据与 Windows 版 E1-E4 对偶：
 //
@@ -75,6 +120,11 @@ func TestEmbedHostRuntimeUnderXvfb(t *testing.T) {
 	if os.Getenv("DISPLAY") == "" {
 		t.Skip("无 DISPLAY：X11 运行时测试跳过（CI 里由 Xvfb 步骤提供）")
 	}
+	// 先建诱饵（未 map 的同 pid 10×10 窗），模拟 Wails 真机的隐形辅助窗；
+	// 再建真正的主窗。发现链若只按 pid 取第一个，就会选中诱饵——
+	// 下面的 L1b 断言专门钉这件事。
+	decoyConn := createDecoyTopLevelX(t)
+	defer decoyConn.Close()
 	parentConn, parent := createTestTopLevelX(t)
 	defer func() {
 		xproto.DestroyWindow(parentConn, parent)
@@ -88,7 +138,12 @@ func TestEmbedHostRuntimeUnderXvfb(t *testing.T) {
 	if host.HWND() == 0 {
 		t.Fatalf("L1 子窗 XID 为 0，未真正创建")
 	}
-	t.Logf("L1 子窗已建 XID=0x%x 父=0x%x", host.HWND(), parent)
+	// L1b：父窗必须选已 map 的主窗，不能选未 map 的 10×10 诱饵。
+	if host.parent != parent {
+		t.Fatalf("L1b 宿主选错：选中 0x%x（期望主窗 0x%x）——只按 pid 取第一个会选中隐形辅助窗",
+			host.parent, parent)
+	}
+	t.Logf("L1 子窗已建 XID=0x%x 父=0x%x（诱饵已排除）", host.HWND(), parent)
 
 	// L2：隐藏 + 真实尺寸（对应前端起手 show=false 的那次上报）
 	if err := host.ApplyBounds(Bounds{X: 100, Y: 50, W: 780, H: 614, Show: false}); err != nil {

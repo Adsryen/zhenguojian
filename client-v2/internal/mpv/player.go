@@ -251,6 +251,16 @@ func (p *Player) buildArgs() []string {
 	}
 	if p.cfg.Wid != 0 {
 		args = append(args, fmt.Sprintf("--wid=%d", p.cfg.Wid))
+		// Linux 内嵌必须显式 --vo=x11（对照实验实锤，见 embed_linux.go 头注）：
+		// mpv 0.34 的默认 vo 自动选择链是 gpu→…→sdl；gpu 在无 GPU/软渲染
+		// （Xvfb、远程桌面、容器）时初始化失败后回退到 SDL，而 **SDL 输出不认
+		// --wid**，直接自建一个顶层 mpv 窗——内嵌子窗摆好了却永远黑、画面落在
+		// 界外的独立窗里（真机现象：子窗 IsUnMapped + root 下一个 640x360 mpv 窗）。
+		// 原生 x11 vo 认 --wid、不依赖 GPU（GLX 软渲染即可），所以内嵌路径钉死它。
+		// 只在 Wid!=0（内嵌）时加：独立窗（Wid=0）用默认 vo 自建窗正是期望行为。
+		if runtime.GOOS == "linux" {
+			args = append(args, "--vo=x11")
+		}
 	}
 	args = append(args, p.cfg.ExtraArgs...)
 	return args

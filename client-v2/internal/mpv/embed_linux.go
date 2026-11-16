@@ -94,6 +94,33 @@ func NewEmbedHost() (*EmbedHost, error) {
 		c.Close()
 		return nil, fmt.Errorf("mpv: 未找到宿主主窗口（_NET_WM_PID==%d 的顶层窗）", os.Getpid())
 	}
+	// 子窗的 depth/visual 必须与父窗一致（X11 硬约束，不匹配时
+	// CreateWindow 回 BadMatch，真机实锤：拿 screen.RootVisual 建子窗
+	// 在主窗 visual=0x3b7 / root 默认 0x21 时直接 BadMatch）。
+	// 所以 visual 从父窗属性读，depth 按 visual id 在 Setup 表里查。
+	pattrs, err := xproto.GetWindowAttributes(c, parent).Reply()
+	if err != nil {
+		c.Close()
+		return nil, fmt.Errorf("mpv: 读主窗属性失败: %w", err)
+	}
+	visual := pattrs.Visual
+	// X11 协议没有「按 window 问 depth」的请求；depth 挂在
+	// Setup 返回的 ScreenInfo.AllowedDepths 的每个 VisualInfo 上，
+	// 按 visual id 查表。
+	var depth byte
+	found := false
+	for _, di := range screen.AllowedDepths {
+		for _, vi := range di.Visuals {
+			if vi.VisualId == visual {
+				depth = di.Depth
+				found = true
+			}
+		}
+	}
+	if !found {
+		c.Close()
+		return nil, fmt.Errorf("mpv: 主窗 visual 0x%x 不在屏幕 AllowedDepths 表里，无法确定子窗 depth", visual)
+	}
 
 	child, err := xproto.NewWindowId(c)
 	if err != nil {
@@ -105,21 +132,24 @@ func NewEmbedHost() (*EmbedHost, error) {
 	// 几何走 CreateWindow 的专用 x/y/width/height 字段，value-mask 留 0、value-list
 	// 留空（xgb 按 PopCount(mask) 读 value-list，mask=0 就不读，最无歧义）。
 	// 不挂事件掩码：子窗只是给 mpv 当渲染目标，我们不收它的输入事件。
-	cookie := xproto.CreateWindowChecked(c, screen.RootDepth, child, parent,
+	cookie := xproto.CreateWindowChecked(c, depth, child, parent,
 		0, 0, 1, 1, 0,
-		xproto.WindowClassInputOutput, screen.RootVisual,
+		xproto.WindowClassInputOutput, visual,
 		0, []uint32{})
 	if e := cookie.Check(); e != nil {
 		c.Close()
 		return nil, fmt.Errorf("mpv: CreateWindow(子窗) 失败: %w", e)
 	}
-	return &EmbedHost{conn: c, parent: parent, child: child, depth: screen.RootDepth, root: root}, nil
+	return &EmbedHost{conn: c, parent: parent, child: child, depth: depth, root: root}, nil
 }
 
-// findHostWindowX：_NET_WM_PID == 本进程 pid 的顶层窗（多实例安全、不依赖
-// 窗口标题/类名——与 Windows 版「类名+标题打分」不同的原因写在这：X11 顶层窗
-// 的枚举是 QueryTree(root)，Wails 主窗没有固定类名（随可执行文件名变），
-// 而 _NET_WM_PID 是 EWMH 标准属性、Wails/GTK 必设（真机探针已确认）。
+// findHostWindowX：_NET_WM_PID == 本进程 pid **且处于 IsViewable** 的顶层窗。
+// 真机探针（Xvfb + 活 app 实跑，/tmp/xprobe）证实 Wails 会建**两个**带本进程
+// pid 的顶层窗：真正的 1280×800 主窗（IsViewable）和一个 10×10 隐形辅助窗
+// （IsUnMapped）；QueryTree 顺序不保证主窗在前，只按 pid 取第一个会选中
+// 辅助窗，子窗就建进 10×10 里、画面永不出现（Linux 首版整链实测的断点）。
+// 所以必须加 MapState 判据：Viewable 的才是能显示画面的宿主。
+// 窗口标题/类名不作判据：类名随可执行文件名变，标题可被改。
 func findHostWindowX(c *xgb.Conn, root xproto.Window) xproto.Window {
 	tree, err := xproto.QueryTree(c, root).Reply()
 	if err != nil {
@@ -135,10 +165,19 @@ func findHostWindowX(c *xgb.Conn, root xproto.Window) xproto.Window {
 		if err != nil || prop.Format != 32 || len(prop.Value) < 4 {
 			continue
 		}
-		if binary.LittleEndian.Uint32(prop.Value[:4]) == selfPid {
+		if binary.LittleEndian.Uint32(prop.Value[:4]) != selfPid {
+			continue
+		}
+		attrs, err := xproto.GetWindowAttributes(c, w).Reply()
+		if err != nil {
+			continue
+		}
+		if attrs.MapState == xproto.MapStateViewable {
 			return w
 		}
 	}
+	// 没有 Viewable 的宿主（主窗被最小化/未映射）：返回 0 → 上层回退独立窗，
+	// 不把子窗建进隐形辅助窗。
 	return 0
 }
 
