@@ -15,6 +15,20 @@ setupContextMenu()
 /* ── V-UPD 全局顶部更新横幅（update:available 事件驱动；无事件永不出条） ── */
 const updBanner = ref<UpdateAvailableEvent | null>(null)
 
+/* 手动检查更新的结果通知（update:notify，Go 侧 app.go：托盘「检查更新」走
+   CheckManual → 原生信息框失败时（非 Windows 恒失败）回落该事件，payload
+   {title, text}）。第九十五轮对账补上：此前前端**没有监听**，用户在 Linux
+   上点托盘检查更新后结果静默丢失。与 updBanner 区分：这是「查完了告诉你」，
+   自动 8s 消失，不常驻、不挂操作按钮。 */
+const updNotify = ref<{ title: string; text: string } | null>(null)
+let notifyTimer: number | undefined
+function onUpdNotify(payload: { title?: string; text?: string }) {
+  if (!payload?.text) return
+  updNotify.value = { title: payload.title ?? '', text: payload.text }
+  window.clearTimeout(notifyTimer)
+  notifyTimer = window.setTimeout(() => { updNotify.value = null }, 8000)
+}
+
 /* 横幅摘要：release body 常是 markdown（CI 自动生成的资产对照表），直接截 60 字
    会露出「## | 文件 | 用途 |」噪音——先净化再截。 */
 const updBannerSum = computed(() => {
@@ -24,6 +38,7 @@ const updBannerSum = computed(() => {
   return text.length > 90 ? text.slice(0, 90) + '…' : text
 })
 let offBus: (() => void) | undefined
+let offNotify: (() => void) | undefined
 
 function onUpdAvailable(payload: UpdateAvailableEvent) {
   if (!payload?.tag) return
@@ -37,15 +52,20 @@ onMounted(() => {
   startFollowCheck()
   installFollowCheckTestSeam() // 仅测试缝，产品路径不依赖它
   window.addEventListener('zgj:update-available', ((e: CustomEvent<UpdateAvailableEvent>) => onUpdAvailable(e.detail)) as EventListener)
+  window.addEventListener('zgj:update-notify', ((e: CustomEvent<{ title?: string; text?: string }>) => onUpdNotify(e.detail)) as EventListener)
   const EventsOn = (window as any).runtime?.EventsOn ?? (window as any).wails?.EventsOn
   if (typeof EventsOn === 'function') {
     const off = EventsOn('update:available', onUpdAvailable)
+    const offN = EventsOn('update:notify', onUpdNotify)
     if (typeof off === 'function') offBus = off
+    if (typeof offN === 'function') offNotify = offN
   }
 })
 onBeforeUnmount(() => {
   offBus?.()
+  offNotify?.()
   stopFollowCheck()
+  window.clearTimeout(notifyTimer)
 })
 
 function updGoSettings() {
@@ -69,6 +89,9 @@ async function updSkipVersion() {
         </span>
         <button class="upd-banner-btn" data-testid="update-banner-go" @click="updGoSettings">{{ t('update.banner.go') }}</button>
         <button class="upd-banner-btn upd-banner-ghost" data-testid="update-banner-skip" @click="updSkipVersion">{{ t('update.banner.skip') }}</button>
+      </div>
+      <div v-if="updNotify" class="upd-notify" data-testid="update-notify">
+        <span class="upd-notify-text" :title="updNotify.title">{{ updNotify.text }}</span>
       </div>
       <router-view />
     </main>
@@ -122,5 +145,20 @@ async function updSkipVersion() {
 .upd-banner-ghost {
   color: var(--guo-text, #d7dce5);
   background: transparent;
+}
+/* 手动检查结果通知：比横幅更安静（无按钮、自动消失），不抢「有新版本」横幅的位置 */
+.upd-notify {
+  padding: 4px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted-2, #7a7a85);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.upd-notify-text {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

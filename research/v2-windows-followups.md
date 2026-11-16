@@ -965,3 +965,35 @@ player 包 TestOpenLocalDoesNotFetchOnlineDanmaku 偶发红（5 次 1 次、
 10 次 1 次）；基线对照（git stash 我的改动）15 次也失败 4 次 →
 **基线就有的偶发，与本轮改动无关**（本轮只动 buildArgs 的 --vo 行，
 不碰弹幕路径）。另案处理，未混入本次提交。
+
+## 二十五、update:notify 事件对账定案（95 轮）
+
+此前遗留的「Go 发 update:notify 前端听 update:available」对账，本轮查清：
+
+- **不是名字写错，是两个不同事件**：
+  - `update:available`：updater/service.go:457/486（发现新版本）→ App.vue:42
+    在听 → 顶部常驻横幅（带「去设置/跳过」按钮）。正路，无问题。
+  - `update:notify`：app.go:97-103，托盘「检查更新」→ CheckManual →
+    原生信息框（Windows MessageBoxW）**失败时**的回落事件，payload
+    {title, text}（Go 侧文案 = manualCheckText：失败原因/发现新版/已跳过/
+    已是最新）。
+- **漏点精确定位**：app.go:96 注释自己写了「前端未监听 update:notify，
+  非 Windows 仅开发机」——「engine 在、wiring 缺」又一次。但触发面比注释
+  想的还窄：**Linux 上托盘本身是 no-op**（tray_other.go:12 Register 恒失败，
+  CheckManual 只被托盘调用）→ Linux 上该事件永远发不出。真正会触发的是
+  **Windows 上 MessageBoxW 失败**（窗口句柄异常/弹窗被禁）→ 事件兜底被
+  丢弃（前端没听）。
+- **修法**（前端 App.vue）：补监听 `update:notify` + `zgj:update-notify`
+  CustomEvent（mock 通道同款双通道），展示为**自动 8s 消失的结果通知条**
+  （区别于 update:available 常驻横幅——notify 是「查完了告诉你」不是
+  「有新版本等你处理」，无按钮、不抢横幅位置）。
+- **mock 侧刻意不派发**：真实 UpdateCheck 绑定（bindings_update.go:53）走
+  `Check`（不 Notify），只有托盘路径的 `CheckManual` 才 Notify，mock 无
+  托盘；mock 里给 updateCheck 加派发 = 造假行为（把不存在的产品路径测绿）。
+  E2E（update_verify N1/N2）直接注入事件测前端监听链路：出现 + 8s 自动消失。
+- **诚实边界**：Windows 侧「MessageBoxW 失败 → 事件兜底 → 通知条」这条
+  链在 Linux 无法执行级验证（托盘 no-op + MessageBoxW 仅 Windows），
+  只有前端监听链路（E2E）+ 代码走读（Go 侧 app.go 路径完整）两层证据。
+  Linux 用户「点托盘检查更新看不到结果」的**真实体验缺口不是这条**——
+  Linux 上根本没有托盘，手动检查走设置页按钮（updateCheck → Check，
+  结果直接渲染在设置页结果行，一直好的）。

@@ -11,6 +11,11 @@
   V5 自动检查开关：点击 → localStorage 'zgj.update.settings'.autocheck=true →
      reload 后开关 UI 态恢复 on（mock verify 只测 UI 态；真实面走 UpdateSettings）。
   V6 en locale 下「更新」区零 CJK 字符（独立 context 隔离状态）。
+   N1/N2 update:notify 结果通知条：注入事件 → 通知条出现 → 8s 自动消失
+      （第九十五轮对账：Go app.go:100 托盘检查更新原生框失败时发
+      update:notify，前端此前无监听；mock 不派发——真实 UpdateCheck
+      走 Check 不 Notify，只有托盘路径 CheckManual 才 Notify，mock 无
+      托盘，加派发=造假行为，故 N1 直接注入事件测监听链路）。
 截图：settings-update.png（V1 元素图）、update-banner.png（V2 全页含横幅）。
 
 用法：python3 verification/update_verify.py
@@ -161,6 +166,34 @@ async def main():
         gone2 = await page2.evaluate("!document.querySelector(\"[data-testid='update-banner']\")")
         check("V3c 新页持久化 ignoredTag → 「已被跳过」且无横幅", skipped_ok and (not avail) and bool(gone2), rtext.replace("\n", " | ")[:90])
         await page2.close()
+
+        # ---- N 手动检查的结果通知通道（update:notify，第九十五轮对账补监听）----
+        # Go 侧 app.go:97-103：托盘「检查更新」→ CheckManual → 原生信息框
+        # （Windows MessageBoxW）失败时回落 EventsEmit("update:notify")。
+        # Linux 托盘是 no-op（tray_other.go:12），该通道当前只在 Windows
+        # MessageBoxW 失败时发；前端此前**没有监听**（app.go 注释写了「回落
+        # 事件通道」但前端 wiring 从未实现）→ 本断言直接注入事件测监听链路。
+        # mock 面**不**派发此事件：真实 UpdateCheck 绑定走 Check（不 Notify），
+        # 只有托盘路径的 CheckManual 才 Notify，mock 无托盘——加派发=造假行为。
+        await page.evaluate(
+            """() => window.dispatchEvent(new CustomEvent('zgj:update-notify',
+               { detail: { title: '真果鉴', text: '检查更新失败：模拟网络中断' } }))"""
+        )
+        n1_ok = False
+        try:
+            await page.wait_for_selector("[data-testid='update-notify']", timeout=3000)
+            ntext = (await page.inner_text("[data-testid='update-notify']")).strip()
+            n1_ok = "检查更新失败" in ntext
+            check("N1 update:notify 事件 → 结果通知条出现", n1_ok, ntext[:60])
+        except Exception:
+            check("N1 update:notify 事件 → 结果通知条出现", False, "通知条未出现")
+        if n1_ok:
+            # N2 自动 8s 消失（计时器 8s，11s 上限内等 detached）
+            try:
+                await page.wait_for_selector("[data-testid='update-notify']", state="detached", timeout=11000)
+                check("N2 结果通知条 8s 自动消失", True)
+            except Exception:
+                check("N2 结果通知条 8s 自动消失", False, "11s 后仍在（计时器没起/没触发）")
 
         # ---- V5 自动检查开关持久化（mock UI 态；独立 context 免 init 复位自伤）----
         ctx5 = await browser.new_context(viewport={"width": 1280, "height": 860})
