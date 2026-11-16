@@ -858,3 +858,63 @@ CPU/带宽被抢，固定等待的验收脚本等不到渲染。
 `grep -n "FAIL" 全量日志` 会先命中表头那行「PASS FAIL 秒」，
 所以找失败脚本要用 `grep "exit [^0]"` 或直接看表里 exit 列——
 这次我先按 FAIL 关键字查，结果抓到的是表头，差点以为日志坏了。
+
+## 二十三、Linux 内嵌整链的三个断点：宿主选窗 / visual 不匹配 / vo 不认 --wid（93 轮）
+
+提交 21e121d + 1654551。Xvfb + 真流产物实测，三个断点全有对照实验或
+真机探针实锤，不靠猜。判据全部机器可查（xwininfo 子窗树 / mpv cmdline /
+截图像素多样性 / ApplyBounds 时序日志）。
+
+### 23.1 宿主选窗：Wails 建两个带本进程 pid 的顶层窗
+
+探针（/tmp/xprobe，QueryTree→逐窗读 _NET_WM_PID+MapState）对**活 app**
+实跑：`0x200003 "真果鉴" 1280x800 IsViewable`（真主窗）和
+`0x200001 10x10 IsUnMapped`（隐形辅助窗）**都**带 app 的 pid。
+只按 pid 取第一个命中会选中辅助窗（QueryTree 顺序不保证主窗在前），
+子窗建进 10x10 → 画面永不出现。
+修法：findHostWindowX 加 `MapState==IsViewable` 判据；无 Viewable 宿主
+返回 0 → 上层回退独立窗（宁回退不建进隐形窗）。
+回归：测试建 10x10 未 map 同 pid 诱饵窗 + L1b 断言选主窗；
+变异验证（判据改恒真）→ 测试立刻红，还原后绿。
+
+### 23.2 子窗 depth/visual 必须取父窗（CreateWindow BadMatch）
+
+Wails 主窗 visual=0x3b7，root 默认 visual=0x21。拿 screen.RootDepth/
+RootVisual 建子窗 → `CreateWindow 失败: BadMatch {BadValue: 主窗XID}`。
+修法：visual 从父窗 GetWindowAttributes 读；depth 协议上无「按窗问」的
+请求（GetWindowAttributesReply 无 Depth 字段），按 visual id 在
+Setup() 的 AllowedDepths 表里查。xproto **没有**独立的 GetVisualInfo
+请求（首版照 xlib 习惯写了 xproto.GetVisualInfo，编译直接报 undefined）。
+
+### 23.3 mpv 默认 vo 不认 --wid（画面根本不进子窗的核心根因）
+
+mpv 0.34.1 默认 vo 自动选择链 gpu→…→sdl。软渲染/Xvfb 里 gpu 初始化
+失败（`x11egl uninit` → `drm` → `Can't open TTY`）后**回退 SDL**，
+而 SDL 输出不认 --wid，自建 640x360 顶层 mpv 窗。
+对照实验（固定映射父窗 + 真视频 testsrc，`/tmp/xprobe/embedctl`）：
+- 默认 vo：root 下出现 `640x360 "testsrc.mp4 - mpv"` 独立窗，父窗截图
+  1 种颜色（空）。映射与未映射父窗**都**复现（说明不是时序，是 vo 问题）。
+- `--vo=x11`：无独立窗，父窗截图 16767 种颜色（真视频嵌入）。
+与真机现象逐字吻合：子窗摆好了但黑 + root 下 640x360 独立 mpv 窗。
+修法：player.go buildArgs 内嵌路径（Wid!=0 且 GOOS==linux）追加
+`--vo=x11`。独立窗（Wid=0）保持默认 vo 自建窗是期望行为，不加。
+注意：mpv 0.34 的 x11 vo 会**自己在宿主 wid 下再建一个渲染子窗**
+（class "x11"，如 0x600002），所以「宿主子窗 0 children」不是失败判据，
+要看宿主子窗**下面**有没有 mpv 渲染窗。
+
+### 23.4 可见性时序（诊断日志定案，日志已删）
+
+前端起手 show=videoShouldShow() 为假 → ApplyBounds 连报 3 次 show=false
+（#apply=2/3/4），running 变真后 watch 触发第 5 次 show=true →
+两窗 MapState 均 IsViewable。播放中主窗截图整窗 44759 种颜色、
+视频区 43045（同尺寸空白区对照 162）。**Linux 内嵌整链到此打通。**
+
+### 23.5 对 Windows 黑屏（alpha.40）的迁移价值
+
+三断点里只有 23.3 的形态在 Windows 存在（Windows 的 d3d11/wgl 渲染器
+认 --wid，不存在「SDL 回退」这种链），但 23.1 的教训**直接适用**：
+Windows 版 findHostWindow 用枚举顶层窗打分（类+题=3 > 类=2 > 题=1），
+如果 Wails 在 Windows 上也建多个顶层窗（比如一个 1x1 辅助窗），
+打分法可能选中错误的窗。alpha.40 数据（applyCount=0 + 前端量得
+764x614#3 上报异常=none + v?）仍指向 IPC 挂起主假设（见 b31 块），
+但宿主选窗是探针回来之前值得先静态核对的一条。
