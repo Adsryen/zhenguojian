@@ -42,7 +42,6 @@ import type { EmbedSetStatus, AttachResult, EmbedHostDebug, ExactApiImpl } from 
    避免整页 bridge_missing 死锁（降级会显示顶部提示横幅）。 */
 export const hasBridge =
   typeof window !== 'undefined' &&
-  !!((window as any).go?.main?.App && (window as any).runtime?.EventsOn) ||
   !!((window as any).go?.main?.App)
 
 function wailsApp(): Record<string, (...args: any[]) => Promise<string>> {
@@ -66,7 +65,9 @@ export async function callGoRaw(method: string, ...args: any[]): Promise<string>
   } catch (err: any) {
     const message = typeof err === 'string' ? err : err?.message ?? String(err)
     const m = message.match(/\[([a-z_]+)\]\s*$/)
-    throw new ApiError(m ? message.slice(0, m.index) : message, m ? m[1] : '')
+    // slice(0, m.index) 会留在分隔空格（`源被屏蔽 [code]` → `源被屏蔽 `）；
+    // 尾巴空格是 code 的分隔符不是正文，剥净（第九十五轮 vitest P0 抓出）。
+    throw new ApiError(m ? message.slice(0, m.index).replace(/\s+$/, '') : message, m ? m[1] : '')
   }
 }
 
