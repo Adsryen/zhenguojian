@@ -48,7 +48,7 @@ func init() {
 		"IsWindowVisible", "RegisterClassExW", "CreateWindowExW", "DefWindowProcW",
 		"MoveWindow", "ShowWindow", "SetWindowPos", "DestroyWindow",
 		"ScreenToClient", "GetClientRect", "GetWindowRect",
-		"RealWindowFromPoint",
+		"WindowFromPoint",
 	} {
 		procEmbed[n] = user32Embed.NewProc(n)
 	}
@@ -230,9 +230,29 @@ type EmbedHost struct {
 	applyCount int
 }
 
+// embedAPIMissing 返回 init 名单里在 user32/gdi32/kernel32 中**找不到**
+// 的导出名；全齐返回 nil。第九十七轮 CI 真 Windows 第一次真执行抓出
+// "RealWindowFromPoint" 这个名字根本不存在（当时靠 Wine 的宽容别名掩盖），
+// 缺导出的 LazyProc 一旦被 Call 就 panic——挂在 Wails IPC goroutine 里
+// 的 panic 会崩掉整个进程。名字对不对，问系统，不问印象。
+func embedAPIMissing() string {
+	for n, p := range procEmbed {
+		if err := p.Find(); err != nil {
+			return n
+		}
+	}
+	return ""
+}
+
 // NewEmbedHost 发现 Wails 主窗口并在其下创建隐藏的视频承载子窗。
 // 非 Windows 平台由 embed_stub.go 返回错误。
 func NewEmbedHost() (*EmbedHost, error) {
+	// 起飞前把整张 API 表验一遍：缺任何一个导出都走"内嵌不可用"回退
+	// （PlayerAttach 回 embedded:false + reason，前端切独立窗口播放），
+	// 而不是让某个 LazyProc 在第一次 Call 时把整进程带崩。
+	if missing := embedAPIMissing(); missing != "" {
+		return nil, fmt.Errorf("mpv: Win32 导出 %s 缺失，内嵌不可用", missing)
+	}
 	parent, err := findHostWindow(hostFindTimeout)
 	if err != nil {
 		return nil, err
@@ -334,14 +354,34 @@ func (e *EmbedHost) Debug() HostDebug {
 				px := rc.Left + (rc.Right-rc.Left)/2
 				py := rc.Top + (rc.Bottom-rc.Top)/2
 				d.ProbeX, d.ProbeY = int(px), int(py)
-				top, _, _ := procEmbed["RealWindowFromPoint"].Call(PackPoint(px, py))
-				d.TopAtCenterHwnd = fmt.Sprintf("0x%x", top)
-				if top != 0 {
-					d.TopAtCenterCls = winString(procEmbed["GetClassNameW"], top)
-					d.TopIsChild = top == uintptr(e.child)
-					var tr windows.Rect
-					if r2, _, _ := procEmbed["GetWindowRect"].Call(top, uintptr(unsafe.Pointer(&tr))); r2 != 0 {
-						d.TopContainsProbe = px >= tr.Left && px < tr.Right && py >= tr.Top && py < tr.Bottom
+				/* 第九十七轮（真 Windows CI 第一次真执行抓出）：这里原来写的是
+				   "RealWindowFromPoint"——这个名字在 user32 里**根本不存在**。
+				   Win11-22000 / Win10-19041 导出表（1010 项，含整个 Real* 家族
+				   RealChildWindowFromPoint/RealGetWindowClass）都没有它；文档化的
+				   API 家族是 WindowFromPoint / ChildWindowFromPoint /
+				   RealChildWindowFromPoint（微软文档 + 微软自家测试矩阵口径）。
+				   这个错误名是第六十二轮写判读表时凭印象造的；Wine 恰好实现了
+				   它，于是本地"Wine 里能过"从未被证伪，CI 真 Windows 第一次真跑
+				   时 LazyProc.mustFind 直接 panic——而且这在 Debug() 里：
+				   每次 setBounds 都会走，缺导出=整进程崩溃。
+				   换成导出表实证的 WindowFromPoint（同按值 POINT 签名，Win2000
+				   起导出，语义=点处的最上层窗口，正是判读表要的空气层读数）。
+				   Find() 守卫是结构保险：诊断读数取不到就留空串（前端显示
+				   no-probe），**任何情况下不许让诊断路径 panic 产品**。 */
+				wfp := procEmbed["WindowFromPoint"]
+				if err := wfp.Find(); err != nil {
+					// 读不到就留空（前端显示 no-probe）。诊断路径**永不**让产品 panic。
+					d.TopAtCenterHwnd = ""
+				} else {
+					top, _, _ := wfp.Call(PackPoint(px, py))
+					d.TopAtCenterHwnd = fmt.Sprintf("0x%x", top)
+					if top != 0 {
+						d.TopAtCenterCls = winString(procEmbed["GetClassNameW"], top)
+						d.TopIsChild = top == uintptr(e.child)
+						var tr windows.Rect
+						if r2, _, _ := procEmbed["GetWindowRect"].Call(top, uintptr(unsafe.Pointer(&tr))); r2 != 0 {
+							d.TopContainsProbe = px >= tr.Left && px < tr.Right && py >= tr.Top && py < tr.Bottom
+						}
 					}
 				}
 			}

@@ -12,14 +12,19 @@ import (
 	"zhenguojian/client-v2/internal/winapi"
 )
 
-// 本文件的目的：让**真正的 Windows 内嵌代码**（embed_windows.go）在受控环境里被
-// 真实执行一次，而不是只被编译。真机 alpha.40 的黑屏（子窗 1×1、applyCount=0）
-// 在这台 Linux 上从来测不到——因为内嵌只有 Win32 实现。用 Wine 跑这个测试，
-// 就能在 CI/本机先把「建子窗 + 摆位 + 读矩形」这条链跑通，再谈发版。
+// 本文件的目的：让**真正的 Windows 内嵌代码**（embed_windows.go）在真 Windows
+// 上被真实执行一次，而不是只被编译。执行机会=CI 的 windows job（go-local
+// 的 winvet 只 vet 不执行，本机 Linux 编得了跑不了）。这条链
+// 「建父窗+找宿主+建子窗+摆位+读矩形+Debug 探最上层」每步都是真 Win32 调用。
 //
 // 为什么值得存在：本仓库此前的 Windows 侧测试只有**静态布局自检**（sizeof/偏移），
 // 编译级验证；Win32 调用是否真被系统接受，只有运行时才知道。alpha.27 的
 // RegisterClassExW 参数错、CurrentProcess 伪句柄，都是「编译过、从没跑过」的错。
+// 第九十七轮它第一次真跑，一轮抓出两个「编译级证据」遮住的真实缺陷：
+// ① 测试 helper 的 GetStockObject 取自 user32（GDI 导出，真机没有）；
+// ② 生产代码 Debug() 调的 RealWindowFromPoint 在 user32 里**根本不存在**
+//    （第六十二轮凭印象造的 API 名，Wine 恰好实现了它所以从未证伪）——
+//    缺导出的 LazyProc.Call 直接 panic，且 Debug() 每次 setBounds 都走。
 
 // testParentProc：最小父窗 WndProc，一切消息交给 DefWindowProcW。
 func testParentProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
@@ -92,7 +97,7 @@ func createTestWailsParent(t *testing.T) (windows.HWND, func()) {
 	}
 }
 
-// TestEmbedHostRuntimeUnderWine 跑真实的 NewEmbedHost → ApplyBounds → Debug 链。
+// TestEmbedHostRuntimeRealWindows 跑真实的 NewEmbedHost → ApplyBounds → Debug 链。
 //
 // 判据逐条对应真机黑屏的读数：
 //
@@ -100,7 +105,7 @@ func createTestWailsParent(t *testing.T) (windows.HWND, func()) {
 //	E2 ApplyBounds 真实尺寸后，GetWindowRect 读回的不是 1×1（1×1=卡死在创建尺寸）
 //	E3 Debug().ApplyCount >= 1（Go 侧真的执行过一次摆位）
 //	E4 Show=false 时子窗仍被摆到真实尺寸（几何/可见性分离，隐藏态不抹几何）
-func TestEmbedHostRuntimeUnderWine(t *testing.T) {
+func TestEmbedHostRuntimeRealWindows(t *testing.T) {
 	parent, cleanup := createTestWailsParent(t)
 	defer cleanup()
 	t.Logf("父窗 hwnd=0x%x（class=%s title=%s）", parent, WailsWindowClass, MainWindowTitle)

@@ -295,7 +295,7 @@ func (e *EmbedHost) Debug() HostDebug {
 			} else {
 				d.ChildLeft, d.ChildTop = int(g.X), int(g.Y)
 			}
-			// X11 没有 RealWindowFromPoint：best-effort 判读——子窗已 map 且探测点
+			// X11 没有 WindowFromPoint 等价物：best-effort 判读——子窗已 map 且探测点
 			// 落在子窗屏幕矩形内，就记 TopIsChild=true（与 Windows 版「=ours」同义）。
 			if d.ChildWidth >= 2 && d.ChildHeight >= 2 && d.ChildVisible {
 				px := d.ChildLeft + d.ChildWidth/2

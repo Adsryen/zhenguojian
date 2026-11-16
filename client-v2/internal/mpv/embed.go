@@ -81,14 +81,14 @@ type HostDebug struct {
 	TopAtCenterHwnd string `json:"topAtCenterHwnd"`
 	TopAtCenterCls  string `json:"topAtCenterClass"`
 	TopIsChild      bool   `json:"topIsChild"`
-	// 自检：RealWindowFromPoint 是按值传 POINT（8 字节），x64 下要把 x 放低 32 位、
+	// 自检：WindowFromPoint 是按值传 POINT（8 字节），x64 下要把 x 放低 32 位、
 	// y 放高 32 位。打包错了不会报错，只会**返回另一个窗口的句柄**——那就是拿假数据
 	// 下结论。所以这里回读"返回窗口自己的矩形是否真的包含探测点"：
 	// false 说明这条读数不可信（打包错/点跑到屏幕外），别按 TopIsChild 判案。
 	TopContainsProbe bool `json:"topContainsProbe"`
 }
 
-// PackPoint 把屏幕坐标打包成 RealWindowFromPoint/WindowFromPoint 的按值 POINT
+// PackPoint 把屏幕坐标打包成 WindowFromPoint 的按值 POINT
 // （低 32 位 x，高 32 位 y，即 Win32 的 MAKELONG 口径）。
 // 单独抽出来是因为它是纯算术，能在任何平台跑断言。
 // 只在 64 位有意义（uintptr 32 位时高位会被截掉），而内嵌本身只有 Windows 实现。
