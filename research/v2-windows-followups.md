@@ -918,3 +918,50 @@ Windows 版 findHostWindow 用枚举顶层窗打分（类+题=3 > 类=2 > 题=1�
 打分法可能选中错误的窗。alpha.40 数据（applyCount=0 + 前端量得
 764x614#3 上报异常=none + v?）仍指向 IPC 挂起主假设（见 b31 块），
 但宿主选窗是探针回来之前值得先静态核对的一条。
+
+## 二十四、有 WM 时内嵌整体退化：reparent 后 QueryTree(root) 看不到宿主窗（94 轮）
+
+提交 be9fb57。承接 23 节（无 WM 整链打通）。在 Xvfb + xfwm4（带窗口
+装饰的真实桌面形态，用户 xrdp 就是这种）下复测，内嵌**整体退化**：
+mpv spawn 没有 --wid、退化成独立窗。
+
+### 24.1 根因（xwininfo 实测，不靠猜）
+
+- WM 把顶层窗 **reparent** 进自己的 frame：主窗的 parent 从 root
+  变成 frame（0x207b0a），QueryTree(root) 只能看到 frame 和一堆
+  WM 自己的辅助窗（xfwm4 标题栏/边框条），看不到我们的客户端窗。
+- 但 reparent 后的客户端窗**仍然带着 _NET_WM_PID**（实测 0x400003
+  _NET_WM_PID=app pid、MapState IsViewable）——只是不在 root 直挂。
+- 首版 findHostWindowX 只查 QueryTree(root) 的直接子窗 → 返回 0 →
+  上层回退独立窗。
+
+### 24.2 修法
+
+候选窗 = EWMH _NET_CLIENT_LIST ∪ QueryTree(root) 的并集，再按
+_NET_WM_PID==本进程 且 IsViewable 筛：
+- 无 WM：_NET_CLIENT_LIST 不存在 → 自动只剩 root 子窗（原形态不变）；
+- 有 WM：WM 维护的 _NET_CLIENT_LIST 恰好列着被 reparent 的客户端窗。
+
+### 24.3 免费的好结果：WM 边框偏移天然自偿
+
+前端 viewport 原点 == 客户端窗内容区原点，子窗的父也是同一个客户端窗，
+所以面板/边框的绝对偏移在「子窗相对父窗」坐标系里自动消失——不需要
+额外处理。实测：子窗绝对坐标 +200+111 = 相对 200,87 + 面板 24px，
+画面与视频区精确重合（截图视频区 76029 种颜色 vs 空白 173）。
+**这推翻了 23 节「有 WM 装饰时视口≠客户区原点」的担忧**：那个担忧
+的前提（子窗父窗==root）在有 WM 时不成立，父窗本来就是客户端窗。
+
+### 24.4 回归测试 + 变异验证
+
+TestFindHostWindowXUnderWmReparent：手工复刻 WM 两个动作（建 frame
+顶层窗 + ReparentWindow 把主窗挂进去 + root 写 _NET_CLIENT_LIST），
+先断言前提成立（reparent 后主窗不在 root 直挂），再断言发现链选中
+主窗、子窗建在主窗下。变异验证：短路 _NET_CLIENT_LIST 读取（模拟旧
+实现）→ 测试立刻红「选中 0x0」，还原后绿。
+
+### 24.5 顺带抓到的基线 flaky
+
+player 包 TestOpenLocalDoesNotFetchOnlineDanmaku 偶发红（5 次 1 次、
+10 次 1 次）；基线对照（git stash 我的改动）15 次也失败 4 次 →
+**基线就有的偶发，与本轮改动无关**（本轮只动 buildArgs 的 --vo 行，
+不碰弹幕路径）。另案处理，未混入本次提交。
