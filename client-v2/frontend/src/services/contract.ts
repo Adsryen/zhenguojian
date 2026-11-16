@@ -337,11 +337,25 @@ export interface EmbedSetStatus {
   error?: string
 }
 
-export const GO_BINDINGS_EMBED: Record<'attach' | 'setBounds' | 'playerHitBands' | 'detach', string> = {
+/* 内嵌诊断面（App.EmbedDiag，第九十六轮）：exe 身份自证 + app.log 的
+   setBounds 到达计数。arrived 与前端自己量的「前端量得#N」并排放在复制
+   诊断里，两侧读数对撞即可判「IPC 没到 Go」还是「到了 Go 没执行」。 */
+export interface EmbedDiagInfo {
+  version: string
+  revision: string
+  pid: number
+  /** Go 实际收到的 PlayerSetBounds 次数（0=从未到达） */
+  arrived: number
+  logDir: string
+  logFail: string
+}
+
+export const GO_BINDINGS_EMBED: Record<'attach' | 'setBounds' | 'playerHitBands' | 'detach' | 'diag', string> = {
   attach: 'App.PlayerAttach() → AttachResult{embedded,reason?,host?}',
   setBounds: 'App.PlayerSetBounds(x, y, w, h int, show bool) -- physical pixels; geometry always placed, show only toggles visibility',
   playerHitBands: 'App.PlayerHitBands(top, bottom float64) error',
-  detach: 'App.PlayerDetach()'
+  detach: 'App.PlayerDetach()',
+  diag: 'App.EmbedDiag() -- {version,revision,pid,arrived,logDir,logFail}; arrived = Go-side setBounds arrival count'
 }
 
 /* ────────────────────────────────────────────────────────────────────────

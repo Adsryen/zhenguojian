@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { ApiError, clampOpacityPercent } from './contract'
-import { callGoRaw, callGo } from './bridge'
+import { callGoRaw, callGo, embedBridge } from './bridge'
 
 describe('ApiError', () => {
   it('code 默认空串、message 原样', () => {
@@ -128,5 +128,60 @@ describe('bridge hasBridge 探测（模块加载时读 window）', () => {
   it('node 环境（无 window）下模块可安全导入', () => {
     // 本文件 import bridge 时 window 不存在——若模块顶层裸读 window 会在此红。
     expect(typeof callGoRaw).toBe('function')
+  })
+})
+
+/* ── embedBridge.setBounds 看门狗（第九十六轮）──
+   alpha.40 真机「上报异常=none」的根因：IPC 挂起时旧代码卡在
+   `await callGo('PlayerSetBounds', …)` 上不返回，上层 catch 不触发、
+   error 不置位，徽标于是显示 none——挂起被显示成了「一切正常」。
+   看门狗 race 一个超时把挂起变成显形：ok=false + error='pending>8s'。
+   单测用 __zgjBoundsWdMs 把阈值压到几百 ms，秒级复现那个谎言场景。 */
+describe('embedBridge.setBounds 看门狗（挂起不得再显示成 none）', () => {
+  afterEach(() => {
+    uninstallFakeApp()
+    delete (globalThis as any).window?.__zgjBoundsWdMs
+  })
+
+  it('IPC 挂起（promise 永不 resolve）→ 超时回 ok=false + pending>8s', async () => {
+    installFakeApp({
+      PlayerSetBounds: () => new Promise(() => { /* 永不 resolve */ }),
+    })
+    const w = (globalThis as any).window
+    w.__zgjBoundsWdMs = 300
+    const t0 = Date.now()
+    const st = await embedBridge.setBounds(100, 50, 800, 600, true)
+    const ms = Date.now() - t0
+    expect(st.ok).toBe(false)
+    expect(st.error).toBe('pending>8s')
+    expect(st.host).toBeUndefined()
+    expect(ms).toBeLessThan(4000) // 真卡死（旧行为）会远超看门狗
+  })
+
+  it('秒回成功 → ok=true 带回 host（正常路径不受看门狗影响）', async () => {
+    installFakeApp({
+      PlayerSetBounds: async () =>
+        JSON.stringify({ ok: true, host: { childWidth: 800, applyCount: 3 } }),
+    })
+    const st = await embedBridge.setBounds(100, 50, 800, 600, true)
+    expect(st.ok).toBe(true)
+    expect(st.host?.childWidth).toBe(800)
+    expect(st.error).toBeUndefined()
+  })
+
+  it('Go 回 ok=false（embed==nil 降级）→ 如实回 ok=false（不是看门狗误伤）', async () => {
+    installFakeApp({ PlayerSetBounds: async () => JSON.stringify({ ok: false }) })
+    const st = await embedBridge.setBounds(100, 50, 800, 600, true)
+    expect(st.ok).toBe(false)
+    expect(st.error).toBe('ok=false')
+  })
+
+  it('Go 抛错（方法存在但执行失败）→ error 带原因（不 throw 打断 UI）', async () => {
+    installFakeApp({
+      PlayerSetBounds: () => { throw new Error('boom [embed_denied]') },
+    })
+    const st = await embedBridge.setBounds(100, 50, 800, 600, true)
+    expect(st.ok).toBe(false)
+    expect(st.error).toContain('boom')
   })
 })

@@ -36,7 +36,7 @@ import type {
   WatchRow
 } from './types'
 import { ApiError, clampOpacityPercent } from './contract'
-import type { EmbedSetStatus, AttachResult, EmbedHostDebug, ExactApiImpl } from './contract'
+import type { EmbedSetStatus, AttachResult, EmbedHostDebug, EmbedDiagInfo, ExactApiImpl } from './contract'
 
 /** 真实桥探测：exe 内 window.go 必在；纯浏览器/WebView2 异常时自动降级 local 面，
    避免整页 bridge_missing 死锁（降级会显示顶部提示横幅）。 */
@@ -263,9 +263,29 @@ export const embedBridge = {
        「送到时就是 0」——这两种成因的修法完全相反。异常不再吞掉，
        而是带回 ok=false + error，由徽标原样显示。
        仍然不 throw：上报失败不该打断播放 UI。 */
+    /* 第九十六轮看门狗：await 若 8s 内不返回=IPC 挂起。alpha.40 的
+       「上报异常=none」正是挂起时的**谎言**——旧代码卡在这个 await 上不返回，
+       上层 catch 不触发、error 不置位，徽标于是显示 none。现在 race 一个超时：
+       超时即回 ok=false + error='pending>8s'，让「挂起」变成界面上可见的事实。
+       原 promise 仍在后台挂着，无所谓——诊断目标是把挂起显形，不是救活它。
+       看门狗时长可用 window.__zgjBoundsWdMs 覆盖（vitest 单测把它压到几百 ms）。 */
+    const wdMs = (() => {
+      if (typeof window !== 'undefined') {
+        const o = (window as unknown as { __zgjBoundsWdMs?: number }).__zgjBoundsWdMs
+        if (typeof o === 'number' && o > 0) return o
+      }
+      return 8000
+    })()
+    let wdTimer: ReturnType<typeof setTimeout> | undefined
     try {
-      const r = await callGo<{ ok: boolean; host?: EmbedHostDebug }>(
-        'PlayerSetBounds', x, y, w, h, show)
+      const wd = new Promise<never>((_, rej) => {
+        wdTimer = setTimeout(() => rej(new Error('pending>8s')), wdMs)
+      })
+      const r = await Promise.race([
+        callGo<{ ok: boolean; host?: EmbedHostDebug }>(
+          'PlayerSetBounds', x, y, w, h, show),
+        wd
+      ])
       // 只报"有尺寸的那几次"，否则每次几何变化都打一条会把控制台刷满
       if (w > 1 && h > 1) {
         console.info('[embed] setBounds', x, y, w, h, 'show=' + show, JSON.stringify(r?.host ?? null))
@@ -275,6 +295,8 @@ export const embedBridge = {
     } catch (err) {
       const e = err as Error
       return { ok: false, error: String(e?.message ?? err ?? 'unknown') }
+    } finally {
+      if (wdTimer !== undefined) clearTimeout(wdTimer)
     }
   },
   /* 覆盖层穿透带（App.PlayerHitBands）：top/bottom=HTML 覆盖层与视频矩形
@@ -307,6 +329,19 @@ export const embedBridge = {
     } catch (err: any) {
       console.info('[embed] forceWindow 失败', String(err?.message ?? err))
       return false
+    }
+  },
+  /* 诊断面（App.EmbedDiag）：exe 身份自证 + app.log 的 setBounds 到达计数。
+     arrived 与前端自己量的「前端量得#N」并排进复制诊断，两侧读数对撞即可判
+     「IPC 没到 Go」还是「到了 Go 没执行」（alpha.40 至今没分开的两件事）。
+     失败不 throw：诊断不可用不该打断复制诊断的其余字段。 */
+  diag: async (): Promise<EmbedDiagInfo> => {
+    try {
+      const r = await callGo<EmbedDiagInfo>('EmbedDiag')
+      return r ?? { version: '', revision: '', pid: 0, arrived: 0, logDir: '', logFail: '' }
+    } catch (err: any) {
+      console.info('[embed] diag 失败', String(err?.message ?? err))
+      return { version: '', revision: '', pid: 0, arrived: 0, logDir: '', logFail: 'unavailable' }
     }
   }
 }

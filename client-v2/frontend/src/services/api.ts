@@ -7,7 +7,7 @@
                 入参槽位精确匹配检查（ExactApiImpl——机制与边界见该文件底部）
    - 真实模式：window.go.main.App.<Method>(...) 返回 JSON 字符串（Go 侧 (string, error)）
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
-import type { EmbedSetStatus, AttachResult, NativeApi } from './contract'
+import type { EmbedSetStatus, AttachResult, NativeApi, EmbedDiagInfo } from './contract'
 import { hasBridge, realApi, embedBridge } from './bridge'
 import { mockApi } from './mock'
 import { mockEmbedApi } from './mock/embed'
@@ -23,7 +23,7 @@ export const MOCK_MODE = isMock
 
 /* 旧命名再导出：调用方一行不改（'@/services/api' 的全部具名导出原位保留）。 */
 export { ApiError, clampOpacityPercent } from './contract'
-export type { EmbedHostDebug, AttachResult } from './contract'
+export type { EmbedHostDebug, AttachResult, EmbedDiagInfo } from './contract'
 
 /* ── V2-4 播放画面内嵌绑定（App.{PlayerAttach,PlayerSetBounds,PlayerHitBands,PlayerDetach}）──
    不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
@@ -62,5 +62,12 @@ export const embedApi = {
     if (isMock) return mockEmbedApi.forceWindow()
     if (!hasBridge) return false
     return embedBridge.forceWindow()
+  },
+  /* 诊断面：exe 身份 + Go 侧 setBounds 到达计数（alpha.40 矛盾的分判器）。
+     mock 面回合成形状（arrived=__zgjBounds 计数）；无桥回空形状。 */
+  diag: async (): Promise<EmbedDiagInfo> => {
+    if (isMock) return mockEmbedApi.diag()
+    if (!hasBridge) return { version: '', revision: '', pid: 0, arrived: 0, logDir: '', logFail: 'no-bridge' }
+    return embedBridge.diag()
   }
 }

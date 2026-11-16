@@ -2,7 +2,7 @@
    不进 NativeApi 面：这是播放页生命周期细节，mock/无桥/非 Windows 一律降级为
    no-op（attach 返回 embedded:false），PlayerView 无需按模式特判——内嵌不可得
    时整条播放链路保持现行行为（mpv 独立窗 / 浏览器无画面）。 */
-import type { AttachResult, EmbedHostDebug, EmbedSetStatus } from '../contract'
+import type { AttachResult, EmbedHostDebug, EmbedSetStatus, EmbedDiagInfo } from '../contract'
 
 /* 合成 host：attach 与 setBounds 的回执共用同一份，这样徽标在两条路上读到的
    字段一致（真实桥上 host 也是同一个 EmbedHost 的 Debug 快照）。 */
@@ -47,12 +47,16 @@ export const mockEmbedApi = {
       // 镜像真实 Debug 的语义：lastIn = 收到的入参原样，换算矩形只在尺寸有效时保留。
       // 不镜像的话 mock 徽标会永远显示「最近上报 0×0」，跟真机上那条最关键的
       // 读数一模一样 —— 那会让验证脚本对着一个**假现场**通过（C6e 就是钉这个）。
-      const placed = w > 1 && h > 1
+      // 第九十六轮缝 __zgjMockNeverPlaced：把回执钉在 alpha.40 真机形状
+      // （applyCount=0 / childWidth=1）——自愈合逃生 E2E 靠它驱动
+      // 「running 了但子窗从没被摆过」的判定路径（正常缝不启用）。
+      const neverPlaced = typeof window !== 'undefined' && !!window.__zgjMockNeverPlaced
+      const placed = !neverPlaced && w > 1 && h > 1
       return {
         ok: true,
         host: {
           ...MOCK_HOST,
-          applyCount: rec.count,
+          applyCount: neverPlaced ? 0 : rec.count,
           lastInX: x, lastInY: y, lastInW: w, lastInH: h,
           lastOutVisible: show,
           lastOutW: placed ? w : 0, lastOutH: placed ? h : 0,
@@ -76,7 +80,21 @@ export const mockEmbedApi = {
     /* mock/无桥：no-op */
   },
   forceWindow: async (): Promise<boolean> => {
-    /* mock/无桥没有内嵌可放弃，返回 false 让调用方知道没生效 */
+    /* mock/无桥没有内嵌可放弃，返回 false 让调用方知道没生效。
+       第九十六轮缝 __zgjMockForceWindow：自愈合逃生 E2E 需要 mock 侧
+       真「切走」一次（返回 true + 记 __zgjForceWindow 计数供断言），
+       真实 exe 恒 isMock=false、不经过这个分支。 */
+    if (typeof window !== 'undefined' && window.__zgjMockForceWindow) {
+      window.__zgjForceWindow = (window.__zgjForceWindow ?? 0) + 1
+      return true
+    }
     return false
+  },
+  /* 诊断面 mock：镜像 Go EmbedDiag 的形状（app.log 计数在 mock 面就是
+     __zgjBounds 的到达计数）——PlayerView 复制诊断的 diag= 行在 mock E2E
+     里也要能出，否则「字段在 Go 侧加了、前端没接」的老毛病又没人盯。 */
+  diag: async (): Promise<EmbedDiagInfo> => {
+    const c = typeof window !== 'undefined' ? (window.__zgjBounds?.count ?? 0) : 0
+    return { version: 'mock', revision: '', pid: 0, arrived: c, logDir: '', logFail: '' }
   }
 }

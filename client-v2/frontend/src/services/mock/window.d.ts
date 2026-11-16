@@ -19,5 +19,18 @@ declare global {
     __zgj?: { mockLoginFail?: string }
     /** mock 验证钩子：mockApi.soraniLogin 最近一次入参（M8 track 形状断言用；真实桥不写） */
     __zgjSoraniLastLogin?: SoraniLoginAttempt | null
+    /* ── 第九十六轮（自愈合逃生 / 看门狗）── */
+    /** mock 缝：置 true 让 mockEmbedApi.setBounds 的回执钉在 alpha.40 真机形状
+        （applyCount=0 / childWidth=1）——自愈合 E2E 驱动「running 了但子窗
+        从没被摆过」判定；真实 exe 不读 */
+    __zgjMockNeverPlaced?: boolean
+    /** mock 缝：置 true 让 mockEmbedApi.forceWindow 返回 true 并记 __zgjForceWindow
+        （自愈合 E2E 断言「切独立窗真的发生了」）；真实 exe 不读 */
+    __zgjMockForceWindow?: boolean
+    /** mockEmbedApi.forceWindow 的调用计数（自愈合 E2E 断言用） */
+    __zgjForceWindow?: number
+    /** 看门狗时长覆盖（ms）：bridge.embedBridge.setBounds 的 pending 阈值；
+        vitest 单测压到几百 ms；真实 exe 无此键=默认 8000 */
+    __zgjBoundsWdMs?: number
   }
 }

@@ -221,6 +221,71 @@ def main():
                   and badge.strip().startswith(c7_line),
                   f"line={c7_line[-60:]!r}")
 
+            # ── 场景 D：自愈合逃生（第九十六轮）──
+            # alpha.40 真机「前端发了 3 次 setBounds、Go 侧 applyCount=0、用户黑屏」
+            # 之后，产品不该再等下一个 release。这一版：running 后若 N ms 内子窗
+            # 从未被摆过（回执 applyCount=0 或 childWidth==1），自动 forceWindow
+            # 切 mpv 独立窗让用户先看到画面，并留 reason=auto-fallback-unplaced。
+            # mock 缝 __zgjMockNeverPlaced 把回执钉在真机形状（applyCount=0/childWidth=1），
+            # __zgjMockForceWindow 让 mock forceWindow 真切一次并记 __zgjForceWindow 计数，
+            # __zgjAutoFbMs 把 8s 阈值压到 600ms 让 E2E 不用干等。
+            # 新 context 隔离：场景 A-C 的 __zgjBounds/状态不能漏进来。
+            #
+            # 判据按产品**实际**行为写（读模板确认，不猜）：
+            #   - 自动逃生与手动 forceWindowMode 同路径：置 embedActive=false、
+            #     embedReason='auto-fallback-unplaced'、重跑 bootFromQuery。
+            #   - debug 徽标 gated on embedHost（不清）→ 逃生后**仍在**（与手动路径一致，
+            #     显示旧 host 读数供诊断），所以不能断言它消失。
+            #   - 独立窗回退提示 embed-fallback gated on `embedReason && !loading`，
+            #     要等 re-boot 的 loading 落回才显示 → 必须 wait_for_selector 而非瞬时读。
+            ctx_d = browser.new_context(viewport={"width": 1280, "height": 800})
+            ctx_d.add_init_script(
+                "window.__zgjMockEmbed = true; window.__zgjMockNeverPlaced = true; "
+                "window.__zgjMockForceWindow = true; window.__zgjAutoFbMs = 600;")
+            page_d = ctx_d.new_page()
+            page_d.goto(PLAYER_URL)
+            page_d.wait_for_selector(".pl-stage", timeout=15000)
+            # 等逃生触发（forceWindow 计数）。触发后 embedReason 已置、re-boot 中，
+            # 再等回退提示真的渲染出来（re-boot 的 loading 落回才显示）。
+            page_d.wait_for_function(
+                "() => (window.__zgjForceWindow ?? 0) >= 1", timeout=9000)
+            d_fw = page_d.evaluate("window.__zgjForceWindow")
+            d_fb_text = ""
+            try:
+                page_d.wait_for_selector('[data-testid="embed-fallback"]',
+                                         state="visible", timeout=9000)
+                d_fb_text = page_d.locator('[data-testid="embed-fallback"]').inner_text()
+            except Exception:
+                pass
+            d_debug = page_d.locator('[data-testid="embed-debug"]').count()
+            check("D1 running 后子窗从未被摆过 → 自动 forceWindow 发生",
+                  d_fw is not None and d_fw >= 1,
+                  f"forceWindow={d_fw}")
+            check("D2 逃生后独立窗回退提示渲染出来（用户知道画面去哪了）",
+                  d_fb_text.strip() != "",
+                  f"fallback={d_fb_text[:80]!r}")
+            check("D3 回退提示走 i18n 文案（裸 reason 码不得直接给用户读）",
+                  "已自动改用独立窗口播放" in d_fb_text and "auto-fallback-unplaced" not in d_fb_text,
+                  f"fallback={d_fb_text[:80]!r}")
+            check("D4 debug 徽标保留（与手动逃生路径一致：embedHost 不清，供诊断读旧值）",
+                  d_debug == 1, f"debugVisible={d_debug}")
+            # 对照组：正常缝（子窗摆好了 applyCount>0）不该触发自动逃生。
+            ctx_d2 = browser.new_context(viewport={"width": 1280, "height": 800})
+            ctx_d2.add_init_script(
+                "window.__zgjMockEmbed = true; window.__zgjAutoFbMs = 700;")
+            page_d2 = ctx_d2.new_page()
+            page_d2.goto(PLAYER_URL)
+            page_d2.wait_for_selector(".pl-stage", timeout=15000)
+            page_d2.wait_for_timeout(2200)  # 等 running + 逃生窗(700ms)过去
+            d2_fw = page_d2.evaluate("window.__zgjForceWindow")
+            d2_debug = page_d2.locator('[data-testid="embed-debug"]').count()
+            d2_fb = page_d2.locator('[data-testid="embed-fallback"]').count()
+            check("D5 子窗已摆好（正常缝）时不触发自动逃生（对照：不误伤好现场）",
+                  (d2_fw is None or d2_fw == 0) and d2_debug == 1 and d2_fb == 0,
+                  f"forceWindow={d2_fw} debugVisible={d2_debug} fallbackVisible={d2_fb}")
+            ctx_d.close()
+            ctx_d2.close()
+
             # 截图：标注视频矩形（虚线）与上下穿透带（半透明红/蓝）。
             page.evaluate("""(r) => {
               const mk = (css, txt) => { const d = document.createElement('div');

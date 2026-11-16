@@ -148,6 +148,12 @@ var quitWatchdog = 5 * time.Second
 // （spike 实测 0.0s），失败不致命——后续每次绑定调用都会重试 Init。
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	// app.log 启动行：exe 身份自证（version=? 之谜从这一版起由日志回答）。
+	rev := ""
+	if bi := readBuildVCS(); bi != nil {
+		rev, _ = bi["revision"].(string)
+	}
+	appLogStartup(buildVersion, rev)
 	if err := native.Init(); err != nil {
 		// sync.Once 语义：initialize 失败会保持到进程重启（数据目录不可写是硬故障）。
 		println("[zhenguojian] engine initialize 失败: " + err.Error())
@@ -710,6 +716,7 @@ func (a *App) PlayerAttach() (string, error) {
 	}
 	a.playerSvc.SetWid(a.embed.HWND())
 	// 现场一起返回：真机「音频有画面黑」只能靠它定位（见 mpv.HostDebug）
+	appLogEvent("attach hwnd=0x%x", uint64(a.embed.HWND()))
 	return marshalJSON(map[string]any{"embedded": true, "host": a.embed.Debug()})
 }
 
@@ -719,8 +726,13 @@ func (a *App) PlayerAttach() (string, error) {
 // （旧签名把「隐藏」编码成 0×0，于是隐藏态永远不摆位 —— mpv 起进程时
 // 拿到的是创建尺寸的 1×1 drawable，见 mpv.Bounds.Show 的注释。）
 func (a *App) PlayerSetBounds(x, y, w, h int, show bool) (string, error) {
+	waitStart := time.Now()
 	a.embedMu.Lock()
 	defer a.embedMu.Unlock()
+	// 到达日志：「前端说发了 N 次」与「Go 实际收到几次」的第一手对照。
+	// waitMs>1000 = 消息到了 Go 但锁被别人占着（排队），与「IPC 没到」
+	// （这里 0 行）是两种完全不同的故障——alpha.40 的矛盾就是分不开这两个。
+	appLogSetBounds(x, y, w, h, show, time.Since(waitStart).Milliseconds())
 	if a.embed == nil {
 		return marshalJSON(map[string]any{"ok": false})
 	}
@@ -766,6 +778,7 @@ func (a *App) PlayerDetach() (string, error) {
 	defer a.embedMu.Unlock()
 	if a.embed != nil {
 		a.embed.Hide()
+		appLogEvent("detach")
 	}
 	return marshalJSON(map[string]any{"ok": true})
 }
@@ -788,7 +801,37 @@ func (a *App) PlayerForceWindow() (string, error) {
 		a.embed.Hide()
 	}
 	a.playerSvc.SetWid(0)
+	appLogEvent("force-window")
 	return marshalJSON(map[string]any{"ok": true, "embedded": false})
+}
+
+// EmbedDiag 诊断绑定（第九十六轮）：app.log 的自读口 + exe 身份。
+// 前端徽标/复制诊断带出 arrived=（Go 实际收到的 setBounds 次数）——
+// 与前端自己量的「前端量得#N」并排，两侧读数对撞即可判「IPC 没到」还是
+// 「到了没执行」。开发构建 version 为空=未注入 ldflags，照实回空串。
+func (a *App) EmbedDiag() (string, error) {
+	out := map[string]any{
+		"version": buildVersion,
+		"revision": func() string {
+			if bi := readBuildVCS(); bi != nil {
+				if r, ok := bi["revision"].(string); ok {
+					return r
+				}
+			}
+			return ""
+		}(),
+		"pid":     os.Getpid(),
+		"arrived": appLogSetBoundsCount(),
+		"logDir": func() string {
+			dir, err := native.DataDir()
+			if err != nil {
+				return ""
+			}
+			return dir
+		}(),
+		"logFail": appLogger.fail(),
+	}
+	return marshalJSON(out)
 }
 
 func marshalJSON(v any) (string, error) {

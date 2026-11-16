@@ -13,6 +13,7 @@ import (
 // 这个文件钉的是**绑定层那一侧**：多出来的参数不能只有编译级证据。
 
 func TestPlayerSetBoundsWithoutEmbedIsNotAnError(t *testing.T) {
+	t.Setenv("ZHENGUO_DATA", t.TempDir()) // app.log 落点隔离，不碰真实用户配置目录
 	a := &App{}
 	// embed==nil（非 Windows、attach 失败、或已 detach）必须是"正常降级"：
 	// 前端每次几何变化都会调这里，返回 error 会把控制台刷满、
@@ -27,6 +28,7 @@ func TestPlayerSetBoundsWithoutEmbedIsNotAnError(t *testing.T) {
 }
 
 func TestPlayerSetBoundsDegenerateGeometryNeverPanics(t *testing.T) {
+	t.Setenv("ZHENGUO_DATA", t.TempDir()) // app.log 落点隔离
 	a := &App{}
 	// 旧约定里 0×0 被当作"隐藏"专用值；现在 show 与尺寸解耦后，
 	// 任何尺寸/坐标组合（含负数、1px、全零）都必须活着返回 ——
@@ -54,6 +56,7 @@ func TestPlayerAttachReportsUnsupportedOffWindows(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows 真机可能真的内嵌成功，这条只钉非 Windows 的降级形状")
 	}
+	t.Setenv("ZHENGUO_DATA", t.TempDir()) // app.log 落点隔离
 	a := &App{}
 	out, err := a.PlayerAttach()
 	if err != nil {

@@ -32,7 +32,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { usePlayerStore, SPEED_CHOICES, QUALITY_CHOICES } from '@/stores/player'
 import { dramaFromQuery, detailRoute } from '@/services/dramaRef'
-import { api, embedApi, type EmbedHostDebug } from '@/services/api'
+import { api, embedApi, type EmbedHostDebug, type EmbedDiagInfo } from '@/services/api'
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
@@ -74,6 +74,14 @@ const chapters = ref<Chapter[]>([])
 const chaptersLoading = ref(false)
 const panelBodyEl = ref<HTMLElement | null>(null)
 const embedReason = ref('')
+/* 回退原因码 → 用户文案。裸码（forced-window / auto-fallback-unplaced /
+   unknown）不该直接进给用户读的句子（alpha.40 之后文案质量就是信任），
+   已知码走 i18n，未知码保留原样（诊断时还能看到真实 reason）。 */
+function reasonText(code: string): string {
+  if (code === 'forced-window') return t('player.embedReasonForced')
+  if (code === 'auto-fallback-unplaced') return t('player.embedReasonAuto')
+  return code
+}
 /* 内嵌现场（父窗类名 / 子窗矩形 / 可见性 / 最近一次换算）。
    默认不显示——正常用户不该看到调试信息；
    置 localStorage['zgj.embedDebug']='1' 后显示在视频区左上角，
@@ -135,13 +143,19 @@ const embedDebugText = computed(() => {
    不是渲染过的句子，省掉"这行是被裁的还是本来就是 0"这类歧义。 */
 const embedCopy = ref<'idle' | 'ok' | 'fail'>('idle')
 
+const embedDiagInfo = ref<EmbedDiagInfo | null>(null)
 function embedDiagText(): string {
+  const d = embedDiagInfo.value
   return [
     `version=${appVersion.value || '?'}`,
     `badge=${embedDebugText.value}`,
     `error=${store.error || ''}`,
     `measured=${embedMeasure.value || 'n/a'}`,
     `report-error=${embedSetErr.value || 'none'}`,
+    /* 第九十六轮：diag= 行把 Go 侧 app.log 的「实际到达次数」带回前端现场。
+       arrived 与前端量得的 #N 并排：N>0 而 arrived=0 → IPC 没到 Go；
+       arrived==N 而子窗仍 1×1 → 到了 Go 但锁排队/未执行（waitMs 在日志里）。 */
+    `diag=${d ? JSON.stringify(d) : 'unavailable'}`,
     `host=${JSON.stringify(embedHost.value ?? null)}`
   ].join('\n')
 }
@@ -187,6 +201,40 @@ const appVersion = ref('')
 let measureSeq = 0
 let stageRO: ResizeObserver | undefined
 let barsRO: ResizeObserver | undefined
+/* ── 第九十六轮自愈合逃生 ──
+   alpha.40 真机：前端 setBounds 发了 3 次、Go 侧 applyCount=0、用户黑屏，
+   而我拿不到数据只能连烧 tag。这一版让产品自己逃生：running 之后若 8s 内
+   子窗**从未被摆过**（回执 applyCount=0 或 childWidth 停在创建尺寸 1），
+   说明「上报链」整体失效（IPC 挂起/回执撒谎/子窗没建好，具体原因由
+   app.log 的 arrived 计数与看门狗的 pending>8s 区分）——不必等下一个
+   release，直接切 mpv 独立窗口让用户先看到画面，并留下 reason 供诊断。
+   手动逃生门（embed-force-window 按钮）仍在，自动只是兜底。 */
+let autoFbTimer: ReturnType<typeof setTimeout> | undefined
+const autoFbMs = (): number => {
+  if (typeof window !== 'undefined') {
+    const o = (window as unknown as { __zgjAutoFbMs?: number }).__zgjAutoFbMs
+    if (typeof o === 'number' && o > 0) return o
+  }
+  return 8000
+}
+function unplaced(): boolean {
+  const h = embedHost.value
+  return !h || h.applyCount === 0 || h.childWidth === 1 || h.childHeight === 1
+}
+function armAutoFallback() {
+  if (autoFbTimer) clearTimeout(autoFbTimer)
+  if (!embedActive || !store.running || store.error) return
+  autoFbTimer = setTimeout(async () => {
+    autoFbTimer = undefined
+    if (!embedActive || !store.running || store.error) return
+    if (!unplaced()) return
+    const ok = await embedApi.forceWindow()
+    if (!ok) return
+    embedActive = false
+    embedReason.value = 'auto-fallback-unplaced'
+    await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
+  }, autoFbMs())
+}
 
 function videoShouldShow(): boolean {
   // 仅在实际出画面期间占据视频矩形；其余状态让位给 DOM 覆盖层（原生子窗盖在 DOM 之上）。
@@ -229,7 +277,10 @@ async function reportBounds() {
 
 watch(
   () => [store.running, store.loading, store.error, store.eof],
-  () => void reportBounds()
+  () => {
+    void reportBounds()
+    armAutoFallback()
+  }
 )
 
 const sliderValue = computed({
@@ -446,6 +497,12 @@ onMounted(async () => {
      用户一眼能看见、也能直接念给我。 */
   embedReason.value = attach.embedded ? '' : attach.reason || 'unknown'
   embedHost.value = attach.host ?? null
+  /* 诊断面快照：exe 身份 + Go 侧 setBounds 到达计数（复制诊断的 diag= 行）。
+     只在内嵌可用时取——独立窗回退态没有 app.log 计数可言。不 await：
+     诊断不可用不该拖慢进入播放页的主链。 */
+  if (embedActive) {
+    void embedApi.diag().then(d => { embedDiagInfo.value = d }).catch(() => undefined)
+  }
   if (embedActive) {
     if (stageEl.value) {
       stageRO = new ResizeObserver(() => void reportBounds())
@@ -490,6 +547,7 @@ onBeforeUnmount(() => {
   stageRO = undefined
   barsRO?.disconnect()
   barsRO = undefined
+  if (autoFbTimer) { clearTimeout(autoFbTimer); autoFbTimer = undefined }
   window.removeEventListener('resize', onStageResize)
   window.removeEventListener('keydown', onHotkey)
   if (embedActive) void embedApi.detach()
@@ -535,7 +593,7 @@ onBeforeUnmount(() => {
             v-if="embedReason && !store.loading && !store.error"
             class="pl-hint embed-fallback"
             data-testid="embed-fallback"
-          >{{ tf('player.embedFallback', { reason: embedReason }) }}</div>
+          >{{ tf('player.embedFallback', { reason: reasonText(embedReason) }) }}</div>
           <div v-if="store.loading" class="pl-hint">{{ t('player.openingSession') }}</div>
           <div v-else-if="store.error" class="pl-hint err">
             {{ store.error }}
