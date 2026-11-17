@@ -27,3 +27,7 @@ client-v2/*.syso
 # 它们本来就被 v1 自己的 .gitignore 排除，删掉跟踪文件后目录仍在，
 # 列在这里是为了让 `git status` 保持干净、且一眼看出"这是残留物不是待提交内容"。
 zhenguojian/
+
+# P2 Electron 壳：node_modules 由 selftest.sh/本地装（npmmirror electron 二进制
+# 大且不入库）。
+client-v2/electron/node_modules/

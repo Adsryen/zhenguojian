@@ -36,6 +36,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
@@ -214,7 +215,14 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 
 	reader := bufio.NewReaderSize(in, 1<<20)
 	group := sync.WaitGroup{}
-	slots := make(chan struct{}, 8) // v1 sidecar=6；v2 启动期并发绑定更多，放宽到 8
+	// 并发槽：v1 sidecar=6。这里放宽到 32——**慢网络调用不许饿死快本地调用**。
+	// 首版=8 时被 selftest 实锤：无网沙箱下 DiscoverView 的 9 个 Cover（海报抓取）
+	// 各挂满 30s 超时，把 8 个槽占满，快调用 Ping 排队等槽、错过自己的 30s 预算
+	// （「sidecar call Ping timed out after 30000ms」）。主进程侧的超时**不会**
+	// 释放这里的槽（native 抓取仍在跑），所以只能把槽数抬到明显高于启动期
+	// 并发突发的水平，让本地调用永远有位。生产同样受益：一次 UI 动作不该排在
+	// 一堆海报抓取后面。
+	slots := make(chan struct{}, 32)
 	respond := func(id *json.RawMessage, result string, err error) {
 		if id == nil {
 			return
@@ -246,6 +254,23 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 				}
 				// 收尾：等所有在飞请求落定，再走有界 shutdown（同 Wails 退出链）。
 				break
+			}
+			// __methods：返回本表全部方法名（JSON 数组）。Electron 壳的 preload
+			// 用它把 window.go.main.App 建成**真·普通对象**（contextBridge 克隆
+			// 不了 Proxy，但克隆普通函数对象没问题）——方法面与反射表同源，
+			// 与 Wails「App = 恰好这些绑定方法」的形态一致。
+			if req.Method == "__methods" {
+				names := make([]string, 0, len(table))
+				for n := range table {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				b, _ := json.Marshal(names)
+				respond(req.ID, string(b), nil)
+				if readErr != nil {
+					break
+				}
+				continue
 			}
 			pm, ok := table[req.Method]
 			if !ok {
