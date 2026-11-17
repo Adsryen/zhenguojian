@@ -29,9 +29,15 @@ type App struct {
 	playerSvc *player.Service
 	// V2-3：下载与合并服务（轮询事件 + 合并队列；绑定见 bindings_download.go）。
 	downloadSvc *downloadsvc.Service
-	// V2-4：播放画面内嵌宿主（ZgjVideoHost 子窗）；embedMu 串行化 attach/bounds/detach。
-	embedMu sync.Mutex
-	embed   *mpv.EmbedHost
+	// V2-4：播放画面内嵌宿主（ZgjVideoHost 子窗）。
+	// embedMu 只护 a.embed / a.embedBuild 两个字段的读写（短临界区）；建造
+	//（findHostWindow 至多轮询 2s）在锁外做，见 ensureEmbed——alpha.42 真机
+	// 的 7/2P5 锁排队就是旧版把建造压在锁里、把全部 setBounds 串行化造成的。
+	// a.embedBuild 非 nil=有建造在飞（single-flight：并发 attach 共享一次建造，
+	// 不重复建窗，也不把建造失败静默吞成 nil 宿主）。
+	embedMu    sync.Mutex
+	embed      embedHost
+	embedBuild *embedBuild
 	// V-TRAY：系统托盘（默认开启零设置；Windows 生效，其余平台 unsupported 降级）。
 	trayH *tray.Handler
 	// quitting 托盘「退出程序」/更新重启旗标：OnBeforeClose 仅在置位时放行关闭，
@@ -703,19 +709,67 @@ func (a *App) PlayerAttach() (string, error) {
 	if !mpv.EmbedAllowed(os.Getenv) {
 		return marshalJSON(map[string]any{"embedded": false, "reason": mpv.EnvNoEmbed})
 	}
-	a.embedMu.Lock()
-	defer a.embedMu.Unlock()
-	if a.embed == nil {
-		host, err := mpv.NewEmbedHost()
-		if err != nil {
-			return marshalJSON(map[string]any{"embedded": false, "reason": err.Error()})
-		}
-		a.embed = host
+	host, err := a.ensureEmbed()
+	if err != nil {
+		// 建造失败=「不内嵌」回退（独立窗），不是致命错误——真机
+		// findHostWindow 找不到宿主窗、X 显示不存在都会走到这里。
+		return marshalJSON(map[string]any{"embedded": false, "reason": err.Error()})
 	}
-	a.playerSvc.SetWid(a.embed.HWND())
+	a.playerSvc.SetWid(host.HWND())
 	// 现场一起返回：真机「音频有画面黑」只能靠它定位（见 mpv.HostDebug）
-	appLogEvent("attach hwnd=0x%x", uint64(a.embed.HWND()))
-	return marshalJSON(map[string]any{"embedded": true, "host": a.embed.Debug()})
+	appLogEvent("attach hwnd=0x%x", uint64(host.HWND()))
+	return marshalJSON(map[string]any{"embedded": true, "host": host.Debug()})
+}
+
+// embedBuild 表示一次**进行中的**内嵌建造（single-flight 载体）。
+type embedBuild struct {
+	done chan struct{} // 建造结束（成功或失败）时 close；等待方 <-done 后读 host/err
+	host embedHost
+	err  error
+}
+
+// ensureEmbed 返回内嵌宿主，首次调用时建造。**建造在 embedMu 锁外做**：
+// findHostWindow 会轮询至多 2s（宿主窗还没映射时），这段 sleep 旧版被压在
+// 锁里，把 PlayerSetBounds/HitBands/Detach/ForceWindow 全部串行化——
+// alpha.42 真机 `PlayerSetBounds:7/2P5`（7 发只有 2 进、5 次等锁 >8s）就是它。
+//
+// 并发语义（single-flight）：embedMu 只护「读 a.embed / 登记或领取 a.embedBuild」
+// 这一小段；真正的 newEmbedHostFunc 在锁外跑。两个 goroutine 同时 ensure 且都
+// 看到空：第一个登记在飞建造并出去建，第二个领到同一份 embedBuild 等 done——
+// 不会双建窗（旧「先写者赢」版本在竞态下 loser 的子窗会泄漏成隐藏活窗），
+// 建造失败也通过 b.err 如实传给每个等待方（不静默吞）。setBounds/HitBands/
+// Detach/ForceWindow 只读 a.embed 字段，永远不与建造互斥——「建造绝不阻塞
+// 上报」是这条的硬性质，由 TestSetBoundsDoesNotQueueBehindSlowConstruction 钉死。
+func (a *App) ensureEmbed() (embedHost, error) {
+	a.embedMu.Lock()
+	if h := a.embed; h != nil {
+		a.embedMu.Unlock()
+		return h, nil
+	}
+	if b := a.embedBuild; b != nil {
+		// 已有建造在飞：不重复建，共享这次的结果（含失败）。
+		a.embedMu.Unlock()
+		<-b.done
+		return b.host, b.err
+	}
+	// 首个发起者：登记在飞标记后立刻放锁，真正的建造在锁外执行。
+	b := &embedBuild{done: make(chan struct{})}
+	a.embedBuild = b
+	a.embedMu.Unlock()
+
+	host, err := newEmbedHostFunc()
+	b.host, b.err = host, err
+
+	a.embedMu.Lock()
+	if a.embedBuild == b { // 防御：确认自己仍是发起者（正常恒真）
+		if err == nil {
+			a.embed = host
+		}
+		a.embedBuild = nil // 失败也清在飞：下次 attach 重试建造（与旧版语义一致）
+	}
+	a.embedMu.Unlock()
+	close(b.done) // 必须在 b.host/b.err 写完之后：等待方靠它建立 happens-before
+	return b.host, b.err
 }
 
 // PlayerSetBounds 摆放/显隐视频子窗（物理像素，相对主窗客户区）。
