@@ -109,17 +109,34 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
 
 ## 4. 分阶段与门禁（每阶段本机可执行验证，不盲建）
 
-- **P1 协议+sidecar**：v2 Go 侧新 `sidecar` 入口（build tag 或独立 main），
-  `App` 绑定方法 → stdio JSON 行 dispatch（id 关联、并发、错误=字符串带
-  code、事件下行行）。门禁：Go 单测（协议往返/80 方法全量反射枚举防漏/
-  并发 id 不串）；`go-local.sh` 全绿。
-- **P2 Electron 骨架**：electron 主进程（spawn sidecar+崩溃自拉起+IPC
-  桥+preload shim）+ 现有 vite 产物加载。不引 electron-vite（现有 vite
-  配置直接复用，主进程 TS 用 esbuild 编）。门禁：Xvfb 起真 UI，8 页导航
-  全过（复用 smoke_nav 蓝行判据），截图证据；vue-tsc/vitest/E2E 30 只原样绿。
-- **P3 视频面**：BaseWindow+handle→Go→mpv --wid，父窗事件重摆，鼠标穿透。
-  门禁：Xvfb 截图视频区非单色（彩条判据，同 P0）；Windows 侧靠 CI
-  （TestEmbedHostRuntimeRealWindows 同款思路重写为 surface 测试）。
+- **P1 协议+sidecar（已完成，9315351）**：v2 Go 侧新 `sidecar` 入口
+  （build tag `zgj_sidecar` 双入口，`!zgj_sidecar`=Wails 原样），
+  `App` 绑定方法 → stdio JSON 行 dispatch（id 关联、32 并发槽、错误=
+  字符串带 code、事件下行行）。反射表 89 方法，kind 三分支
+  （(string,error)/string/error）——首版漏 7 个非双返回绑定（手写判据
+  漏项教训第 5 次）；receiver 不传=运行期 panic（`Type.Method.Func`
+  NumIn 多 1）。门禁实跑：Go 单测三条（形状钉名/contract.ts 82 App.X
+  ⊆ 反射表机器对账/端到端真跑 runStdioSidecar）；`go-local.sh` 全绿。
+- **P2 Electron 骨架（已完成，35bcc83）**：electron 主进程（spawn sidecar+
+  崩溃自拉起×5+30s 调用超时+桥 89 方法经 `__methods` 同步）+ 现有 vite 产物
+  加载。不引 electron-vite（现有 vite 配置直接复用）。关键修：file:// 白屏
+  =vite `base:'/'`→`'./'`；contextBridge 克隆不了 Proxy=改 `Object.create(null)`
+  普通对象（方法名经 env 注入）。flake 根因=sidecar 8 并发槽被 9 个无网
+  Cover（各挂 30s）占满饿死 Ping→slots 32。门禁实跑：selftest 桥 6 项+
+  8 页导航蓝行判据全过，两次连绿。
+- **P3 视频面（已完成，803b554）**：实现=主进程**拦截** 6 内嵌方法
+  （PlayerAttach/SetBounds/HitBands/Detach/ForceWindow/EmbedDiag），
+  VideoSurface（BaseWindow）承载几何与可见性；Go 侧只加
+  `__embed_set_wid`/`__embed_get_wid` 私有协议方法+`EmbedWid()` getter，
+  XID 经协议给 `playerSvc.SetWid`，mpv spawn 用它 `--wid`。前端零改动。
+  坐标语义（探针实测）：`BaseWindow.setBounds` 是**屏幕绝对**坐标，
+  `place()` 换算 `screen=contentBounds+rel`（前端报视口×dpr 物理像素）。
+  门禁实跑：selftest 段 C 判据链=pinia running → `pgrep mpv` 的
+  `--wid==surfaceXid`（0x20000c 实锤）→ 视频区**两帧差分** 627083 像素
+  变化（色数判据被首跑证伪：整区 14995 色但中心恒 32 色，分不清
+  没画与量到 testsrc 静态区）；xwininfo 窗树 surface=stage 原样
+  1079x597@200,91。Windows 侧（HWND 8 字节分支）未执行级验证
+  （无 Windows 环境，winvet 仅编译级）——靠 P5 CI 补齐。
 - **P4 门禁迁移**：verification/ 预检体系适配（mock E2E 不变；真桥 E2E
   改走 Electron CDP 或先冻结标注）；session_state/evidence_audit 适配
   「80 绑定=sidecar 方法表」。
