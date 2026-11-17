@@ -1,0 +1,245 @@
+# electron-win-package —— 打 Electron 版 Windows 安装包 + 自检 + 传 artifact（P5b）。
+#
+# 为什么单独一个 workflow、为什么 workflow_dispatch 触发：
+#   - 用户指令（不打 alpha tag）：「自己打包好、测试好，传到 GitHub 上
+#     （artifacts 可下载）即可」。所以这是**按需**产出一个可下载包，不在
+#     每次 push 上烧 windows runner（那是 electron-win-selftest 的职责）。
+#   - Windows 包本机（Linux）只能构、不能真跑；真跑 + 像素确认交用户实机。
+#     CI 这里负责：① 构 NSIS ② 跑**打包态**自检（isPackaged=true，用 bundle
+#     里的 mpv/sidecar，证明打包布局可用）③ 传 artifact。
+#
+# 产物（actions/upload-artifact）：
+#   - zhenguojian-v2-electron-win-x64-<sha>.exe   （NSIS 安装包，用户双击装）
+#   - zhenguojian-v2-electron-win-unpacked-<sha>.zip（免安装版，解压直接跑）
+#   - build-info-<sha>.txt                        （版本/commit/时间，用户贴回来对身份）
+name: electron-win-package
+
+on:
+  workflow_dispatch:
+
+jobs:
+  package-win:
+    name: Windows · 打包 + 自检 + artifact
+    runs-on: windows-latest
+    env:
+      GOTOOLCHAIN: "local"
+    steps:
+      # ⚠ 禁 fetch-tags（build-v2 第六十二轮教训）。本 workflow 只需源码。
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Capture build info
+        id: info
+        shell: pwsh
+        run: |
+          $sha = git rev-parse --short HEAD
+          $ver = (Get-Content client-v2/electron/package.json -Raw | ConvertFrom-Json).version
+          "version=$ver" | Out-File -Append build-info.txt
+          "commit=$sha" | Out-File -Append build-info.txt
+          "built=$([datetime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ssZ'))" | Out-File -Append build-info.txt
+          "platform=windows-x64 (Electron)" | Out-File -Append build-info.txt
+          "note=Electron 壳测试包：结构性修 Windows 黑屏（视频窗改 Electron 自管 BaseWindow，不再 WS_CHILD 塞 WebView2）" | Out-File -Append build-info.txt
+          "用法：装完 zgj-v2.exe 后，进播放页看视频是否出现；仍黑屏就点复制内嵌诊断贴回" | Out-File -Append build-info.txt
+          "SHA=$sha" | Out-File -FilePath "$env:GITHUB_OUTPUT"
+
+      # ── 前端 dist ──────────────────────────────────────────────────────
+      - name: Frontend (build dist)
+        working-directory: client-v2/frontend
+        shell: pwsh
+        run: |
+          $regs = @("https://registry.npmmirror.com", "https://registry.npmjs.org")
+          $ok = $false
+          foreach ($reg in $regs) {
+            npm ci --registry=$reg --fetch-retries=3 --fetch-timeout=120000
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::notice::npm ci failed against $reg, trying next"
+          }
+          if (-not $ok) { throw "npm ci failed against all registries" }
+          npm run build
+
+      # ── sidecar.exe ────────────────────────────────────────────────────
+      - name: Build sidecar.exe
+        working-directory: client-v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        shell: pwsh
+        run: |
+          mkdir -p "$env:RUNNER_TEMP/ov"
+          python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
+          go vet -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" .
+          $LASTEXITCODE -eq 0 -or (throw "sidecar vet failed")
+          go build -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -o build/bin/sidecar.exe .
+          if (-not (Test-Path build/bin/sidecar.exe)) { throw "sidecar.exe not produced" }
+
+      # ── Electron + electron-builder ────────────────────────────────────
+      # electron-builder 已进 package.json devDependencies，npm install 一并装。
+      - name: Install Electron + builder
+        working-directory: client-v2/electron
+        env:
+          ELECTRON_MIRROR: "https://npmmirror.com/mirrors/electron/"
+          ELECTRON_CUSTOM_DIR: "v{{ version }}"
+        shell: pwsh
+        run: |
+          npm install --fetch-retries=3 --fetch-timeout=180000
+          if ($LASTEXITCODE -ne 0) { throw "electron/electron-builder install failed" }
+          if (-not (Test-Path "node_modules/electron/dist/electron.exe")) { throw "electron binary missing" }
+          if (-not (Test-Path "node_modules/.bin/electron-builder")) { throw "electron-builder missing" }
+
+      # ── mpv（同 build-v2 / selftest 配方）───────────────────────────────
+      - name: Download mpv
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hdrs = @{ "User-Agent" = "zhenguojian-ci" }
+          if ($env:GITHUB_TOKEN) { $hdrs["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
+          $rel = $null
+          for ($try = 1; $try -le 3; $try++) {
+            try { $rel = Invoke-RestMethod -Headers $hdrs https://api.github.com/repos/mpv-player/mpv/releases/latest; break }
+            catch { Write-Warning "mpv releases/latest 第 $try 次失败：$($_.Exception.Message)"; Start-Sleep -Seconds (5 * $try) }
+          }
+          if (-not $rel) { throw "取 mpv 最新版本信息失败（3 次重试）；若 403/rate limit 说明 GITHUB_TOKEN 没生效" }
+          $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*full*.zip" } | Select-Object -First 1
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*.zip" -and $_.name -notlike "*pdb*" } | Select-Object -First 1 }
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
+          if (-not $asset) { throw "no usable mpv windows asset" }
+          Write-Host ("mpv asset: " + $asset.name)
+          New-Item -ItemType Directory -Force mpvtmp | Out-Null
+          $mpvOk = $false
+          $srcs = @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url))
+          for ($i = 1; $i -le 20; $i++) {
+            $u = $srcs[($i - 1) % 2]
+            curl.exe -fsSL --retry 2 -o mpv.pkg $u 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Get-Item mpv.pkg -ErrorAction SilentlyContinue).Length -gt 1MB) { $mpvOk = $true; break }
+            Write-Warning ("mpv attempt $i failed: $u"); Start-Sleep 60
+          }
+          if (-not $mpvOk) { throw "mpv download failed from all sources" }
+          if ($asset.name -like "*.zip") { Expand-Archive -Force mpv.pkg mpvtmp }
+          else { & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.pkg | Out-Null }
+
+      # ── ffmpeg（同配方）────────────────────────────────────────────────
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 2; $i++) {
+              curl.exe -fSL --retry 2 -o ffmpeg.zip $u 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Warning "ffmpeg attempt failed: $u"; continue }
+              try { Expand-Archive -Force ffmpeg.zip fftmp; $ok = $true; break }
+              catch { Write-Warning "extract failed: $($_.Exception.Message)"; Remove-Item ffmpeg.zip -ErrorAction SilentlyContinue }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw "ffmpeg download failed from all sources" }
+
+      # ── 填 staging/runtime（electron-builder extraResources 的来源）────
+      # 打包态 main.js 的 runtimeToolExe() 从 resources/runtime/{mpv,ffmpeg}
+      # 找 mpv/ffmpeg/ffprobe 并注入 sidecar env。这里把下载的 .exe 按那个
+      # 布局摆进 staging/runtime，electron-builder 会原样拷进 resources/。
+      - name: Stage runtime resources
+        working-directory: client-v2/electron
+        shell: pwsh
+        run: |
+          $ws = $env:GITHUB_WORKSPACE
+          $mpv = Get-ChildItem -Recurse -Filter mpv.exe (Join-Path $ws "mpvtmp") | Select-Object -First 1
+          if (-not $mpv) { throw ("mpv.exe not found under " + (Join-Path $ws "mpvtmp")) }
+          $ffdir = Get-ChildItem -Recurse -Filter ffmpeg.exe (Join-Path $ws "fftmp") | Select-Object -First 1
+          if (-not $ffdir) { throw ("ffmpeg.exe not found under " + (Join-Path $ws "fftmp")) }
+          $ffexe = $ffdir.FullName
+          $ffprobe = Join-Path (Split-Path $ffexe) "ffprobe.exe"
+          New-Item -ItemType Directory -Force "staging/runtime/mpv" | Out-Null
+          New-Item -ItemType Directory -Force "staging/runtime/ffmpeg" | Out-Null
+          Copy-Item $mpv.FullName "staging/runtime/mpv/mpv.exe" -Force
+          Copy-Item $ffexe "staging/runtime/ffmpeg/ffmpeg.exe" -Force
+          if (Test-Path $ffprobe) { Copy-Item $ffprobe "staging/runtime/ffmpeg/ffprobe.exe" -Force }
+          else { Write-Warning "ffprobe.exe not found（合并流程会缺 ffprobe，播放不受影响）" }
+          "runtime 资源：mpv.exe + ffmpeg.exe" | Out-File -Encoding utf8 "staging/README-RESOURCE"
+          Get-ChildItem -Recurse staging/runtime | ForEach-Object { Write-Host ("  " + $_.FullName + " (" + $_.Length + ")") }
+
+      # ── 打 NSIS 安装包 ─────────────────────────────────────────────────
+      - name: Build NSIS installer
+        working-directory: client-v2/electron
+        shell: pwsh
+        run: |
+          # 版本号取 package.json（2.0.0），不在这里硬编码覆盖。
+          npx electron-builder --win nsis --publish never
+          if ($LASTEXITCODE -ne 0) { throw "electron-builder --win nsis failed" }
+          Get-ChildItem out/*.exe, out/*.zip -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host ("  artifact: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)")
+          }
+          if (-not (Get-ChildItem out/*.exe | Where-Object { $_.Name -like "*-x64.exe" })) { throw "NSIS installer not produced" }
+
+      # ── 打包态自检（isPackaged=true，用 bundle 里的 mpv/sidecar）────────
+      # 证明「打包布局可用」：app.isPackaged=true 走 resourcesPath 解析
+      # sidecar/frontend/runtime。mpv_wid=架构判据；像素判据 Windows 透明 skip。
+      - name: Run packaged selftest
+        working-directory: client-v2/electron
+        env:
+          ZHENGUO_DATA: ${{ github.workspace }}\zgj-win-packdata
+        shell: pwsh
+        run: |
+          # 不设 ZHENGUO_MPV/SIDECAR：打包态从 bundle resources 取（这才是要测的）。
+          $app = "out/win-unpacked/zgj-v2.exe"
+          if (-not (Test-Path $app)) { throw "win-unpacked/zgj-v2.exe missing" }
+          # 测试视频
+          $dataDir = Join-Path $env:ZHENGUO_DATA "downloads"
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $vid = Join-Path $dataDir "p3-selftest.mp4"
+          # 用 bundle 里的 ffmpeg 生成（顺带验 runtime/ffmpeg 就位）
+          $bffmpeg = Join-Path (Get-Item .).FullName "staging/runtime/ffmpeg/ffmpeg.exe"
+          & $bffmpeg -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -c:a aac "$vid" 2>$null
+          if (-not (Test-Path $vid)) { throw "test video generation failed" }
+          # 跑打包态自检
+          & $app --selftest 1>st.out 2>st.err
+          $rc = $LASTEXITCODE
+          Write-Host "----- stderr (tail 40) -----"
+          Get-Content st.err -Tail 40 | ForEach-Object { Write-Host "  $_" }
+          $jsonLine = Get-Content st.out | Where-Object { $_ -like "SELFTEST_JSON *" } | Select-Object -Last 1
+          if (-not $jsonLine) { throw "no SELFTEST_JSON (exit $rc)" }
+          $obj = ($jsonLine -replace "^SELFTEST_JSON ", "") | ConvertFrom-Json
+          Write-Host "----- packaged checks -----"
+          $obj.checks | ForEach-Object {
+            $tag = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
+            Write-Host ("  [" + $tag + "] " + $_.name + "  " + $_.detail)
+          }
+          if ($rc -ne 0) { throw "packaged selftest exit $rc" }
+          if (-not $obj.ok) { throw "packaged selftest ok=false（见上）" }
+          Write-Host "packaged selftest: ok=true"
+
+      # ── 传 artifact ────────────────────────────────────────────────────
+      - name: Rename + upload artifact
+        shell: pwsh
+        run: |
+          $sha = $env:GITHUB_SHA_SHORT
+          if (-not $sha) { $sha = git rev-parse --short HEAD }
+          $nsis = Get-ChildItem client-v2/electron/out/*.exe | Where-Object { $_.Name -like "*-x64.exe" } | Select-Object -First 1
+          Copy-Item $nsis.FullName "zhenguojian-v2-electron-win-x64-$sha.exe"
+          # win-unpacked 免安装版打 zip
+          Compress-Archive -Path "client-v2/electron/out/win-unpacked" -DestinationPath "zhenguojian-v2-electron-win-unpacked-$sha.zip" -Force
+          Copy-Item build-info.txt "build-info-$sha.txt"
+          Get-ChildItem "zhenguojian-v2-electron-win-x64-$sha.exe", "zhenguojian-v2-electron-win-unpacked-$sha.zip", "build-info-$sha.txt" | ForEach-Object { Write-Host ("upload: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)") }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zhenguojian-v2-electron-win-x64-${{ github.sha }}
+          path: |
+            zhenguojian-v2-electron-win-x64-*.exe
+            zhenguojian-v2-electron-win-unpacked-*.zip
+            build-info-*.txt
+          if-no-files-found: error
+          retention-days: 14

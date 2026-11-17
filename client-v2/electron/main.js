@@ -28,10 +28,32 @@ const SELFTEST = process.argv.includes('--selftest')
 const isWin = process.platform === 'win32'
 const HERE = __dirname
 const CLIENT = path.join(HERE, '..')
-const DIST = path.join(CLIENT, 'frontend', 'dist')
+// 打包后 app.isPackaged=true，资源根 = <exe>/resources（sidecar/frontend/runtime
+// 都经 electron-builder extraResources 放到这）；开发态 isPackaged=false，
+// 走 client-v2/ 下的真实布局（sidecar 在 build/bin、dist 在 frontend/dist）。
+// 两条路径的**逻辑完全同形**（只差根目录），Linux 打包实测通过即可信 Windows。
+const isPackaged = !!app.isPackaged
+const RESOURCES = isPackaged ? process.resourcesPath : CLIENT
+
+const DIST = process.env.ZGJ_DIST || (isPackaged
+  ? path.join(RESOURCES, 'frontend', 'dist')
+  : path.join(CLIENT, 'frontend', 'dist'))
 // 自测产物目录：Windows 没有 /tmp，用 os.tmpdir()；sidecar 名字按平台分。
-const SIDECAR = process.env.ZHENGUO_SIDECAR || path.join(CLIENT, 'build', 'bin', isWin ? 'sidecar.exe' : 'sidecar-linux')
+const SIDECAR = process.env.ZHENGUO_SIDECAR || (isPackaged
+  ? path.join(RESOURCES, isWin ? 'sidecar.exe' : 'sidecar-linux')
+  : path.join(CLIENT, 'build', 'bin', isWin ? 'sidecar.exe' : 'sidecar-linux'))
 const SELFTEST_OUT = process.env.ZGJ_SELFTEST_OUT || (isWin ? path.join(os.tmpdir(), 'zgj-electron-selftest') : '/tmp/zgj-electron-selftest')
+
+// 打包后 mpv/ffmpeg/ffprobe 经 extraResources 放到 resources/runtime/{mpv,ffmpeg}。
+// 开发态返回 ''（走 ZHENGUO_MPV/PATH，与本机 selftest / Windows CI 一致）。
+// mpv→runtime/mpv/mpv(.exe)；ffmpeg、ffprobe 同放 runtime/ffmpeg/（合并流程
+// 两个都要，Go 侧 toolEnvNames=ZHENGUO_FFMPEG/ZHENGUO_FFPROBE）。
+function runtimeToolExe(name) {
+  if (!isPackaged) return ''
+  const sub = name === 'mpv' ? 'mpv' : 'ffmpeg'
+  const p = path.join(RESOURCES, 'runtime', sub, isWin ? name + '.exe' : name)
+  return fs.existsSync(p) ? p : ''
+}
 
 function log(...a) {
   if (SELFTEST) console.error('[electron]', ...a)
@@ -51,8 +73,19 @@ let seq = 0
 function startSidecar() {
   const dataDir = process.env.ZHENGUO_DATA
   const args = dataDir ? [dataDir] : []
+  // 打包态：把 bundle 里的 mpv/ffmpeg 明确指给 Go（DefaultMpvPath/ffmpeg 的
+  // ZHENGUO_MPV/ZHENGUO_FFMPEG 分支）。开发态这两个返回 ''，不覆盖外部 env
+  //（本机 selftest / Windows CI 都是外部注入 ZHENGUO_MPV）。fileExists 检查
+  // 在 Go 侧：指错/缺失会自动落到 PATH，不会把 app 弄坏。
+  const env = { ...process.env }
+  const mpvExe = runtimeToolExe('mpv')
+  const ffExe = runtimeToolExe('ffmpeg')
+  const ffprobeExe = runtimeToolExe('ffprobe')
+  if (mpvExe) env.ZHENGUO_MPV = mpvExe
+  if (ffExe) env.ZHENGUO_FFMPEG = ffExe
+  if (ffprobeExe) env.ZHENGUO_FFPROBE = ffprobeExe
   try {
-    sidecar = spawn(SIDECAR, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+    sidecar = spawn(SIDECAR, args, { stdio: ['pipe', 'pipe', 'pipe'], env })
   } catch (e) {
     log('sidecar spawn 失败:', e.message)
     return

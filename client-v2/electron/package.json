@@ -1,6 +1,7 @@
 {
   "name": "zhenguojian-v2-electron",
   "version": "2.0.0",
+  "author": "Adsryen",
   "private": true,
   "description": "真果鉴 V2 Electron 壳（第九十八轮 P2）：spawn Go sidecar + 加载 frontend/dist",
   "main": "main.js",
@@ -9,6 +10,7 @@
     "selftest": "bash selftest.sh"
   },
   "devDependencies": {
-    "electron": "37.2.0"
+    "electron": "37.2.0",
+    "electron-builder": "^26.18.0"
   }
 }

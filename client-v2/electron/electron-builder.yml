@@ -1,0 +1,66 @@
+# electron-builder 打包配置（P5b：Electron 版发可下载包给用户实机测黑屏）。
+#
+# 布局约定（与 main.js 的打包态路径解析严格对应，勿改一边不改另一边）：
+#   <app>/resources/sidecar-linux|sidecar.exe   —— Go 业务核心（纯 Go 无 cgo）
+#   <app>/resources/frontend/dist/**            —— Vue 前端（vite build，base:'./'）
+#   <app>/resources/runtime/mpv/mpv(.exe)       —— mpv 播放器（主进程经
+#   <app>/resources/runtime/ffmpeg/ffmpeg(.exe)   ZHENGUO_MPV/ZHENGUO_FFMPEG 指给 sidecar）
+#   <app>/resources/runtime/ffmpeg/ffprobe(.exe)
+# main.js 里 isPackaged=app.isPackaged，资源根=process.resourcesPath；
+# runtimeToolExe() 按 resources/runtime/{mpv,ffmpeg} 找并注入 sidecar env。
+#
+# 验证边界（诚实）：Linux 目标本机可真实打包+Xvfb 真跑（路径/布局/播放链
+# 执行级）；Windows 目标本机只能构（electron-builder 交叉打包），真跑交
+# Windows CI / 用户实机。打包逻辑两平台同形（只差资源根目录），Linux 绿
+# 即信 Windows 的布局，但 Windows 的「视频看得见」仍需实机像素确认。
+
+appId: com.zhenguojian.v2
+productName: zhenguojian-v2
+# 版本从 package.json 取（2.0.0）；alpha 号走 CI 的 -c version 覆盖。
+directories:
+  output: out
+  buildResources: buildres
+files:
+  - main.js
+  - preload.js
+  - videoSurface.js
+  - package.json
+# 共享资源：前端 dist + runtime（mpv/ffmpeg）。staging/runtime 由 build 脚本
+# 按平台填好（Linux=系统 mpv/ffmpeg，Windows=CI 下载的 mpv.exe/ffmpeg.exe）。
+extraResources:
+  - from: ../frontend/dist
+    to: frontend/dist
+  - from: staging/runtime
+    to: runtime
+  - from: staging/README-RESOURCE
+    to: README-RESOURCE
+asar: true
+# 前端 dist 与资源不进 asar（extraResources 已在 resources/ 下，独立于 asar）。
+asarUnpack: []
+npmRebuild: false
+# 不需要 node-gyp（无原生模块；sidecar 是独立 Go 二进制，electron 版本自动
+# 从 devDependencies 的 electron@37.2.0 读）。
+
+linux:
+  executableName: zgj-v2
+  category: Utility
+  target:
+    - dir          # 本机验证用（unpacked，直接跑）
+    - AppImage     # 可下载 artifact
+  extraResources:
+    - from: ../build/bin/sidecar-linux
+      to: sidecar-linux
+
+win:
+  executableName: zgj-v2.exe
+  target:
+    - nsis
+  extraResources:
+    - from: ../build/bin/sidecar.exe
+      to: sidecar.exe
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true

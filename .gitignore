@@ -31,3 +31,8 @@ zhenguojian/
 # P2 Electron 壳：node_modules 由 selftest.sh/本地装（npmmirror electron 二进制
 # 大且不入库）。
 client-v2/electron/node_modules/
+
+# P5b electron-builder 产物（AppImage/NSIS 是 CI artifact，不出现在仓库里；
+# out/ 有 100MB+ 的打包输出，staging/ 是构建前填的 mpv/ffmpeg 拷贝）。
+client-v2/electron/out/
+client-v2/electron/staging/
