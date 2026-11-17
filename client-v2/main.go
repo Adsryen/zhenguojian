@@ -1,3 +1,11 @@
+//go:build !zgj_sidecar
+
+// main.go —— Wails 入口（GUI）。第九十八轮起与 sidecar_main.go（stdio
+// 协议入口，-tags zgj_sidecar）互为对偶：同一个 App 结构体、同一套绑定
+// 方法，两种外壳。Wails 壳正在被 Electron 壳替换（research/electron-
+// migration-plan.md），但过渡期两条入口都要能独立构建。
+// 注意：sidecar 构建不能进本文件——它 import wails + //go:embed 前端
+// dist，而 sidecar 的 stdout 是协议通道，且不该嵌前端资源。
 package main
 
 import (
@@ -16,11 +24,6 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
-
-// buildVersion 由发布构建经 -ldflags "-X main.buildVersion=vX.Y.Z" 注入；
-// 本地开发构建为空串。它是版本判定与「应用版本/打包提交」展示的第一权威——
-// 编译进二进制，不会被 exe 同级残留的旧 build-info.json 污染。
-var buildVersion string
 
 func main() {
 	updater.EmbeddedVersion = buildVersion
@@ -86,14 +89,4 @@ func main() {
 	if err != nil {
 		println("Error:", err.Error())
 	}
-}
-
-// hasArg 只认精确匹配的参数（v1 用 sys.argv 判定，行为一致）。
-func hasArg(args []string, want string) bool {
-	for _, a := range args {
-		if a == want {
-			return true
-		}
-	}
-	return false
 }

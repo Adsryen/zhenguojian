@@ -9,8 +9,6 @@ import (
 
 	"zhenguojian/client-v2/internal/native"
 	"zhenguojian/client-v2/internal/updater"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ---------- V-UPD 程序内更新绑定 ----------
@@ -33,7 +31,7 @@ func (a *App) updateService() *updater.Service {
 			if ctx == nil {
 				return
 			}
-			runtime.EventsEmit(ctx, ev, data)
+			emitEventFunc(ctx, ev, data)
 		}
 		updateSvc = updater.NewService(dir, updater.LocalVersionFromExecutable(),
 			filepath.Join(dir, "update-settings.json"), emit)
@@ -99,7 +97,7 @@ func (a *App) UpdateApply() (string, error) {
 	go func() {
 		time.Sleep(300 * time.Millisecond) // 让 bat 进入轮询，再走 Wails 正常退出
 		a.allowQuit()                      // V-TRAY：放行 beforeClose（否则 X-拦截逻辑会只隐藏不退出，bat 永远等不到进程结束）
-		runtime.Quit(a.ctx)
+		windowQuitFunc(a.ctx)
 	}()
 	return marshalJSON(map[string]any{"kind": "restart", "restarting": true})
 }

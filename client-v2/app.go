@@ -16,8 +16,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"zhenguojian/client-v2/internal/downloadsvc"
 	"zhenguojian/client-v2/internal/mpv"
 	"zhenguojian/client-v2/internal/native"
@@ -57,7 +55,7 @@ func NewApp() *App {
 		DanmakuSource: player.NewDanmakuSource(native.DanmakuWindow),
 		Emit: func(event string, payload any) {
 			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, event, payload)
+				emitEventFunc(a.ctx, event, payload)
 			}
 		},
 		// 窗口内嵌句柄：初值 0 = mpv 独立窗（回退态）；进入播放页时
@@ -68,7 +66,7 @@ func NewApp() *App {
 		Call: native.Call,
 		EventsEmit: func(name string, data ...any) {
 			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, name, data...)
+				emitEventFunc(a.ctx, name, data...)
 			}
 		},
 		DataDirFunc: native.DataDir,
@@ -78,7 +76,7 @@ func NewApp() *App {
 	a.trayH = tray.New(tray.Actions{
 		Restore: func() {
 			if a.ctx != nil {
-				runtime.WindowShow(a.ctx)
+				windowShowFunc(a.ctx)
 			}
 		},
 		CheckUpdate: func() {
@@ -88,7 +86,7 @@ func NewApp() *App {
 		Quit: func() {
 			a.allowQuit()
 			if a.ctx != nil {
-				runtime.Quit(a.ctx)
+				windowQuitFunc(a.ctx)
 			}
 		},
 	})
@@ -97,7 +95,7 @@ func NewApp() *App {
 	a.updateService().Notify = func(title, text string) {
 		if err := tray.ShowInfoBox(title, text); err != nil {
 			if a.ctx != nil {
-				runtime.EventsEmit(a.ctx, "update:notify", map[string]any{"title": title, "text": text})
+				emitEventFunc(a.ctx, "update:notify", map[string]any{"title": title, "text": text})
 			}
 		}
 	}
