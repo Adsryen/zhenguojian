@@ -272,6 +272,45 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 				}
 				continue
 			}
+			// __embed_set_wid / __embed_get_wid（P3）：Electron 壳的视频面是一个
+			// 主进程自管的 BaseWindow（X11 XID / Win32 HWND 归主进程），sidecar
+			// 只持有这个句柄给 mpv --wid（playerSvc.SetWid）。内嵌方法
+			// （PlayerAttach/SetBounds/HitBands/Detach/ForceWindow）由**主进程
+			// 拦截**——窗口几何的真相在主进程手里，Go 侧不建窗。这两个方法是
+			// 主进程↔sidecar 的私有协议面，**不进** __methods 反射表（那是前端
+			// 契约面，preload 只该看到真正的绑定）。
+			if req.Method == "__embed_set_wid" {
+				if len(req.Args) != 1 {
+					respond(req.ID, "", fmt.Errorf("__embed_set_wid: 需要 1 个参数（句柄数字）"))
+					if readErr != nil {
+						break
+					}
+					continue
+				}
+				var wid uint64
+				if json.Unmarshal(req.Args[0], &wid) != nil {
+					respond(req.ID, "", fmt.Errorf("__embed_set_wid: 句柄必须是数字"))
+					if readErr != nil {
+						break
+					}
+					continue
+				}
+				app.playerSvc.SetWid(uintptr(wid))
+				appLogEvent("embed-set-wid 0x%x", wid)
+				respond(req.ID, "ok", nil)
+				if readErr != nil {
+					break
+				}
+				continue
+			}
+			if req.Method == "__embed_get_wid" {
+				b, _ := json.Marshal(uint64(app.playerSvc.EmbedWid()))
+				respond(req.ID, string(b), nil)
+				if readErr != nil {
+					break
+				}
+				continue
+			}
 			pm, ok := table[req.Method]
 			if !ok {
 				respond(req.ID, "", fmt.Errorf("method '%s' not registered", req.Method))

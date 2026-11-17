@@ -106,7 +106,7 @@ fi
 
 echo
 if [ "$FAIL" = "0" ]; then
-  step "PASS：Electron 壳 Xvfb 自检全过（sidecar 桥 + 8 页导航 + 蓝行判据）"
+  step "PASS：Electron 壳 Xvfb 自检全过（sidecar 桥 + 8 页导航 + 蓝行判据 + 播放链视频面）"
   exit 0
 else
   step "FAIL：见上（日志 /tmp/zgj-electron-run.log，截图 $OUT/）"

@@ -173,9 +173,9 @@ type Config struct {
 
 // DanmakuState 快照里的弹幕部分。
 type DanmakuState struct {
-	Enabled bool    `json:"enabled"`
-	Count   int     `json:"count"`
-	Note    string  `json:"note"`
+	Enabled bool   `json:"enabled"`
+	Count   int    `json:"count"`
+	Note    string `json:"note"`
 	// Opacity 当前不透明度（0.05–1.0）。v1 把它存在 app-settings.json，
 	// v2 由前端存 zgj.player.danmakuOpacity 并在开弹幕时回灌；这里只报当前生效值，
 	// 未设过（内部 0）一律报 1.0，避免前端拿到 0 又渲染成"全透明"。
@@ -236,7 +236,7 @@ type Service struct {
 	wid uintptr
 
 	// 弹幕
-	enabled     bool // Config.DanmakuSource 非 nil 时默认开
+	enabled     bool    // Config.DanmakuSource 非 nil 时默认开
 	opacity     float64 // 弹幕不透明度 0.05–1.0；0 = 未设（按 1.0，见 danmaku.AssOptions.normalize）
 	fetcher     *danmaku.Fetcher
 	subAttached bool
@@ -326,6 +326,14 @@ func (s *Service) SetWid(wid uintptr) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.wid = wid
+}
+
+// EmbedWid 读当前 mpv --wid 宿主句柄（P3 协议 __embed_get_wid 用：Electron 壳
+// 主进程需要确认 sidecar 持有的句柄与自己 BaseWindow 的是否一致）。0 = 未内嵌。
+func (s *Service) EmbedWid() uintptr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.wid
 }
 
 // PlayerSetHitBands 更新视频 host 窗的点击穿透带（物理像素上/下高；

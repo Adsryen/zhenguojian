@@ -18,9 +18,10 @@
 'use strict'
 
 const { app, BrowserWindow, ipcMain } = require('electron')
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
+const { VideoSurface } = require('./videoSurface')
 
 const SELFTEST = process.argv.includes('--selftest')
 const HERE = __dirname
@@ -144,9 +145,108 @@ function broadcast(name, data) {
   }
 }
 
-/* ── IPC：渲染进程 → sidecar ──────────────────────────────────────── */
+/* ── P3 内嵌拦截：视频面归主进程（BaseWindow），Go 只持有 XID ────────
+ *
+ * 为什么拦截而不是透传：PlayerAttach/SetBounds/Detach 的真相是「窗口几何」，
+ * 窗口是主进程自己的 BaseWindow——sidecar 里那个 mpv.EmbedHost（按
+ * _NET_WM_PID 找宿主窗）在这里找不到任何窗，透传=永远 embedded:false。
+ * JavdBviewed 同款：视频面在主进程，native 侧只收 wid。
+ *
+ * 返回形状必须与 Go 绑定逐位一致（前端 callGo 对 raw 字符串 JSON.parse）：
+ *   PlayerAttach     → {"embedded":true,"host":{…HostDebug 形状…}}
+ *   PlayerSetBounds  → {"ok":true,"host":{…}} / {"ok":false}
+ *   PlayerHitBands   → ""（Go 单 error 返回成功时=空串，callGoRaw 直传）
+ *   PlayerDetach     → {"ok":true}
+ *   PlayerForceWindow→ {"ok":true,"embedded":false}
+ *   EmbedDiag        → Go 原样 + arrived 覆盖为主进程 applyCount
+ *     （setBounds 现在不经 Go，Go 侧计数恒 0；徽标的「arrived vs 前端#N」
+ *      对撞要用主进程的摆位计数才有意义）
+ */
+let videoSurface = null
 
-ipcMain.handle('zgj:call', (_e, method, args) => callSidecar(method, args))
+function getSurface() {
+  const w = BrowserWindow.getAllWindows()[0]
+  if (!w) return null
+  if (!videoSurface) videoSurface = new VideoSurface(w)
+  return videoSurface
+}
+
+const EMBED_INTERCEPTS = new Set([
+  'PlayerAttach', 'PlayerSetBounds', 'PlayerHitBands',
+  'PlayerDetach', 'PlayerForceWindow', 'EmbedDiag',
+])
+
+async function embedIntercept(method, args) {
+  const noEmbed = String(process.env.ZHENGUO_NO_EMBED || '').toLowerCase()
+  const noEmbedOn = noEmbed === '1' || noEmbed === 'true' || noEmbed === 'yes'
+  const s = getSurface()
+
+  if (method === 'PlayerAttach') {
+    if (noEmbedOn || !s) {
+      return JSON.stringify({ embedded: false, reason: noEmbedOn ? 'ZHENGUO_NO_EMBED' : 'no-window' })
+    }
+    if (!s.ensure()) {
+      return JSON.stringify({ embedded: false, reason: 'video-surface-create-failed' })
+    }
+    // XID 交给 sidecar：下一次 mpv spawn 用它做 --wid。
+    try {
+      await callSidecar('__embed_set_wid', [s.xid], 5000)
+    } catch (e) {
+      return JSON.stringify({ embedded: false, reason: 'set-wid-failed: ' + e.message })
+    }
+    return JSON.stringify({ embedded: true, host: s.debug() })
+  }
+
+  if (method === 'PlayerSetBounds') {
+    const [x, y, w, h, show] = args
+    if (!s || !s.xid) return JSON.stringify({ ok: false })
+    const ok = s.place(x, y, w, h, !!show)
+    return JSON.stringify({ ok, host: s.debug() })
+  }
+
+  if (method === 'PlayerHitBands') {
+    const [top, bottom] = args
+    if (s) s.hitBands = { top: top | 0, bottom: bottom | 0 }
+    return '' // 与 Go 单 error 返回成功时的空串一致
+  }
+
+  if (method === 'PlayerDetach') {
+    if (s) s.hide()
+    return JSON.stringify({ ok: true })
+  }
+
+  if (method === 'PlayerForceWindow') {
+    if (s) s.hide()
+    try {
+      await callSidecar('__embed_set_wid', [0], 5000)
+    } catch {
+      /* 逃生门尽力而为 */
+    }
+    return JSON.stringify({ ok: true, embedded: false })
+  }
+
+  if (method === 'EmbedDiag') {
+    let diag = null
+    try {
+      diag = JSON.parse(await callSidecar('EmbedDiag', [], 5000))
+    } catch {
+      diag = null
+    }
+    if (!diag) return JSON.stringify({ version: '', revision: '', pid: 0, arrived: 0, logDir: '', logFail: 'sidecar-unavailable' })
+    diag.arrived = s ? s.applyCount : 0
+    diag.logFail = s && s.xid ? '' : 'no-surface'
+    return JSON.stringify(diag)
+  }
+
+  return null // 非拦截方法（理论上到不了这里）
+}
+
+ipcMain.handle('zgj:call', async (_e, method, args) => {
+  if (EMBED_INTERCEPTS.has(method)) {
+    return embedIntercept(method, args || [])
+  }
+  return callSidecar(method, args)
+})
 
 ipcMain.on('zgj:win', (_e, what) => {
   const w = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0]
@@ -183,14 +283,17 @@ async function runSelfTest(win) {
         try { out.ping = await App.Ping() } catch (e) { out.pingErr = String((e && e.message) || e) }
         try { out.datapath = await App.DataPath() } catch (e) { out.datapathErr = String((e && e.message) || e) }
         try { out.buildinfo = await App.GetBuildInfo() } catch (e) { out.buildinfoErr = String((e && e.message) || e) }
-        // 错误帧传输证明：调一个**真实存在**的方法、但故意传错参数类型
-        // （PlayerHitBands 期望 float64，给字符串）→ sidecar 反射 call() 返回
-        // 「参数 0 类型不符」错误帧 → 渲染端应 reject 且 message 原样带回
-        // （证明 sidecar 错误帧 → 渲染 promise 拒绝的通路 + 消息未被包装改写，
-        // 这是 bridge.ts 剥码正则 [\code] 生效的前提）。
+        // 错误帧传输证明：调一个**真实存在、且直达 sidecar** 的方法、但故意
+        // 传错参数类型。P3 起内嵌五方法被主进程拦截（永不到 Go），所以不能用
+        // PlayerHitBands——首跑实锤过：拦截后传错类型也不 reject，断言变
+        // no-reject（我第一版写错了探针）。PlayerOpenLocal(123, 0)：数字给
+        // string 参数 → sidecar 反射 call() 回「参数 0 (string) 类型不符」
+        // 错误帧 → 渲染端应 reject 且 message 原样带回（证明 sidecar 错误帧
+        // → 渲染 promise 拒绝的通路 + 消息未被包装改写，这是 bridge.ts 剥码
+        // 正则 [\code] 生效的前提）。
         // 不用「不存在的方法」：普通对象上它直接 undefined，得到的是
         // "is not a function"（与真 Wails 一致），根本到不了 sidecar。
-        try { await App.PlayerHitBands("x", "y"); out.errframe = 'no-reject' }
+        try { await App.PlayerOpenLocal(123, 0); out.errframe = 'no-reject' }
         catch (e) { out.errframe = String((e && e.message) || e) }
         out.ledger = window.__zgjIpcLedger || null
         return out
@@ -215,7 +318,7 @@ async function runSelfTest(win) {
     const ef = r.errframe || ''
     add(
       'error_frame',
-      /PlayerHitBands/.test(ef) && /类型不符/.test(ef) && !/Error invoking remote/.test(ef),
+      /PlayerOpenLocal/.test(ef) && /类型不符/.test(ef) && !/Error invoking remote/.test(ef),
       ef.slice(0, 160)
     )
     const lg = r.ledger
@@ -264,6 +367,118 @@ async function runSelfTest(win) {
       info.activeTitle === wantTitle && info.hasHead && info.appKids > 0,
       'active=' + JSON.stringify(info.activeTitle) + ' want=' + JSON.stringify(wantTitle) + ' head=' + info.hasHead + (info.err ? ' err=' + info.err : '')
     )
+  }
+
+  // C. 播放链 + 视频面（P3 门禁核心）：本地文件走 /player?lp=…
+  //    lp 路径必须在下载根之下（PlayerOpenLocal 的 outside_root 判定）。
+  //    判据链：
+  //      1) pinia running=true 且 attach 回执 embedded=true（XID 已给 sidecar）
+  //      2) mpv 进程带 --wid=<XID>（spawn 真的用了内嵌句柄）
+  //      3) 视频区截图**非单色**（testsrc 彩条/真实帧，P0 同款判据）
+  const lpFile = process.env.ZGJ_SELFTEST_VIDEO || path.join(process.env.ZHENGUO_DATA || '/tmp/zgj-electron-data', 'downloads', 'p3-selftest.mp4')
+  if (!fs.existsSync(lpFile)) {
+    add('video_play', false, '测试视频不存在 ' + lpFile)
+  } else {
+    const lpQ = encodeURIComponent(lpFile)
+    await win.webContents.executeJavaScript(`location.hash = '/player?lp=${lpQ}'`)
+    // 等 running（mpv spawn + 前端 attach→openEpisode 链），上限 25s
+    let st = { running: false, embedded: null, reason: '', err: '' }
+    for (let i = 0; i < 25; i++) {
+      await new Promise((r) => setTimeout(r, 1000))
+      try {
+        st = await win.webContents.executeJavaScript(
+          `(() => {
+            const s = document.querySelector('#app').__vue_app__.config.globalProperties.$pinia._s.get('player')
+            return { running: s.running, err: s.error || '' }
+          })()`
+        )
+        if (st.running) break
+      } catch (e) {
+        st = { running: false, embedded: null, reason: '', err: String((e && e.message) || e) }
+      }
+    }
+    add('video_boot', st.running && !st.err, JSON.stringify(st).slice(0, 160))
+    const xid = videoSurface ? videoSurface.xid : 0
+    let mpvWid = null
+    try {
+      const ps = execSync('pgrep -a -x mpv', { encoding: 'utf8' })
+      for (const l of ps.split('\n')) {
+        const m = l.match(/--wid=(\d+)/)
+        if (m) mpvWid = Number(m[1])
+      }
+    } catch {
+      mpvWid = null // 没有 mpv 进程
+    }
+    add(
+      'mpv_wid',
+      xid > 0 && mpvWid === xid,
+      'surfaceXid=' + (xid ? '0x' + xid.toString(16) : 0) + ' mpvWid=' + (mpvWid ? '0x' + mpvWid.toString(16) : 'none')
+    )
+    if (st.running) {
+      // 等画面稳定 3s，截全屏找视频区：pl-stage 的 getBoundingClientRect
+      await new Promise((r) => setTimeout(r, 3000))
+      let rect = null
+      try {
+        rect = await win.webContents.executeJavaScript(
+          `(() => { const el = document.getElementById('zgj-video-stage'); if (!el) return null; const r = el.getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } })()`
+        )
+      } catch {}
+      if (!rect || rect.w < 50 || rect.h < 50) {
+        add('video_pixels', false, 'pl-stage 不可见 rect=' + JSON.stringify(rect))
+      } else {
+        // 视频面（BaseWindow）在父窗 WebView 之上：capturePage 截不到它的像素，
+        // 必须 import -window root 截整屏再按 rect 偏移裁视频区。
+        //
+        // 判据是**时序差分**而不是「色数>32」：testsrc 有移动方块+帧计数，
+        // 真在播的两帧之间必然有像素变化；HTML 覆盖层是静态的——若视频面
+        // 没盖上来（z-order/尺寸错），两次截图像素逐字节相同。首跑实锤过
+        // 「整区 14995 色但中心 200x120 恒 32 色」的形状，色数判据分不清
+        // 「视频没画」和「正好量到 testsrc 的静态区」，差分才是判据。
+        const winBounds = win.getBounds()
+        const shotA = path.join(out, 'play_t0.png')
+        const shotB = path.join(out, 'play_t2.png')
+        const dispEnv = { ...process.env, DISPLAY: process.env.DISPLAY || ':99' }
+        try {
+          execSync('import -window root ' + shotA, { env: dispEnv })
+          fs.writeFileSync(path.join(out, 'xwininfo_t0.txt'),
+            execSync('xwininfo -root -tree', { encoding: 'utf8', env: dispEnv }))
+          await new Promise((r) => setTimeout(r, 2000))
+          execSync('import -window root ' + shotB, { env: dispEnv })
+          const cx = winBounds.x + rect.x
+          const cy = winBounds.y + rect.y
+          const diff = execSync(
+            `compare -metric AE "${shotA}" -crop ${rect.w}x${rect.h}+${cx}+${cy} +repage ` +
+            `"${shotB}" -crop ${rect.w}x${rect.h}+${cx}+${cy} +repage null: 2>&1 || true`,
+            { encoding: 'utf8', env: dispEnv }
+          ).trim()
+          // compare 退出码 1=有差异（metric 输出在 stderr）；diff 是变化像素数
+          const uniqA = execSync(
+            `convert "${shotA}" -crop ${rect.w}x${rect.h}+${cx}+${cy} +repage -format %k info:`,
+            { encoding: 'utf8', env: dispEnv }
+          ).trim()
+          const moved = Number(diff)
+          add(
+            'video_moving',
+            Number.isFinite(moved) && moved > 100,
+            `两帧差像素=${moved}（>100=真在播；0=静态/没画）`
+          )
+          add(
+            'video_pixels',
+            Number(uniqA) > 32,
+            `视频区 uniqueColors=${uniqA} rect=${JSON.stringify(rect)}`
+          )
+        } catch (e) {
+          add('video_moving', false, '截图/差分失败 ' + String((e && e.message) || e).slice(0, 120))
+          add('video_pixels', false, '同上')
+        }
+      }
+    } else {
+      add('video_pixels', false, '未 boot 到 running，跳过像素判据')
+    }
+    // 收尾：回首页（触发 onBeforeUnmount → PlayerDetach + store.shutdown），
+    // 别让 30s 视频把后续断言拖过时间窗。
+    await win.webContents.executeJavaScript(`location.hash = '/discover'`)
+    await new Promise((r) => setTimeout(r, 1500))
   }
 
   const ok = checks.every((c) => c.ok)
