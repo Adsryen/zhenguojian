@@ -154,11 +154,15 @@ jobs:
           ZHENGUO_DATA: ${{ github.workspace }}\zgj-win-data
         shell: pwsh
         run: |
-          # 找 mpv.exe / ffmpeg.exe（解压后在各自目录的 bin 下）
-          $mpv = Get-ChildItem -Recurse -Filter mpv.exe mpvtmp | Select-Object -First 1
-          if (-not $mpv) { throw "mpv.exe not found under mpvtmp" }
-          $ff = Get-ChildItem -Recurse -Filter ffmpeg.exe fftmp | Select-Object -First 1
-          if (-not $ff) { throw "ffmpeg.exe not found under fftmp" }
+          # 找 mpv.exe / ffmpeg.exe。⚠ 下载步在**仓库根**跑（无 working-directory），
+          # mpvtmp/fftmp 建在根；本步 working-directory 是 client-v2/electron，
+          # 所以这里必须用绝对路径指回根（首跑 run 44125065605 就是相对路径
+          # 解析到 electron/mpvtmp → "mpv.exe not found"）。
+          $ws = $env:GITHUB_WORKSPACE
+          $mpv = Get-ChildItem -Recurse -Filter mpv.exe (Join-Path $ws "mpvtmp") | Select-Object -First 1
+          if (-not $mpv) { throw ("mpv.exe not found under " + (Join-Path $ws "mpvtmp")) }
+          $ff = Get-ChildItem -Recurse -Filter ffmpeg.exe (Join-Path $ws "fftmp") | Select-Object -First 1
+          if (-not $ff) { throw ("ffmpeg.exe not found under " + (Join-Path $ws "fftmp")) }
           Write-Host ("mpv.exe: " + $mpv.FullName)
           Write-Host ("ffmpeg.exe: " + $ff.FullName)
           $env:ZHENGUO_MPV = $mpv.FullName
