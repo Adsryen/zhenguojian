@@ -52,7 +52,10 @@ linux:
       to: sidecar-linux
 
 win:
-  executableName: zgj-v2.exe
+  # ⚠ 只写 `zgj-v2`，不能带 .exe：electron-builder 在 Windows 会自动补 .exe，
+  # 写成 zgj-v2.exe 会产出 zgj-v2.exe.exe（双扩展名，本地交叉构建实锤），
+  # 打包态自检的 out/win-unpacked/zgj-v2.exe 引用就会 miss。
+  executableName: zgj-v2
   # 固定产出名（首跑实锤：默认是 "zhenguojian-v2 Setup 2.0.0.exe"，CI 的
   # 名字匹配 *-x64.exe 抓不到 → 误报 not produced。显式 pin 成含 arch 的
   # 确定性名字，build/上传两步的 glob 才稳）。
