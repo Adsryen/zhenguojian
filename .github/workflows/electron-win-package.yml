@@ -189,10 +189,18 @@ jobs:
       # ── 打包态自检（isPackaged=true，用 bundle 里的 mpv/sidecar）────────
       # 证明「打包布局可用」：app.isPackaged=true 走 resourcesPath 解析
       # sidecar/frontend/runtime。mpv_wid=架构判据；像素判据 Windows 透明 skip。
+      #
+      # 结果判读（run 44159214616 教训）：打包 exe 是 Windows GUI 子系统，
+      # pwsh `& app 1>st.out` 的流重定向对它不生效（st.out/st.err 双双空、
+      # exit 0）——开发态 npx electron 有 node 父进程持控制台所以 selftest
+      # job 一直是绿的。main.js 在打 stdout 那行**之前**已把结果写到
+      # SELFTEST_OUT/selftest.json（文件写入，不依赖任何流），所以这里以
+      # selftest.json 为准、stdout 为兜底。
       - name: Run packaged selftest
         working-directory: client-v2/electron
         env:
           ZHENGUO_DATA: ${{ github.workspace }}\zgj-win-packdata
+          ZGJ_SELFTEST_OUT: ${{ github.workspace }}\zgj-electron-selftest
         shell: pwsh
         run: |
           # 不设 ZHENGUO_MPV/SIDECAR：打包态从 bundle resources 取（这才是要测的）。
@@ -210,10 +218,28 @@ jobs:
           & $app --selftest 1>st.out 2>st.err
           $rc = $LASTEXITCODE
           Write-Host "----- stderr (tail 40) -----"
-          Get-Content st.err -Tail 40 | ForEach-Object { Write-Host "  $_" }
-          $jsonLine = Get-Content st.out | Where-Object { $_ -like "SELFTEST_JSON *" } | Select-Object -Last 1
-          if (-not $jsonLine) { throw "no SELFTEST_JSON (exit $rc)" }
-          $obj = ($jsonLine -replace "^SELFTEST_JSON ", "") | ConvertFrom-Json
+          Get-Content st.err -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+          # 结果判读：以 selftest.json 为准（文件写入，不依赖 GUI exe 的流重定向），
+          # stdout 的 SELFTEST_JSON 行做兜底（开发态/句柄正常时两路一致）。
+          $obj = $null
+          $jsonFile = Join-Path $env:ZGJ_SELFTEST_OUT "selftest.json"
+          if (Test-Path $jsonFile) {
+            $obj = Get-Content $jsonFile -Raw | ConvertFrom-Json
+            Write-Host "（结果取自 selftest.json）"
+          } else {
+            $jsonLine = Get-Content st.out -ErrorAction SilentlyContinue | Where-Object { $_ -like "SELFTEST_JSON *" } | Select-Object -Last 1
+            if ($jsonLine) { $obj = ($jsonLine -replace "^SELFTEST_JSON ", "") | ConvertFrom-Json }
+          }
+          if (-not $obj) {
+            # 两路都没有=app 没走到 runSelfTest 结尾。把 sidecar 的 app.log
+            # 原样倒出来定案（sidecar DataDir=ZHENGUO_DATA，app.<pid>.log 在根）。
+            Write-Host "----- sidecar app.log（若存在）-----"
+            Get-ChildItem $env:ZHENGUO_DATA -Filter "app.*.log" -ErrorAction SilentlyContinue | ForEach-Object {
+              Write-Host ("== " + $_.Name + " ==")
+              Get-Content $_.FullName -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+            }
+            throw "selftest.json 与 SELFTEST_JSON 都缺失（exit $rc）——打包自检没跑到结尾"
+          }
           Write-Host "----- packaged checks -----"
           $obj.checks | ForEach-Object {
             $tag = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
