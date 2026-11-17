@@ -53,6 +53,10 @@ linux:
 
 win:
   executableName: zgj-v2.exe
+  # 固定产出名（首跑实锤：默认是 "zhenguojian-v2 Setup 2.0.0.exe"，CI 的
+  # 名字匹配 *-x64.exe 抓不到 → 误报 not produced。显式 pin 成含 arch 的
+  # 确定性名字，build/上传两步的 glob 才稳）。
+  artifactName: ${productName}-win-${arch}-${version}.${ext}
   target:
     - nsis
   extraResources:
