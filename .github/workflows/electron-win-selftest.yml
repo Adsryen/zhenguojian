@@ -1,0 +1,194 @@
+# electron-win-selftest —— Electron 壳在 Windows 上的播放链自检（P5）。
+#
+# 为什么单独一个 workflow（而不是塞进 build-v2.yml）：
+#   build-v2.yml 只在 workflow_dispatch + push tags v2.* 触发、且是发版主链；
+#   本自检是 **report-only**（任何 job 都不 needs 它），要在 **master push** 上
+#   高频跑，尽早抓出 Windows 侧 Electron 播放链的回归。
+#
+# 它验的是什么（第九十七轮教训：只在某平台能跑的路径必须在目标平台 CI 真执行）：
+#   Electron 壳的 Windows 播放链 = BaseWindow 视频面 + getNativeWindowHandle()
+#   的 8 字节 HWND 分支 + place() 的 Win32 几何 —— 这条链在本机 Linux **永远跑
+#   不到**（XID 是 4 字节、走另一分支）。Wails 版靠 TestEmbedHostRuntimeRealWindows
+#   在 Windows CI 验过 Win32；Electron 版同样必须让 Windows CI 真执行，否则
+#   8 字节 HWND / 父窗 contentBounds / setIgnoreMouseEvents 全是编译级证据。
+#
+# 判据（见 client-v2/electron/main.js 段 C + selftest.sh S5）：
+#   bridge 6 项 + 8 页导航蓝行 + video_boot（pinia running）+ mpv_wid
+#   （mpv 进程命令行 --wid=<HWND> == 视频面句柄）。video_moving/video_pixels
+#   在 Windows 是**透明 skip**（BaseWindow 无 webContents、capturePage 截不到
+#   独立视频面；架构证明由 mpv_wid 承担），不参与 ok。
+name: electron-win-selftest
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  electron-win-selftest:
+    name: Windows · Electron 播放链自检
+    runs-on: windows-latest
+    env:
+      # 复用 build-v2.yml 的 GITHUB_TOKEN（匿名在共享 IP 必被限流，见 build-v2 注释）
+      GOTOOLCHAIN: "local"
+    steps:
+      # ⚠ 禁 fetch-tags：tag 触发时 fetch-tags 会撞目的地 refspec → rc=128
+      #（build-v2.yml 第六十二轮实锤 alpha.34/35 因此零资产）。本 workflow
+      # 只在 push 触发、不需要 tag 对象，直接默认 shallow checkout。
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: false
+
+      # ── 前端 dist（Electron 壳 loadFile dist/index.html）────────────────
+      - name: Frontend (build dist)
+        working-directory: client-v2/frontend
+        shell: pwsh
+        run: |
+          $regs = @("https://registry.npmmirror.com", "https://registry.npmjs.org")
+          $ok = $false
+          foreach ($reg in $regs) {
+            npm ci --registry=$reg --fetch-retries=3 --fetch-timeout=120000
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::notice::npm ci failed against $reg, trying next"
+          }
+          if (-not $ok) { throw "npm ci failed against all registries" }
+          # 壳自检不跑 typecheck/单测（那是 build-v2 的 Frontend 门职责）；
+          # 这里只要一个能 loadFile 的 dist。
+          npm run build
+
+      # ── sidecar.exe（zgj_sidecar 入口，CGO_ENABLED=0，Windows 目标）────
+      - name: Build sidecar.exe
+        working-directory: client-v2
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        shell: pwsh
+        run: |
+          mkdir -p "$env:RUNNER_TEMP/ov"
+          python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
+          go vet -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" .
+          $LASTEXITCODE -eq 0 -or (throw "sidecar vet failed")
+          go build -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -o build/bin/sidecar.exe .
+          if (-not (Test-Path build/bin/sidecar.exe)) { throw "sidecar.exe not produced" }
+
+      # ── Electron（壳工程装 electron 37.2.0，与本机 P0 同版本）──────────
+      # 二进制走 npmmirror（本机 P0 验证过的源；GitHub releases 在共享 IP
+      # 的 runner 上有 403/限流风险）。版本精确锁 37.2.0（^ 会解析到 37.10.x
+      # 而镜像缺 tgz）。
+      - name: Install Electron
+        working-directory: client-v2/electron
+        env:
+          ELECTRON_MIRROR: "https://npmmirror.com/mirrors/electron/"
+          ELECTRON_CUSTOM_DIR: "v{{ version }}"
+        shell: pwsh
+        run: |
+          npm install --fetch-retries=3 --fetch-timeout=180000
+          if ($LASTEXITCODE -ne 0) { throw "electron install failed" }
+          if (-not (Test-Path "node_modules/electron/dist/electron.exe")) { throw "electron binary missing after install" }
+
+      # ── mpv（与 build-v2 同一来源配方：api.github.com 带 token + 直链/gh-proxy 交替）
+      - name: Download mpv
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $hdrs = @{ "User-Agent" = "zhenguojian-ci" }
+          if ($env:GITHUB_TOKEN) { $hdrs["Authorization"] = "Bearer $env:GITHUB_TOKEN" }
+          $rel = $null
+          for ($try = 1; $try -le 3; $try++) {
+            try { $rel = Invoke-RestMethod -Headers $hdrs https://api.github.com/repos/mpv-player/mpv/releases/latest; break }
+            catch { Write-Warning "mpv releases/latest 第 $try 次失败：$($_.Exception.Message)"; Start-Sleep -Seconds (5 * $try) }
+          }
+          if (-not $rel) { throw "取 mpv 最新版本信息失败（3 次重试）；若 403/rate limit 说明 GITHUB_TOKEN 没生效" }
+          $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*full*.zip" } | Select-Object -First 1
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-v*x86_64*.zip" -and $_.name -notlike "*pdb*" } | Select-Object -First 1 }
+          if (-not $asset) { $asset = $rel.assets | Where-Object { $_.name -like "mpv-x86_64-*.7z" } | Select-Object -First 1 }
+          if (-not $asset) { throw "no usable mpv windows asset" }
+          Write-Host ("mpv asset: " + $asset.name)
+          New-Item -ItemType Directory -Force mpvtmp | Out-Null
+          $mpvOk = $false
+          $srcs = @($asset.browser_download_url, ("https://gh-proxy.com/" + $asset.browser_download_url))
+          for ($i = 1; $i -le 20; $i++) {
+            $u = $srcs[($i - 1) % 2]
+            curl.exe -fsSL --retry 2 -o mpv.pkg $u 2>$null
+            if ($LASTEXITCODE -eq 0 -and (Get-Item mpv.pkg -ErrorAction SilentlyContinue).Length -gt 1MB) { $mpvOk = $true; break }
+            Write-Warning ("mpv attempt $i failed: $u"); Start-Sleep 60
+          }
+          if (-not $mpvOk) { throw "mpv download failed from all sources" }
+          if ($asset.name -like "*.zip") { Expand-Archive -Force mpv.pkg mpvtmp }
+          else { & "C:\Program Files\7-Zip\7z.exe" x -ompvtmp -y mpv.pkg | Out-Null }
+
+      # ── ffmpeg（生成测试视频用，与 build-v2 同配方）────────────────────
+      - name: Download ffmpeg
+        shell: pwsh
+        run: |
+          $urls = @(
+            "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip",
+            "https://gh-proxy.com/https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip",
+            "https://github.com/BtbN/FFmpeg-Builds/releases/download/autobuild-2026-11-08-12-35/ffmpeg-N-128691-gcc583787bb-win64-gpl.zip"
+          )
+          $ok = $false
+          foreach ($u in $urls) {
+            for ($i = 1; $i -le 2; $i++) {
+              curl.exe -fSL --retry 2 -o ffmpeg.zip $u 2>$null
+              if ($LASTEXITCODE -ne 0) { Write-Warning "ffmpeg attempt failed: $u"; continue }
+              try { Expand-Archive -Force ffmpeg.zip fftmp; $ok = $true; break }
+              catch { Write-Warning "extract failed: $($_.Exception.Message)"; Remove-Item ffmpeg.zip -ErrorAction SilentlyContinue }
+            }
+            if ($ok) { break }
+          }
+          if (-not $ok) { throw "ffmpeg download failed from all sources" }
+
+      # ── 跑 Electron 自检（真实 Windows 桌面，无需 Xvfb/DISPLAY）────────
+      # mpv_wid 是 Windows 侧权威架构判据（mpv 进程带 --wid=<HWND>）。
+      # video_moving/video_pixels 在 Windows 透明 skip（见 main.js 段 C 注释）。
+      - name: Run Electron selftest
+        working-directory: client-v2/electron
+        env:
+          ZHENGUO_SIDECAR: ${{ github.workspace }}\client-v2\build\bin\sidecar.exe
+          ZHENGUO_DATA: ${{ github.workspace }}\zgj-win-data
+        shell: pwsh
+        run: |
+          # 找 mpv.exe / ffmpeg.exe（解压后在各自目录的 bin 下）
+          $mpv = Get-ChildItem -Recurse -Filter mpv.exe mpvtmp | Select-Object -First 1
+          if (-not $mpv) { throw "mpv.exe not found under mpvtmp" }
+          $ff = Get-ChildItem -Recurse -Filter ffmpeg.exe fftmp | Select-Object -First 1
+          if (-not $ff) { throw "ffmpeg.exe not found under fftmp" }
+          Write-Host ("mpv.exe: " + $mpv.FullName)
+          Write-Host ("ffmpeg.exe: " + $ff.FullName)
+          $env:ZHENGUO_MPV = $mpv.FullName
+
+          # 生成 30s testsrc 测试视频，放到 ZHENGUO_DATA/downloads/ 下
+          #（selftest 段 C 默认从 ZHENGUO_DATA/downloads/p3-selftest.mp4 取）。
+          $dataDir = Join-Path $env:ZHENGUO_DATA "downloads"
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $vid = Join-Path $dataDir "p3-selftest.mp4"
+          & $ff.FullName -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -c:a aac "$vid" 2>$null
+          if (-not (Test-Path $vid)) { throw "test video generation failed" }
+          Write-Host ("test video: " + $vid + " (" + (Get-Item $vid).Length + " bytes)")
+
+          # 跑自检。main.js 约定：--selftest 时 stdout **只**有一行 SELFTEST_JSON
+          # （ok + checks），其余诊断走 stderr。分开两路落盘再解析最稳。
+          npx electron . --selftest 1>st.out 2>st.err
+          $rc = $LASTEXITCODE
+          Write-Host "----- stderr (tail 60) -----"
+          Get-Content st.err -Tail 60 | ForEach-Object { Write-Host "  $_" }
+          $jsonLine = Get-Content st.out | Where-Object { $_ -like "SELFTEST_JSON *" } | Select-Object -Last 1
+          if (-not $jsonLine) { throw "stdout 没有 SELFTEST_JSON 行（exit $rc）" }
+          $payload = $jsonLine -replace "^SELFTEST_JSON ", ""
+          $obj = $payload | ConvertFrom-Json
+          Write-Host "----- checks -----"
+          $obj.checks | ForEach-Object {
+            $tag = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
+            Write-Host ("  [" + $tag + "] " + $_.name + "  " + $_.detail)
+          }
+          if ($rc -ne 0) { throw "electron selftest exit $rc" }
+          if (-not $obj.ok) { throw "electron selftest ok=false（见上 checks）" }
+          Write-Host "electron-win-selftest: ok=true"

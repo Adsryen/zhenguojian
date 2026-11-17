@@ -96,9 +96,13 @@ if [ -n "$JSON_LINE" ]; then
   OK=$(python3 -c "
 import json,sys
 d=json.loads(sys.argv[1])
-print('ok' if d['ok'] and all(c['ok'] for c in d['checks']) else 'bad')
+# 只信 main.js 的 d['ok']（已排除 skip 项）；逐项打印时 skip 单独标出，
+# 不把 skip 的 ok=null 当红项（否则「平台不适用」会被误判为失败）。
+verdict = 'ok' if d['ok'] else 'bad'
+print(verdict)
 for c in d['checks']:
-    print(('  [PASS] ' if c['ok'] else '  [FAIL] ') + c['name'] + '  ' + c['detail'][:120])
+    tag = 'SKIP' if c.get('skip') else ('PASS' if c['ok'] else 'FAIL')
+    print('  [' + tag + '] ' + c['name'] + '  ' + c['detail'][:120])
 " "${JSON_LINE#SELFTEST_JSON }")
   echo "$OK" | sed '1d'
   [ "$(echo "$OK" | head -1)" = "ok" ] || fail "S5 SELFTEST_JSON 有红项（见上）"
