@@ -272,3 +272,20 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
 - 发布接线（electron-release.yml）干跑修出 2 bug 后就绪；**首个 tag 号
   必须对齐全绿 run 的 build-info version**（当前= v2.0.0-alpha.21），
   对账护栏拒错位发布。剩外部输入：用户授权 tag + run19 包黑屏复测。
+
+## 黑屏并行线预案（v2.1.0 时代，2026-11-18 round21 写入）
+用户复测判定树（run19 包）三分支及后续动作，全部预置、等数据不猜码：
+1. **有画面** → DPI 物理像素/DIP 混用结案（49c17dd 系已含修复）。动作：结案，回归常规。
+2. **ZGJ_DISABLE_GPU=1 见画**（合成层蒙版=DComp 实锤）→ 正式修复=保 GPU 只关 DComp：
+   main.js 入口 ready 前 `app.commandLine.appendSwitch('disable-direct-composition')`
+   （Chromium 呈现路径回退 swap chain，GPU 光栅化保留；Electron overlay 播放器场景
+   常规解）。代价与验证：GDI selftest 两项必须仍绿（呈现路径变了，截图竞争面可能
+   变化）、win workflow 演练全链重跑；若仍有黑屏，退路=`--disable-gpu-compositing`
+   或最终 resort `app.disableHardwareAcceleration()` 正式化（软件合成，UI 流畅度换
+   确定性）。
+3. **都黑** → 发 `%LOCALAPPDATA%\ZhenguoJian\logs\mpv.log`（a958341 已落地日志）。
+   读取顺序：VO init 行→d3d11 失败→opengl/wgl 报错→按错误选 mpv 参数
+   （`--gpu-api=wgl`/`--d3d11-computer=`/`--vo=gpu --profile=compatibility`）。
+   候选根因：用户机 d3d11on9/exe 权限、旧驱动；CI 软件渲染恒绿不代表真机。
+配套观察点（若 2 命中）：更新演练里 GDI rect 抓帧对 DComp 敏感（DIP→物理换算已修
+49c17dd/da06593），正式修复批须连带重验 NSIS smoke run B/C 防演练本身失真。
