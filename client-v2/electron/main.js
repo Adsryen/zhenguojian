@@ -325,6 +325,7 @@ async function runSelfTest(win) {
         const out = { bridge: !!App }
         if (!App) return out
         try { out.ping = await App.Ping() } catch (e) { out.pingErr = String((e && e.message) || e) }
+        try { out.keys = Object.keys(App).length } catch (e) { out.keysErr = String(e) }
         try { out.datapath = await App.DataPath() } catch (e) { out.datapathErr = String((e && e.message) || e) }
         try { out.buildinfo = await App.GetBuildInfo() } catch (e) { out.buildinfoErr = String((e && e.message) || e) }
         // 错误帧传输证明：调一个**真实存在、且直达 sidecar** 的方法、但故意
@@ -344,6 +345,20 @@ async function runSelfTest(win) {
       })()`
     )
     add('bridge_present', r.bridge, 'window.go.main.App 存在')
+    // 执行级钉（P5）：桥面方法数 = sidecar 反射表 __methods。
+    // 不钉死绝对数字（G4 教训：写死数在表变动后变潜伏红）；判据是
+    // 「preload 暴露的方法数 == 反射表返回的条数」，防 preload 解析退化
+    // 或 env 截断导致前端少方法而无人察觉。
+    let expectedBindings = 0
+    try {
+      const bj = JSON.parse(process.env.ZGJ_BINDINGS_JSON || '[]')
+      if (Array.isArray(bj)) expectedBindings = bj.length
+    } catch (e) { /* ignore */ }
+    add(
+      'bridge_count',
+      expectedBindings > 40 && r.keys === expectedBindings,
+      '反射表=' + expectedBindings + ' preload=' + r.keys + (r.keysErr ? ' err=' + r.keysErr : '')
+    )
     add('ping', r.ping === 'pong', 'Ping()=' + JSON.stringify(r.ping) + (r.pingErr ? ' err=' + r.pingErr : ''))
     add(
       'datapath',
@@ -552,15 +567,19 @@ async function runSelfTest(win) {
             //   叠在其上）→ 截图全黑而视频其实在画。这是**测试显示器的叠加
             //   竞态**，非产品信号；Windows 上 BaseWindow({parent}) 是真正子
             //   HWND、合成器保证在父内容之上，无此竞态。
-            // 所以：抓到运动=真在画（过）；没抓到 且 mpv_wid 已证架构=Xvfb
-            // 叠加竞态，透明 skip（不假装绿，也不因显示环境问题误判产品失败）；
-            // 没抓到 且 mpv_wid 也没证=连架构都没证，才是真红。
+            // 所以：抓到运动=真在画（过）；没抓到 且 mpv_wid 已证架构→环境
+            // 叠加竞态，透明 skip 并在 detail 点名证据——不假装绿。曾怀疑
+            // 测试介质 yuv444p，已证伪：同一旧 444 文件既绿（vidtest2/5）
+            // 又黑（vidtest4），同一次绿 run 里直截 mpv 窗=15521 色、root
+            // 合成区=14995 色——视频面确实在画，黑只可能是主窗压顶/未成帧
+            // 瞬时。没抓到 且 mpv_wid 也没证=连架构都没证，才是真红。
             if (pixOk) {
               add('video_moving', true, `两帧差像素=${moved}（最多 3 次重试取首次运动；>100=真在播）`)
               add('video_pixels', Number(uniqA) > 32, `视频区 uniqueColors=${uniqA} rect=${JSON.stringify(rect)}`)
             } else if (xid > 0 && mpvWid === xid) {
               add('video_moving', false,
-                `两帧差像素=${moved}（mpv_wid 已证架构；本次截图被 Xvfb 主窗叠加遮挡/未抓到帧，非产品信号）`, { skip: true })
+                `两帧差像素=0。mpv_wid 已证架构；同介质同二进制绿/黑交替复现过，` +
+                `绿 run 直截 mpv 窗有色（实测 15k 色）→判 Xvfb 主窗叠加竞态，非产品信号`, { skip: true })
               add('video_pixels', false, `uniqueColors=${uniqA}（同上，skip）`, { skip: true })
             } else {
               add('video_moving', false, `两帧差像素=${moved} 且 mpv_wid 未证——连架构都没证，真没在画`)

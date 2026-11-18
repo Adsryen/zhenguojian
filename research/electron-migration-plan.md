@@ -144,6 +144,15 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   启动 2s 时（自检要 30s+）——必须 Start-Process -PassThru +
   WaitForExit 显式等（npx/node 与 Linux bash 都会等子进程，唯独这条
   不等）。
+  打包态 Linux 视频判据补实（2026-11-18）：`out/linux-unpacked --selftest`
+  在 Xvfb 上 pixel 两项曾黑/绿交替——最终实锤为测试显示器竞态而非产品/介质
+  问题：同一旧 444 文件既绿又黑，且绿 run 里运行中**直截 mpv 窗**（xwininfo
+  找到 0x…("x11" "mpv") 窗 id → import -window）=15521 色、root 合成视频区
+  =14995 色，两帧差 626966 PASS。生成侧已统一 `-pix_fmt yuv420p`
+  （build-linux.sh + Windows CI workflow 同参，保守介质卫生，与黑绿无关）。
+  新增执行级桥计数钉 `bridge_count`（preload 键数===sidecar 反射表数，
+  expected 从 ZGJ_BINDINGS_JSON 实读、不写死——G4 潜伏红教训），dev/打包态
+  均实测 `反射表=89 preload=89 PASS`。
 - **P4 门禁迁移**（✅ 2026-11-18 完成）：verification/ 预检体系适配（mock E2E 不变；真桥 E2E
   改走 Electron CDP 或先冻结标注）；session_state/evidence_audit 适配
   「80 绑定=sidecar 方法表」。

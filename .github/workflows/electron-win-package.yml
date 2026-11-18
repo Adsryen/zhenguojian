@@ -214,7 +214,7 @@ jobs:
           $vid = Join-Path $dataDir "p3-selftest.mp4"
           # 用 bundle 里的 ffmpeg 生成（顺带验 runtime/ffmpeg 就位）
           $bffmpeg = Join-Path (Get-Item .).FullName "staging/runtime/ffmpeg/ffmpeg.exe"
-          & $bffmpeg -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -c:a aac "$vid" 2>$null
+          & $bffmpeg -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac "$vid" 2>$null
           if (-not (Test-Path $vid)) { throw "test video generation failed" }
           # 跑打包态自检：GUI 子系统必须显式等待（`&` 对 GUI 不等）。
           $appFull = (Resolve-Path $app).Path

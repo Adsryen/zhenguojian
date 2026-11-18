@@ -77,10 +77,13 @@ PDATA=/tmp/zgj-electron-packaged-data
 rm -rf "$PDATA"; mkdir -p "$PDATA/downloads"
 # 测试视频（复用 selftest 素材；缺则 ffmpeg 现生成 30s）
 if [ ! -f "$PDATA/downloads/p3-selftest.mp4" ]; then
+  # -pix_fmt yuv420p：lavfi 源默认 444，统一成最保守介质（与 CI Windows 生成
+  # 同参）。注意：Xvfb 打包态像素判据黑/绿交替系主窗叠加竞态，与此无关，
+  # 见 main.js video_moving skip 分支注释。
   ffmpeg -y -hide_banner -loglevel error \
     -f lavfi -i testsrc=duration=30:size=1280x720:rate=25 \
     -f lavfi -i sine=frequency=440:duration=30 \
-    -c:v libx264 -preset ultrafast -c:a aac "$PDATA/downloads/p3-selftest.mp4" || fail "测试视频生成失败"
+    -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac "$PDATA/downloads/p3-selftest.mp4" || fail "测试视频生成失败"
 fi
 
 OUT=/tmp/zgj-electron-packaged-selftest
