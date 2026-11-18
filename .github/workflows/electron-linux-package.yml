@@ -61,6 +61,9 @@ jobs:
         # ZGJ_GO_BIN 传空会盖掉脚本 `${ZGJ_GO_BIN:-默认}` 的默认值吗——不会：
         # :- 展开对空串也回退默认。所以 CI 靠 setup-go 把 go 放进全局 PATH，
         # 脚本 prepend 的默认本机路径不存在只是无效项，无害。
+        # 版本号（-alpha.<run> 覆盖 + sidecar -ldflags 注入）统一在 build-linux.sh
+        # B0/B1/B3 计算，与 win workflow 的 ZGJ_BUILD_VERSION 同一语义；
+        # 本 yml 不重复传参——脚本里 GITHUB_RUN_NUMBER 存在即自动生效。
         run: bash client-v2/electron/build-linux.sh
 
       - name: Upload selftest evidence

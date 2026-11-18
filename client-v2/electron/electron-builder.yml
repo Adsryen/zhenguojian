@@ -16,7 +16,9 @@
 
 appId: com.zhenguojian.v2
 productName: zhenguojian-v2
-# 版本从 package.json 取（2.0.0）；alpha 号走 CI 的 -c version 覆盖。
+# 版本从 package.json 取（2.0.0）；alpha 号走 CI 的
+# -c.extraMetadata.version= 覆盖（root -c.version 被 26.18.0 schema 拒，
+# 空格形 -c version= 被 yargs 当 configPath——两坑均有实测记录）。
 directories:
   output: out
   buildResources: buildres

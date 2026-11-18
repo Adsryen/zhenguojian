@@ -11,6 +11,10 @@
 # 产物（actions/upload-artifact）：
 #   - zhenguojian-v2-electron-win-x64-<sha>.exe   （NSIS 安装包，用户双击装）
 #   - zhenguojian-v2-electron-win-unpacked-<sha>.zip（免安装版，解压直接跑）
+#   - zhenGuoJian-v2-app-<sha>.zip                 （热更新三件套 app.asar/sidecar.exe/
+#                                                    frontend/dist；上 release 时按契约名
+#                                                    zhenGuoJian-v2-app.zip 传，updater
+#                                                    解包覆盖 resources\ 用）
 #   - build-info-<sha>.txt                        （版本/commit/时间，用户贴回来对身份）
 name: electron-win-package
 
@@ -40,14 +44,28 @@ jobs:
         shell: pwsh
         run: |
           $sha = git rev-parse --short HEAD
-          $ver = (Get-Content client-v2/electron/package.json -Raw | ConvertFrom-Json).version
+          $pkgVer = (Get-Content client-v2/electron/package.json -Raw | ConvertFrom-Json).version
+          # ── 版本号统一源（依赖分离打包改造）───────────────────────────
+          # 基号取 package.json，alpha 号 = 本 workflow 运行号 GITHUB_RUN_NUMBER；
+          # 基号若已含预发布后缀（手改成 2.0.1-alpha.3 之类）则尊重、不再叠加。
+          # 算好的值经 GITHUB_ENV 贯穿全 job：electron-builder 的 -c version、
+          # sidecar 的 -ldflags、build-info.txt 三处同源，不会各说各话——历史上
+          # NSIS 恒 2.0.0 而 updater 按 semver 比对 alpha tag，版本语义从一开始
+          # 就是错的（2.0.0「正式版」> 任何 2.0.0-alpha.N）。
+          # ⚠ alpha.N 只是产物身份号（每条 workflow 各自计数，非全局发布序）；
+          #   正式发 release 时 tag 必须对上本次产物的号再喂 gen_latest_json_electron.ps1
+          #   （它按 Go 侧同款 semver 形态校验 tag）。
+          if ($pkgVer -match '^\d+\.\d+\.\d+$') { $ver = "$pkgVer-alpha.$env:GITHUB_RUN_NUMBER" } else { $ver = $pkgVer }
+          "ZGJ_BUILD_VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append
           "version=$ver" | Out-File -Append build-info.txt
           "commit=$sha" | Out-File -Append build-info.txt
           "built=$([datetime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ssZ'))" | Out-File -Append build-info.txt
           "platform=windows-x64 (Electron)" | Out-File -Append build-info.txt
+          "sidecar=main.buildVersion 已按上述 version 经 -ldflags 注入（updater.Current 暂未消费，见 Build sidecar.exe 步 TODO 注释）" | Out-File -Append build-info.txt
           "note=Electron 壳测试包：结构性修 Windows 黑屏（视频窗改 Electron 自管 BaseWindow，不再 WS_CHILD 塞 WebView2）" | Out-File -Append build-info.txt
           "用法：装完 zgj-v2.exe 后，进播放页看视频是否出现；仍黑屏就点复制内嵌诊断贴回" | Out-File -Append build-info.txt
-          "SHA=$sha" | Out-File -FilePath "$env:GITHUB_OUTPUT"
+          "SHA=$sha" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Append
+          "version=$ver" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Append
 
       # ── 前端 dist ──────────────────────────────────────────────────────
       - name: Frontend (build dist)
@@ -77,7 +95,20 @@ jobs:
           python scripts/make-overlay.py "$env:RUNNER_TEMP/ov/overlay.json"
           go vet -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" .
           $LASTEXITCODE -eq 0 -or (throw "sidecar vet failed")
-          go build -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -o build/bin/sidecar.exe .
+          # 版本注入（与 Build NSIS installer 的 -c version 同批，ZGJ_BUILD_VERSION
+          # 由 Capture build info 步统一算出）。Wails 时代 build-v2.yml 有
+          # -X main.buildVersion，Electron 迁移丢了，现在补回。已生效的消费点：
+          # appLogStartup（sidecar_main.go:198 启动自证行）、GetBuildInfo 绑定
+          # （bindings_settings.go:58，「关于」页/诊断贴回带版本）。
+          # 历史断链说明（2026-11-18 已修）：这条 ldflags 注入曾被 Electron 迁移
+          #   整体丢失，且即使注入也吃不到 updater.Current——链路=
+          #   bindings_update.go:36 → LocalVersionFromExecutable() → current.go
+          #   LoadLocalVersion ①EmbeddedVersion 只在 Wails 入口 main.go:29 赋值、
+          #   sidecar 入口没转发 ②兜底的 exe 同级 build-info.json 在 resources\
+          #   布局下不存在。两路皆空 → Dev=true → service.go「任何发布版都算更新」
+          #   永远弹横幅。现 sidecar_main.go main() 已补 EmbeddedVersion=buildVersion
+          #   转发（实测 GetBuildInfo 回显），本条 ldflags 即 Current 的唯一来源。
+          go build -tags "zgj_sidecar v2overlay" -overlay "$env:RUNNER_TEMP/ov/overlay.json" -ldflags "-X main.buildVersion=$env:ZGJ_BUILD_VERSION" -o build/bin/sidecar.exe .
           if (-not (Test-Path build/bin/sidecar.exe)) { throw "sidecar.exe not produced" }
 
       # ── Electron + electron-builder ────────────────────────────────────
@@ -175,15 +206,31 @@ jobs:
         working-directory: client-v2/electron
         shell: pwsh
         run: |
-          # 版本号取 package.json（2.0.0），不在这里硬编码覆盖。
-          npx electron-builder --win nsis --publish never
+          # -c.version 用 ZGJ_BUILD_VERSION（Capture build info 步统一算，基号来自
+          # package.json）。electron-builder.yml 里「alpha 号走 CI 的 -c version
+          # 覆盖」的注释此前只是承诺、从未落地（且该写法本身走不通，见下）：
+          # NSIS 恒 2.0.0，而 updater 按
+          # semver 比对 alpha tag，2.0.0「正式版」比任何 2.0.0-alpha.N 都新，
+          # 版本语义从一开始就是错的。
+          # ⚠ 覆盖方式必须用 `-c.extraMetadata.version=`（dot-notation）：
+          #   ① `-c version=x` 空格形会被 yargs 当 configPath 字符串当场报错；
+          #   ② 看似更直接的 `-c.version=`（root version）会被 26.18.0 的
+          #     schema 拒绝「configuration has an unknown property 'version'」
+          #     ——2026-11-18 本机 --linux dir 实测抓红，Windows 同版本必同样红。
+          #   extraMetadata 合并进 package.json 元数据，version 语义与
+          #   artifactName 的 ${version} 宏都吃合并后的值，其余 yml 配置原样。
+          # ⚠ artifactName 含 ${version}，改名后 NSIS 名变 …win-x64-2.0.0-alpha.N.exe；
+          #   下方与 Rename/Smoke 步的判据都是 *win-x64*.exe 中段匹配，不受影响
+          #   （run9 教训：判据别用 -x64.exe 这种后缀形，会假失败）。
+          if (-not $env:ZGJ_BUILD_VERSION) { throw "ZGJ_BUILD_VERSION missing (Capture build info 步没跑?)" }
+          npx electron-builder --win nsis --publish never "-c.extraMetadata.version=$env:ZGJ_BUILD_VERSION"
           if ($LASTEXITCODE -ne 0) { throw "electron-builder --win nsis failed" }
           Get-ChildItem out/*.exe, out/*.zip -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host ("  artifact: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)")
           }
-          # artifactName=zhenguojian-v2-win-x64-2.0.0.exe（arch 在**中段**，结尾
-          # 是 -2.0.0.exe）。判据匹配 *win-x64*.exe，不是 *-x64.exe（后者要求
-          # 名字以 -x64.exe 结尾；本地 pwsh 复现对现名 count=0 → 假失败）。
+          # artifactName=zhenguojian-v2-win-x64-2.0.0-alpha.N.exe（arch 在**中段**，
+          # 判据匹配 *win-x64*.exe，不是 *-x64.exe（后者要求名字以 -x64.exe 结尾；
+          # 本地 pwsh 复现对现名 count=0 → 假失败）。
           if (-not (Get-ChildItem out/*.exe | Where-Object { $_.Name -like "*win-x64*.exe" })) { throw "NSIS installer not produced" }
 
       # ── 打包态自检（isPackaged=true，用 bundle 里的 mpv/sidecar）────────
@@ -259,6 +306,59 @@ jobs:
           if (-not $obj.ok) { throw "packaged selftest ok=false（见上）" }
           Write-Host "packaged selftest: ok=true"
 
+      # ── Build app.zip（热更新三件套，依赖与主程序分离打包的核心产物）───
+      # updater 的「应用包更新」路径下载 zhenGuoJian-v2-app.zip
+      # （internal/updater/releases.go:57 DefaultAppZipAsset），解包后
+      # robocopy /E 直对安装目录 resources\ 覆盖。故 zip 根必须是
+      # resources 层级：app.asar / sidecar.exe / frontend/dist/**，
+      # 不得带 win-unpacked 前缀、不得把 dist 拍平——相对路径错了覆盖
+      # 位置就错，且不会有人报错（zip 本身「看着是好的」）。
+      # 为何弃 Compress-Archive / tar.exe（防复活注释）：
+      #   - Compress-Archive 的 Windows 侧条目分隔符行为本机（Linux pwsh
+      #     7.4.6）无法复现（实测出的是正斜杠），Go zip reader 按 ZIP 规范
+      #     要求正斜杠，赌不得；
+      #   - runner 的 tar.exe 是 bsdtar、本机是 GNU tar（无 -a -cf zip 能力），
+      #     「本机先跑一遍」这条路不成立；
+      #   - ZipFile + 显式条目名 + 反斜杠归一化：.NET 代码路径两平台一致，
+      #     本机跑通一次 = Windows 行为可推断，且末尾结构自检兜底（错就红，
+      #     不静默坏包——run9 双 spawn 教训同款纪律）。
+      # frontend/ 整目录递归收录（当前 staging 下只有 dist/，若将来多出
+      # 别的东西也一并带上，契约本来就是 frontend 这棵树）。
+      - name: Build app.zip
+        working-directory: client-v2/electron
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $res = (Resolve-Path "out/win-unpacked/resources").Path
+          foreach ($t in @("app.asar", "sidecar.exe", "frontend\dist")) {
+            if (-not (Test-Path (Join-Path $res $t))) { throw "app.zip 源缺失: resources\$t" }
+          }
+          $zip = Join-Path $PWD "out/zhenGuoJian-v2-app.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          $za = [System.IO.Compression.ZipFile]::Open($zip, [System.IO.Compression.ZipArchiveMode]::Create)
+          try {
+            foreach ($f in @("app.asar", "sidecar.exe")) {
+              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($za, (Join-Path $res $f), $f) | Out-Null
+            }
+            foreach ($item in (Get-ChildItem -Recurse -File (Join-Path $res "frontend"))) {
+              $rel = $item.FullName.Substring($res.Length + 1).Replace("\", "/")
+              [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($za, $item.FullName, $rel) | Out-Null
+            }
+          } finally { $za.Dispose() }
+          # ── 结构自检：读回条目名，断言三件齐全 + 路径形态合法 ──
+          $zr = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try { $names = @($zr.Entries | ForEach-Object { $_.FullName }) } finally { $zr.Dispose() }
+          if ($names -notcontains "app.asar") { throw "app.zip 缺 app.asar" }
+          if ($names -notcontains "sidecar.exe") { throw "app.zip 缺 sidecar.exe" }
+          $dist = @($names | Where-Object { $_ -like "frontend/dist/*" })
+          if ($dist.Count -eq 0) { throw "app.zip 缺 frontend/dist/**（条目名被拍平或带了前缀?）" }
+          if ($names -notcontains "frontend/dist/index.html") { throw "app.zip 的 frontend/dist 里没有 index.html（前端构建没进 staging?）" }
+          $bad = @($names | Where-Object { $_ -like "*\*" -or $_ -like "*win-unpacked*" -or $_.StartsWith("/") })
+          if ($bad.Count -gt 0) { throw ("app.zip 条目路径不合规（反斜杠/win-unpacked 前缀/绝对路径）: " + (($bad | Select-Object -First 5) -join " | ")) }
+          $mb = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host ("app.zip ready: " + (Split-Path $zip -Leaf) + " (" + $mb + " MB, " + $names.Count + " 条目, frontend/dist/** 计 " + $dist.Count + ")")
+
       # ── 传 artifact ────────────────────────────────────────────────────
       - name: Rename + upload artifact
         shell: pwsh
@@ -270,8 +370,14 @@ jobs:
           Copy-Item $nsis.FullName "zhenguojian-v2-electron-win-x64-$sha.exe"
           # win-unpacked 免安装版打 zip
           Compress-Archive -Path "client-v2/electron/out/win-unpacked" -DestinationPath "zhenguojian-v2-electron-win-unpacked-$sha.zip" -Force
+          # app.zip 进 artifact 带 sha 后缀（辨每次构建）；上 release 时改按契约名
+          # zhenGuoJian-v2-app.zip 上传（gen_latest_json_electron.ps1 写的
+          # assets.appZip.name 用的就是契约名）。
+          $appzip = "client-v2/electron/out/zhenGuoJian-v2-app.zip"
+          if (-not (Test-Path $appzip)) { throw "app.zip 缺失（Build app.zip 步没跑?）" }
+          Copy-Item $appzip "zhenGuoJian-v2-app-$sha.zip"
           Copy-Item build-info.txt "build-info-$sha.txt"
-          Get-ChildItem "zhenguojian-v2-electron-win-x64-$sha.exe", "zhenguojian-v2-electron-win-unpacked-$sha.zip", "build-info-$sha.txt" | ForEach-Object { Write-Host ("upload: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)") }
+          Get-ChildItem "zhenguojian-v2-electron-win-x64-$sha.exe", "zhenguojian-v2-electron-win-unpacked-$sha.zip", "zhenGuoJian-v2-app-$sha.zip", "build-info-$sha.txt" | ForEach-Object { Write-Host ("upload: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)") }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -280,6 +386,7 @@ jobs:
           path: |
             zhenguojian-v2-electron-win-x64-*.exe
             zhenguojian-v2-electron-win-unpacked-*.zip
+            zhenGuoJian-v2-app-*.zip
             build-info-*.txt
           if-no-files-found: error
           retention-days: 14

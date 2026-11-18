@@ -201,6 +201,16 @@ const updAssets = computed<UpdateAsset[]>(() => updRelease.value?.assets ?? [])
 const updSelectedAsset = computed<UpdateAsset | null>(() => {
   const list = updAssets.value
   if (!list.length) return null
+  // 用户手动选择 > Go 侧推荐资产（Electron 形态=25MB 主程序包增量，
+  // service.go Status.recommendedAsset）> 列表首项（exe 恒在前，latest.go
+  // append 序固定，不能指望数组顺序表达默认值）
+  if (!updAssetSel.value) {
+    const rec = updStatus.value?.recommendedAsset
+    if (rec) {
+      const hit = list.find((a) => a.name === rec)
+      if (hit) return hit
+    }
+  }
   return list.find((a) => a.name === updAssetSel.value) ?? list[0]
 })
 const lastCheckText = computed(() => {

@@ -27,6 +27,23 @@ export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.25.3}" GOPROXY="${GOPROXY:-https://goprox
 step() { echo "[build-linux] $*"; }
 fail() { echo "[build-linux] FAIL: $*"; exit 1; }
 
+# ── B0 版本号统一源（与 electron-win-package.yml 同款规则）──────────
+# 基号取 package.json；CI（有 GITHUB_RUN_NUMBER）且基号是裸 X.Y.Z 时追加
+# -alpha.<run>；基号已含预发布后缀则尊重。产物已本机验证不吃 ${version}
+# （productName 恒 zgj-v2、无 AppImage 名），这里的 extraMetadata.version 纯粹为
+# 版本语义正确：updater 按 semver 比对 tag，裸 2.0.0 会「比任何
+# 2.0.0-alpha.N 都新」。⚠ 本机无 run number 时退化为基号原样（行为同旧）。
+BASE_VER="$(node -p "require('$HERE/package.json').version")"
+if [ -n "${ZGJ_BUILD_VERSION:-}" ]; then
+  step "B0 版本沿用外部注入: $ZGJ_BUILD_VERSION"
+elif [ -n "${GITHUB_RUN_NUMBER:-}" ] && printf '%s' "$BASE_VER" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+  ZGJ_BUILD_VERSION="$BASE_VER-alpha.$GITHUB_RUN_NUMBER"
+else
+  ZGJ_BUILD_VERSION="$BASE_VER"
+fi
+export ZGJ_BUILD_VERSION
+step "B0 build version: $ZGJ_BUILD_VERSION (package.json=$BASE_VER)"
+
 # ── B1 sidecar-linux ────────────────────────────────────────────────
 OV=/tmp/zhenguojian-overlay.json
 python3 "$CLIENT/scripts/make-overlay.py" "$OV" || fail "make-overlay 失败"
@@ -38,7 +55,12 @@ SIDECAR="$CLIENT/build/bin/sidecar-linux"
 if [ ! -x "$SIDECAR" ] || find "$CLIENT/app.go" "$CLIENT/embed_host.go" "$CLIENT/sidecar_main.go" "$CLIENT/internal" \
      -name '*.go' -newer "$SIDECAR" -print -quit 2>/dev/null | grep -q .; then
   [ -x "$SIDECAR" ] && step "B1 sidecar 源码较新，重建…" || step "B1 sidecar 不存在（干净环境），首次构建…"
-  CGO_ENABLED=0 go build -C "$CLIENT" -tags "zgj_sidecar v2overlay" -overlay "$OV" -o build/bin/sidecar-linux . || fail "sidecar 构建失败"
+  # 版本注入与 win 同批（main.buildVersion，消费点 appLogStartup 启动自证行 /
+  # GetBuildInfo；主线已在 sidecar 入口转发给 updater.EmbeddedVersion）。
+  # 注意 B1 的新鲜度判断只看源码 mtime：本机旧 sidecar（无注入）不会因
+  # ZGJ_BUILD_VERSION 变化重建，本机想看新号请删 build/bin/sidecar-linux；
+  # CI 干净环境恒重建，无此问题。
+  CGO_ENABLED=0 go build -C "$CLIENT" -tags "zgj_sidecar v2overlay" -overlay "$OV" -ldflags "-X main.buildVersion=$ZGJ_BUILD_VERSION" -o build/bin/sidecar-linux . || fail "sidecar 构建失败"
 else
   step "B1 sidecar 新鲜（$(stat -c%s "$SIDECAR") bytes）"
 fi
@@ -61,8 +83,8 @@ EOF
 step "B2 staging/runtime 填好：$(ls "$STAGE/runtime/mpv" "$STAGE/runtime/ffmpeg" | tr '\n' ' ')"
 
 # ── B3 electron-builder --dir ───────────────────────────────────────
-step "B3 electron-builder --dir（unpacked）…"
-( cd "$HERE" && ./node_modules/.bin/electron-builder --dir --publish never --linux dir ) || fail "electron-builder --dir 失败"
+step "B3 electron-builder --dir（unpacked，version=$ZGJ_BUILD_VERSION）…"
+( cd "$HERE" && ./node_modules/.bin/electron-builder --dir --publish never --linux dir -c.extraMetadata.version="$ZGJ_BUILD_VERSION" ) || fail "electron-builder --dir 失败"
 APPDIR="$HERE/out/linux-unpacked"
 [ -x "$APPDIR/zgj-v2" ] || fail "打包产物缺失：$APPDIR/zgj-v2"
 step "B3 打包完成：$APPDIR"

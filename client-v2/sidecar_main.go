@@ -41,6 +41,7 @@ import (
 	"sync"
 
 	"zhenguojian/client-v2/internal/native"
+	"zhenguojian/client-v2/internal/updater"
 )
 
 // protoMethod 一个绑定方法的反射调用器。
@@ -341,6 +342,11 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 }
 
 func main() {
+	// 版本注入转发（2026-11-18 agent-2 调研实锤的断链点）：Wails 入口 main.go
+	// 有这行，sidecar 入口没有 → Electron 形态即使 CI 加 -ldflags，
+	// updater.EmbeddedVersion 也恒空 → LocalVersion.Dev=true → 永远提示可更新。
+	updater.EmbeddedVersion = buildVersion
+
 	// 可选位置参数=数据目录（v1 sidecar 同款，argv[1]）。必须在 NewApp 前
 	// 落 env：NewApp 里 playerSvc 的 DataDir 在构造时就读。
 	if len(os.Args) > 1 {

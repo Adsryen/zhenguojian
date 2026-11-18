@@ -262,6 +262,13 @@ func (s *Service) Status() map[string]any {
 		"checking": checking,
 		"settings": settingsMap(set),
 	}
+	// Electron 安装形态的推荐资产=25MB 主程序包（增量）；Settings 更新对话框
+	// 据此默认选中，避免 list[0]（exe=475MB 全量 NSIS）成为无感默认。
+	// 说明：latest.json 的 assets 是 keyed 对象，Go 侧 append 序固定 exe 在前
+	// （latest.go:165-179），键序影响不到列表默认项——推荐必须走这个字段。
+	if IsElectronInstall() {
+		out["recommendedAsset"] = DefaultAppZipAsset
+	}
 	if last != nil {
 		out["lastCheck"] = last
 	}
@@ -308,6 +315,12 @@ func (s *Service) Download(tag, asset string) error {
 	rel, ok := s.ReleaseByTag(tag)
 	if !ok {
 		return fmt.Errorf("请先检查更新或重新检查后再下载 %s", tag)
+	}
+	// Electron 安装形态的默认资产=主程序包 zip（~25MB，只换易变三件）；
+	// exe 字段此时是 NSIS 全量包（475MB），只作为「换依赖/全新安装」的手动
+	// 备选出现在 SelectableAssets 里。Wails 形态维持旧默认。
+	if asset == "" && IsElectronInstall() {
+		asset = DefaultAppZipAsset
 	}
 	a, err := rel.FindAsset(asset)
 	if err != nil {
@@ -410,6 +423,9 @@ func (s *Service) PrepareApply(tempDir string, pid int) (*PrepareApplyResult, er
 		return &PrepareApplyResult{Kind: "restart", BatPath: batPath, BatText: BuildApplyBat(spec), UpdateDir: spec.UpdateDir}, nil
 	}
 	if strings.HasSuffix(low, ".zip") {
+		if plan, ok := s.electronZipApplyPlan(dl, tempDir, pid); ok {
+			return plan, nil
+		}
 		return &PrepareApplyResult{
 			Kind:      "manual",
 			UpdateDir: filepath.Dir(dl.Dest),
@@ -417,6 +433,41 @@ func (s *Service) PrepareApply(tempDir string, pid int) (*PrepareApplyResult, er
 		}, nil
 	}
 	return nil, fmt.Errorf("资产 %s 不支持自动应用", dl.Asset)
+}
+
+// electronZipApplyPlan 若当前是 Electron 安装形态，生成主程序包自动应用计划
+// （bat 等旧进程→taskkill 壳→tar 解压→robocopy 换 resources→重启）。
+// 判定不满足（dev 态 build/bin、Wails 形态、目录结构异常）返回 ok=false，
+// 调用方回落 manual 提示——manual 语义对 Electron 便携解压同样成立。
+func (s *Service) electronZipApplyPlan(dl *DownloadState, tempDir string, pid int) (*PrepareApplyResult, bool) {
+	if !IsElectronInstall() || !ApplySupported {
+		return nil, false
+	}
+	exe, err := electronInstallProbe()
+	if err != nil {
+		return nil, false
+	}
+	root := filepath.Dir(filepath.Dir(exe)) // resources\sidecar.exe → 安装根
+	resDir := filepath.Join(root, "resources")
+	electronExe := filepath.Join(root, "zgj-v2.exe")
+	if _, err := os.Stat(filepath.Join(resDir, "app.asar")); err != nil {
+		return nil, false
+	}
+	if _, err := os.Stat(electronExe); err != nil {
+		return nil, false
+	}
+	tagDir := s.UpdateDir(dl.Tag)
+	spec := ApplySpecZip{
+		SidecarPID:  pid,
+		ElectronPID: os.Getppid(),
+		Zip:         dl.Dest,
+		UpdateDir:   tagDir,
+		ExtractDir:  filepath.Join(tagDir, "x"),
+		ResDir:      resDir,
+		ElectronExe: electronExe,
+	}
+	batPath := filepath.Join(tempDir, fmt.Sprintf("zgj-update-%d.bat", pid))
+	return &PrepareApplyResult{Kind: "restart", BatPath: batPath, BatText: BuildApplyBatZip(spec), UpdateDir: tagDir}, true
 }
 
 // Startup 懒触发启动自动检查（决策：前端 mount 调 updateStartup，绑定内首次调用起 goroutine）。

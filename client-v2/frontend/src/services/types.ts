@@ -584,6 +584,8 @@ export interface UpdateStatus {
   settings?: UpdateSettings
   lastCheck?: UpdateCheckResult
   download?: UpdateDownloadState
+  /** Electron 安装形态的推荐资产（25MB 主程序包增量）；Wails/dev 无此键 */
+  recommendedAsset?: string
 }
 
 /** UpdateApply 应答：restart=已排定重启；manual=zip 手动解压指引 */
