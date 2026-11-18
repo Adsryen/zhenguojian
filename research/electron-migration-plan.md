@@ -194,6 +194,15 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
     18 PASS/0 SKIP（GDI 转正两项 51059/8099 实测绿）+ NSIS 冒烟
     「装→bundle→装后 selftest 整套再 PASS→卸载」全绿；artifact
     zhenguojian-v2-electron-win-x64-918517183f…（499MB）为实机推荐包。
+  - **Linux 打包 CI 线**（electron-linux-package.yml，run1–3，收口绿
+    @44245770108）：干净环境两轮各抓一坑——run1：B1 新鲜度检查在
+    `find -newer <缺失参照>` 下误走「新鲜」分支（本机二进制恒在从未
+    暴露，存在性短路修复；CI 化第一跑就抓到「本机绿、脚本腐」）；
+    run2：FATAL:setuid_sandbox_host——runner 内核 userns 禁用必须
+    root:root 4755 SUID helper，本机 unprivileged_userns_clone=1+755
+    走 userns 沙箱另一条机制（「本机绿≠CI 绿」又一例；ZGJ_SUID_FIX=1
+    分流，本机预验 SUID 分支后 CI 绿）。判据分层：Linux CI 断言布局/
+    桥面/nav/boot（video 像素黑时 skip 不阻塞），像素硬断言归 GDI 线。
   - 更新链三分支决策（A 静默重装 / B electron-updater / C unpacked 换目录，
     推荐与排除理由见 research/electron-updater-options.md）：run10 冒烟
     已全绿，只剩用户实机反馈后拍板；正式更新源需首个 GitHub Release tag
