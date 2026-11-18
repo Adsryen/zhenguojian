@@ -80,9 +80,13 @@ jobs:
           cp "$BINFO" /tmp/rel/out/build-info.txt
           # §6 拍板点：tag 号必须等于产物 version（run 号错位的产物发出去，
           # 客户端 Current 比较会永远判定「有更新」或「已最新」，语义全乱）
-          VER=$(grep '^version=' /tmp/rel/out/build-info.txt | cut -d= -f2)
+          # build-info.txt 是 Windows pwsh Out-File 写的——CRLF！grep|cut 出来
+          # 尾带 \r，与 tag 字符串比较恒不等（发布链干跑抓一 after 又一坑：
+          # 两值「看起来一样」却拒发）。tr -d '\r' 归一。
+          VER=$(grep '^version=' /tmp/rel/out/build-info.txt | cut -d= -f2 | tr -d '\r')
           WANT="${{ steps.tag.outputs.tag }}"
           WANT="${WANT#v}"
+          WANT=$(printf '%s' "$WANT" | tr -d '\r')
           if [ "$VER" != "$WANT" ]; then
             echo "::error::tag=$WANT 与产物 version=$VER 不一致（发布纪律 §6：必须对齐）"
             exit 1
