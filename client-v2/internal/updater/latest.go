@@ -207,7 +207,7 @@ func fetchLatestRelease(ctx context.Context, client *http.Client, set Settings) 
 			return nil, err
 		}
 		if rel.Prerelease {
-			return nil, fmt.Errorf("稳定通道返回了预发布 tag %s（releases/latest 语义异常）", rel.Tag)
+			return nil, fmt.Errorf("稳定通道返回了预发布 tag %s（releases/latest 语义异常）：当前发布线是预发布系列，请在设置中开启「测试版通道」后重试", rel.Tag)
 		}
 		return rel, nil
 	}
