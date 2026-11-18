@@ -111,8 +111,11 @@ release-check.sh 的 EXPECTED_ASSETS 与 latest.json 断言仍是 Wails 三件�
   （生产实测），tag 一发布即自动开闸。
 - Windows 实锤演练已落地（**49c17dd**）：selftest 进程内假镜像 + NSIS 装后
   run B(apply)/marker/run C(替换后全套自检) 三步，run15 执行中（结果补记）。
-- **唯一剩余决策=用户同意打首个 tag `v2.0.0-alpha.16`**（§6 旧纪律改口），
-  随后 alpha.17 走程序内更新真实演练闭环。
+- **唯一剩余决策=用户同意打首个 tag**（§6 旧纪律改口）。tag 号必须与
+  全绿 run 的 build-info `version=` 一致（对账护栏会拒错位）：当前有效号=
+  **v2.0.0-alpha.21**（run19 @24cf0fa；GITHUB_RUN_NUMBER≠run id 尾数，此前
+  报过的 alpha.16 是 run14 旧数、已作废）。随后下一全绿 run（alpha.22）
+  走程序内更新真实演练闭环。
 
 ### 8.1 run15→run19 实锤序列（收官记录，2026-11-18）
 - run15 红：electron asar 穿透补丁把 copyFileSync(<dir>\app.asar) 当归档内路径解析（ENOENT not found in <asarpath>）→ 碰 *.asar 的 fs 操作一律 original-fs（da06593）。
@@ -120,4 +123,4 @@ release-check.sh 的 EXPECTED_ASSETS 与 latest.json 断言仍是 Wails 三件�
 - run17 红：rmSync 漏网——run A 残留 staging，run B `fs.rmSync(work,recursive)` 时 shim 按扩展名把 stage\app.asar（真实文件）当挂载点穿透 rmdir → EBUSY（5573d07，判据收口 exists/copy/read/write/rm 全集）。
 - run18：产品语义全绿——run A/B update_check(available=true tag=v9.9.9)+update_download(asset=zhenGuoJian-v2-app.zip state=done) PASS、bat 真 taskkill/tar 解压/robocopy 替换、update-marker.json 出现、run C 替换后全套 selftest 绿、卸载绿。唯一红=步骤尾 $LASTEXITCODE 传播 exit 1（24cf0fa：taskkill 后清零+显式 exit 0，失败表达收归 throw）。
 - **run19（44281918355 @24cf0fa）success = 更新链 Windows 实锤完成**：「update apply exercise: bat 替换 ✓ marker ✓ 新 bundle 全套自检 ✓」。演练设计=进程内假镜像（tag v9.9.9 真实仓库不存在→回落必败，杜绝 round8 式假绿）+ zip 内容=安装件原样副本+marker（替换后应用必然仍可用）。artifact `zhenguojian-v2-electron-win-x64-24cf0fa…`（489MB）。
-- **剩余唯一外部项：tag v2.0.0-alpha.N 发布授权**（electron-release.yml 已就位，打 tag 即通电；发布后补 alpha.16→17 真实升级演练收尾；Wails 链已被 `if: !contains(ref_name,'-')` 堵污染）。
+- **剩余唯一外部项：tag v2.0.0-alpha.N 发布授权**（electron-release.yml 已就位，打 tag 即通电；发布后补 alpha.21→22 真实升级演练收尾；Wails 链已被 `if: !contains(ref_name,'-')` 堵污染）。
