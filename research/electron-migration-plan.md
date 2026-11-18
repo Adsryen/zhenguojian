@@ -171,6 +171,29 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
 - **P5 发布**：electron-builder（win x64 + linux）、latest.json 更新链
   移植（electron-updater 或自研下载）、CI 双 job 改写、release-check
   适配。
+  CI 执行链实况（run7–run8，2026-11-18）：
+  - Windows 像素判据走 **GDI CopyFromScreen**（capturePage 截不到 airspace
+    子窗、CI 无 ImageMagick）：主进程取 surface win.getBounds 屏幕 rect →
+    pwsh System.Drawing 抓 BMP → Node 自制解码差分/色数。run7 首验取数轮
+    暴露 `System.Drawing.Bitmap` 构造默认 32bpp（Save Bmp 保真），解码器
+    只认 24bpp 三连失败——修：ps1 显式 Format24bppRgb + 解码器 24/32 双路
+    （BI_RGB 小端 BGRA→RGB）+ 失败时 BMP 头 hexdump 进 detail（d5a972c）。
+    本机对拍 ImageMagick `compare -metric AE` 逐数一致（448）。run8 实证
+    两帧差=51078、uniqueColors=8102（双阈 100/32 的 500/250 倍）→ 转正
+    断言（474d146）；几何不可得分支保留 skip。
+  - NSIS 安装链冒烟（`/S` 装→bundle 布局断言→装后 --selftest→卸载断言，
+    放 Upload 之后红不挡 artifact）run8 首红：installer exit=0 但 exe 不在
+    安装目录——**NSIS Setup.exe 双 spawn**（复制自身到 temp 再起子进程继续
+    装，`Start-Process -Wait` 只等外壳，500MB 解压未完即断言；与 pwsh 不等
+    GUI 子系统同族坑）。修：装后 180s 轮询 exe 就位、卸载后 120s 轮询等
+    消失，超时 dump 目录树定案（474d146）。
+  - 更新链三分支决策（A 静默重装 / B electron-updater / C unpacked 换目录，
+    推荐与排除理由见 research/electron-updater-options.md）：等 run9 冒烟
+    绿 + 用户实机反馈后拍板；正式更新源需首个 GitHub Release tag（届时
+    征求用户同意——用户纪律：不打 alpha tag，artifact 即交付）。
+    联动提醒：scripts/release-check.sh:22 `EXPECTED_ASSETS` 与 latest.json
+    exe 契约（:96-137）写死的是 Wails 三件套——选 A 则同步改 assets.installer
+    + 5 资产清单，这一步属于更新链落地的同一批提交，勿漏。
 - **并行独立小修（不等换壳）**：`embedMu` 锁排队 bug（alpha.42 数据
   `7/2P5` 实证）——即使换壳期间也要修，因为 Wails 版还会继续发；修完
   可发 alpha.43 让用户至少拿到「不排队」的版本。
