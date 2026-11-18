@@ -20,14 +20,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CLIENT="$(cd "$HERE/.." && pwd)"
 REPO="$(cd "$CLIENT/.." && pwd)"
-export PATH=/home/ryen/.local/go/bin:$PATH
-export GOTOOLCHAIN=go1.25.3 GOPROXY=https://goproxy.cn,direct GOFLAGS=-mod=mod
+# 可 CI 化：本机零配置走默认值；CI 用 ZGJ_GO_BIN/GOTOOLCHAIN/GOPROXY 覆盖。
+export PATH="${ZGJ_GO_BIN:-/home/ryen/.local/go/bin}:$PATH"
+export GOTOOLCHAIN="${GOTOOLCHAIN:-go1.25.3}" GOPROXY="${GOPROXY:-https://goproxy.cn,direct}" GOFLAGS="${GOFLAGS:--mod=mod}"
 
 step() { echo "[build-linux] $*"; }
 fail() { echo "[build-linux] FAIL: $*"; exit 1; }
 
 # ── B1 sidecar-linux ────────────────────────────────────────────────
-export PATH=/home/ryen/.local/go/bin:$PATH
 OV=/tmp/zhenguojian-overlay.json
 python3 "$CLIENT/scripts/make-overlay.py" "$OV" || fail "make-overlay 失败"
 mkdir -p "$CLIENT/build/bin"

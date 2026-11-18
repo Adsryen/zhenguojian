@@ -1,0 +1,70 @@
+# electron-linux-package —— P5：Linux 版 Electron 打包 + 打包态自检 CI 化。
+#
+# 动机：Windows 打包链 electron-win-package.yml 已 run10 全绿（18 PASS/0 SKIP
+# + NSIS 冒烟），但 Linux 打包态只在开发机跑过 build-linux.sh——CI 化防「本机
+# 绿、打包脚本腐没人看」。Linux 打包态 isPackaged=true 的资源布局/路径解析与
+# Windows 同形，这条 CI 绿 = 布局层跨平台同构成立有执行级证据。
+#
+# 判据分层：Xvfb 像素判据有主窗叠加竞态（run 前史：同介质绿/黑交替，见
+# main.js video skip 分支），打包态下视频两项黑时按 skip 不阻塞——本 CI 断言
+# 的是布局/桥/nav/boot，像素硬断言归 Windows GDI 线。
+name: electron-linux-package
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client-v2/electron/**'
+      - '.github/workflows/electron-linux-package.yml'
+
+jobs:
+  package-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ZGJ_GO_BIN: ''   # 用 setup-go 注入 PATH，不吃脚本默认值
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install runtime deps (mpv/ffmpeg)
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends mpv ffmpeg
+          command -v mpv; command -v ffmpeg; command -v ffprobe
+
+      - name: Frontend build
+        working-directory: client-v2/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f dist/index.html
+
+      - name: Electron deps
+        working-directory: client-v2/electron
+        run: npm ci --no-audit --no-fund
+
+      - name: Build + packaged selftest
+        # ZGJ_GO_BIN 传空会盖掉脚本 `${ZGJ_GO_BIN:-默认}` 的默认值吗——不会：
+        # :- 展开对空串也回退默认。所以 CI 靠 setup-go 把 go 放进全局 PATH，
+        # 脚本 prepend 的默认本机路径不存在只是无效项，无害。
+        run: bash client-v2/electron/build-linux.sh
+
+      - name: Upload selftest evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-selftest-${{ github.sha }}
+          path: |
+            /tmp/zgj-electron-pkg-stdout.log
+            /tmp/zgj-electron-pkg-run.log
+          if-no-files-found: warn
+          retention-days: 7
