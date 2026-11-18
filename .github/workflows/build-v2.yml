@@ -19,7 +19,13 @@ jobs:
   # 现已逐条改成平台自洽（见各条注释里的判据），windows 与 ubuntu 都跑同一套。
   # 注意：改成"跳过 Windows 的 mode 检查"不等于验证过私密性，
   # Windows 的访问控制靠 profile 目录 + ACL，那不在这些用例能力内（已登记待办）。
+  # 预发布 tag（v2.0.0-alpha.N 系列）属于 Electron 发布线
+  # （electron-release.yml），Wails 链必须整体跳过：否则同一 Release 被塞进
+  # Wails 三件套并覆盖 latest.json，Electron 安装版点更新会被换回单 exe
+  # 形态（方案与实锤背景见 research/electron-updater-options.md §7）。
+  # workflow_dispatch / 正式 tag（无 `-`）不受影响。
   test-linux:
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -148,6 +154,8 @@ jobs:
           fi
 
   windows:
+    # 同 test-linux：alpha 预发布 tag 跳过（Wails 链只服务正式 v2.x tag）
+    if: ${{ !contains(github.ref_name, '-') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:

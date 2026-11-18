@@ -1,0 +1,120 @@
+# Electron 发布线（方案 A，见 research/electron-updater-options.md §7）：
+# tag v2.0.0-alpha.N → 找回「同一 commit 上成功跑完的 electron-win-package
+# run」的 artifact，按 updater 契约名（zhenGuoJian-v2.exe=NSIS 全量、
+# zhenGuoJian-v2-app.zip=主程序增量）发布 GitHub prerelease + latest.json。
+#
+# 纪律：本 workflow 只搬运与发布，**不触发构建**——发布用的产物必须是
+# 自检全绿（18 PASS 硬断言）的那份；tag 打在别的 commit 上会直接报错，
+# 这是特性不是缺陷（防止把没跑过 Windows 自检的源码发出去）。
+# build-v2.yml（Wails 链）已对含 `-` 的预发布 tag 全 job 跳过，两条发布
+# 线互不污染。
+name: electron-release
+
+on:
+  push:
+    tags: ["v2.0.0-alpha.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag（如 v2.0.0-alpha.16，必须已存在于仓库）"
+        required: true
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag → commit
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          # 走 API 解引用（浅克隆下 git cat-file 看不到 tag object；
+          # lightweight 与 annotated 两种 tag 都归一到 commit sha）
+          OBJ=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object | "\(.type) \(.sha)"')
+          TYPE=${OBJ%% *}; SHA=${OBJ##* }
+          [ "$TYPE" = "tag" ] && SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$SHA" --jq '.commit.sha')
+          { [ -z "$SHA" ] || [ "$TYPE" = "missing" ]; } && { echo "::error::tag $TAG 不存在"; exit 1; }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "TAG=$TAG SHA=$SHA"
+
+      - name: Find green electron-win-package run on that commit
+        id: run
+        run: |
+          RUN=$(gh run list --workflow electron-win-package.yml --limit 30 \
+                --jq '.[] | select(.headSha=="${{ steps.tag.outputs.sha }}") | select(.status=="completed") | select(.conclusion=="success") | .databaseId' \
+                | head -1)
+          [ -z "$RUN" ] && { echo "::error::commit ${{ steps.tag.outputs.sha }} 上没有成功的 electron-win-package run；先在该 commit 触发打包并等全绿，再打 tag"; exit 1; }
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "win run = $RUN"
+
+      - name: Download win artifact
+        run: |
+          mkdir -p /tmp/rel/src
+          gh run download "${{ steps.run.outputs.run }}" \
+            -n "zhenguojian-v2-electron-win-x64-${{ steps.tag.outputs.sha }}" \
+            --dir /tmp/rel/src
+          ls -la /tmp/rel/src
+
+      - name: Stage contract-named assets + version cross-check
+        run: |
+          mkdir -p /tmp/rel/out
+          NSIS=$(ls /tmp/rel/src/zhenguojian-v2-electron-win-x64-*.exe | head -1)
+          APPZIP=$(ls /tmp/rel/src/zhenGuoJian-v2-app-*.zip | head -1)
+          BINFO=$(ls /tmp/rel/src/build-info-*.txt | head -1)
+          [ -n "$NSIS" ] && [ -n "$APPZIP" ] && [ -n "$BINFO" ] || { echo "::error::artifact 内三件套不全"; exit 1; }
+          cp "$NSIS" /tmp/rel/out/zhenGuoJian-v2.exe
+          cp "$APPZIP" /tmp/rel/out/zhenGuoJian-v2-app.zip
+          cp "$BINFO" /tmp/rel/out/build-info.txt
+          # §6 拍板点：tag 号必须等于产物 version（run 号错位的产物发出去，
+          # 客户端 Current 比较会永远判定「有更新」或「已最新」，语义全乱）
+          VER=$(grep '^version=' /tmp/rel/out/build-info.txt | cut -d= -f2)
+          WANT="${{ steps.tag.outputs.tag }}"
+          WANT="${WANT#v}"
+          if [ "$VER" != "$WANT" ]; then
+            echo "::error::tag=$WANT 与产物 version=$VER 不一致（发布纪律 §6：必须对齐）"
+            exit 1
+          fi
+          echo "version 对账 OK: $VER"
+
+      - name: Generate latest.json
+        shell: pwsh
+        run: |
+          ./client-v2/scripts/gen_latest_json_electron.ps1 `
+            -Tag "${{ steps.tag.outputs.tag }}" `
+            -OutDir /tmp/rel/out `
+            -NsisPath /tmp/rel/out/zhenGuoJian-v2.exe `
+            -AppZipPath /tmp/rel/out/zhenGuoJian-v2-app.zip
+          Get-Content /tmp/rel/out/latest.json
+
+      - name: Create GitHub prerelease
+        # latest.json 必须作为 Release 资产上传：Go 侧读取源就是
+        # releases[/latest]/download/latest.json（latest.go:22/42，全程不碰
+        # API）；预发布通道靠 releases.atom 解析最新 prerelease tag 再取该
+        # tag 的 latest.json——本 workflow 产物全部 --prerelease，与
+        # latest.json 的 prerelease 字段一致（latest.go:210 有反向校验：
+        # 稳定通道返回预发布 tag 会按语义异常拒掉）。
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          NOTES="真果鉴 V2（Electron）$TAG — 依赖+主程序分离包。安装用 zhenGuoJian-v2.exe（NSIS，仅首次），程序内更新走 zhenGuoJian-v2-app.zip（约 14MB）。构建溯源见 build-info.txt。"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::release $TAG 已存在——发布不可变，请打新 tag"
+            exit 1
+          fi
+          gh release create "$TAG" \
+            /tmp/rel/out/zhenGuoJian-v2.exe \
+            /tmp/rel/out/zhenGuoJian-v2-app.zip \
+            /tmp/rel/out/build-info.txt \
+            /tmp/rel/out/latest.json \
+            --prerelease \
+            --title "V2 Electron $TAG" \
+            --notes "$NOTES"
+          echo "release: $TAG 已发布"
