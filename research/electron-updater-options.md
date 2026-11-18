@@ -99,3 +99,17 @@ release-check.sh 的 EXPECTED_ASSETS 与 latest.json 断言仍是 Wails 三件�
   B. Electron 发布线换 tag 命名空间（如 `v2.1.0-alpha.N` 起步避开旧链正则？——实测
      v2.* 同样匹配，需 A 的 if 条件配合，B 不独立成立）。
   推荐 A。老 Wails 版横幅抑制：发首个 Electron tag 前，用户别再给 Wails 版点更新。
+
+## 8. 落地状态（2026-11-18 当日，代码全部已推，勿再按 §6/§7 的「将来时」读）
+
+- §7 推荐 A 已实现（**1a50d30**）：新 `.github/workflows/electron-release.yml`
+  （tag→找回该 commit 的成功 win-package run→artifact 改名契约资产→build-info
+  version 对账→gen_latest_json_electron.ps1→`gh release create --prerelease`）
+  + build-v2.yml 两 job `if: !contains(github.ref_name,'-')` 堵 Wails 链污染。
+- 更新短路已按门控形态移除（**ec065c1**）：Electron 安装形态仅当 latest.json
+  带 appZip 资产才放行横幅；现网 alpha.42 的 latest.json 本就带 appZip
+  （生产实测），tag 一发布即自动开闸。
+- Windows 实锤演练已落地（**49c17dd**）：selftest 进程内假镜像 + NSIS 装后
+  run B(apply)/marker/run C(替换后全套自检) 三步，run15 执行中（结果补记）。
+- **唯一剩余决策=用户同意打首个 tag `v2.0.0-alpha.16`**（§6 旧纪律改口），
+  随后 alpha.17 走程序内更新真实演练闭环。
