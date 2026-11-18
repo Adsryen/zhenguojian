@@ -1,10 +1,18 @@
 package updater
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBuildApplyBatZipGolden 断言 Electron 主程序包应用 bat 的关键结构与
@@ -109,4 +117,116 @@ func TestStatusRecommendedAssetElectron(t *testing.T) {
 	if _, ok := s.Status()["recommendedAsset"]; ok {
 		t.Fatal("非 Electron 形态不应出现 recommendedAsset")
 	}
+}
+
+// electronFakeInstall 搭一套假的 Electron 安装布局并注入身份（env+probe+
+// 缓存重置），返回 root。清理自动挂回。
+func electronFakeInstall(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	must := func(p string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(filepath.Join(root, "resources", "app.asar"))
+	svcExe := filepath.Join(root, "resources", "sidecar.exe")
+	must(svcExe)
+	must(filepath.Join(root, "zgj-v2.exe"))
+	t.Setenv("ZHENGUO_SHELL", "electron")
+	oldProbe := electronInstallProbe
+	electronInstallProbe = func() (string, error) { return svcExe, nil }
+	ResetElectronInstallCache()
+	t.Cleanup(func() { electronInstallProbe = oldProbe; ResetElectronInstallCache() })
+	return root
+}
+
+// TestElectronGateNoAppZip 更新源只有 Wails 单 exe（现网 alpha.42 的旧形状）
+// 时，Electron 形态必须报无更新并给诊断原因——这是移除无条件止血短路后的
+// 等价保护：不能因为「alpha.42 > alpha.16」就把单 exe 推给用户点更新。
+func TestElectronGateNoAppZip(t *testing.T) {
+	electronFakeInstall(t)
+	// 注意：**不能**复用 newComboServer——它的 lmManifest 已含 appZip（前提
+	// 不成立）。这里复刻 alpha.42 之前的 Wails 旧形状：只有 exe。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "latest.json") {
+			io.WriteString(w, `{"schema":1,"generatedAt":"2026-11-15T12:00:00Z","tag":"v9.9.9","version":"9.9.9","prerelease":false,`+
+				`"notes":"old wails shape","assets":{"exe":{"name":"zhenGuoJian-v2.exe","size":21000000,"sha256":"`+lmSHA+`",`+
+				`"url":"https://github.com/Adsryen/zhenguojian/releases/download/v9.9.9/zhenGuoJian-v2.exe"}}}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	svc := newTestService(t, srv.URL, LocalVersion{Version: "2.0.0-alpha.16"})
+	res, err := svc.Check(context.Background(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Available {
+		t.Fatalf("无 appZip 资产不该提示可用更新: %+v", res)
+	}
+	if res.UnavailableReason == "" {
+		t.Error("门控按下必须留诊断原因")
+	}
+}
+
+// TestElectronGateWithAppZipFullFlow 更新源带 appZip：Check 放行 →
+// Download 空资产在 Electron 形态默认选 app.zip（不是 exe）→ PrepareApply
+// 在 Linux（ApplySupported=false）回落 manual 但计划结构已在上层单测钉死。
+func TestElectronGateWithAppZipFullFlow(t *testing.T) {
+	root := electronFakeInstall(t)
+	zipBody := []byte("PK\x03\x04 fake app zip bytes for sha check")
+	sum := sha256.Sum256(zipBody)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/latest/download/latest.json"):
+			fmt.Fprintf(w, `{"schema":1,"tag":"v9.9.9","version":"9.9.9","prerelease":false,
+			  "assets":{"exe":{"name":"zhenGuoJian-v2.exe","url":"%s/old-exe","size":3,"sha256":"%s"},
+			            "appZip":{"name":"zhenGuoJian-v2-app.zip","url":"%s/app.zip","size":%d,"sha256":"%s"}}}`,
+				"http://"+r.Host, strings.Repeat("0", 64),
+				"http://"+r.Host, len(zipBody), hex.EncodeToString(sum[:]))
+		case strings.HasSuffix(r.URL.Path, "/app.zip"):
+			w.Write(zipBody)
+		default:
+			w.WriteHeader(404)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	svc := newTestService(t, srv.URL, LocalVersion{Version: "2.0.0-alpha.16"})
+	res, err := svc.Check(context.Background(), true)
+	if err != nil || !res.Available {
+		t.Fatalf("带 appZip 应放行: %+v err=%v resErr=%s", res, err, res.Error)
+	}
+	if res.UnavailableReason != "" {
+		t.Errorf("放行时不该有门控原因: %q", res.UnavailableReason)
+	}
+	if err := svc.Download(res.Release.Tag, ""); err != nil {
+		t.Fatal(err)
+	}
+	var st *DownloadState
+	for i := 0; i < 200; i++ {
+		st = svc.downloadSnapshot()
+		if st != nil && (st.State == StateDone || st.State == StateError || st.Error != "") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if st == nil || st.State != StateDone {
+		t.Fatalf("下载未完成: %+v", st)
+	}
+	if st.Asset != DefaultAppZipAsset {
+		t.Errorf("Electron 形态空资产应默认选 app.zip，实际 %s", st.Asset)
+	}
+	plan, err := svc.PrepareApply(t.TempDir(), 4242)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Kind != "manual" {
+		t.Fatalf("Linux 上应回落 manual，实际 %+v", plan)
+	}
+	_ = root
 }

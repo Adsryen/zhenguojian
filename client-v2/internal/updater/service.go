@@ -32,6 +32,9 @@ type CheckResult struct {
 	CheckedAt  int64    `json:"checkedAt"`
 	Error      string   `json:"error,omitempty"`
 	Release    *Release `json:"release,omitempty"`
+	// UnavailableReason 仅诊断用：Available 被 Electron 门控按下去时说明原因
+	// （前端当前不消费，JSON 透传便于贴日志排查）。
+	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
 // DownloadState 当前/最近一次下载任务状态。
@@ -111,14 +114,10 @@ func (s *Service) Channel() string {
 // Check 执行一次检查；force=false 时套用 30s 手动冷却（参照语义）。
 // 成功/失败都会更新 lastCheck 与 settings.lastCheckAt。
 func (s *Service) Check(ctx context.Context, force bool) (*CheckResult, error) {
-	// Electron 壳止血（2026-11-18 实机反馈）：更新链尚未适配 Electron 产物
-	// （latest.json 契约= Wails 单 exe，research/electron-updater-options.md
-	// 待决策），横幅却照常提示——用户点「更新」会把 Electron 安装版覆盖回
-	// Wails 单 exe（黑屏旧版）。壳侧 ZHENGUO_SHELL=electron 声明，这里直接
-	// 报无更新；更新链落地时移除。
-	if sh := os.Getenv("ZHENGUO_SHELL"); sh == "electron" {
-		return &CheckResult{Available: false}, nil
-	}
+	// （2026-11-18 更新链落地）原「ZHENGUO_SHELL=electron 无条件报无更新」的
+	// 止血短路已移除：Electron 形态改走 runCheck 末尾的 appZip 门控——更新源
+	// 没有 Electron 增量产物时依旧报无更新（防 Wails 单 exe 把安装形态打坏），
+	// 有了（首个 v2.0.0-alpha.N tag 发布后）正常走完整更新流。
 	s.mu.Lock()
 	if s.checking {
 		res := s.lastCheck
@@ -183,15 +182,25 @@ func (s *Service) runCheck(ctx context.Context, set Settings) *CheckResult {
 	if s.Local.Dev {
 		res.Available = true // 决策：开发构建时任何发布版都算更新
 		res.Release = rel
-		return res
+	} else {
+		newer, err := IsNewer(rel.Tag, s.Local.Version)
+		if err != nil {
+			res.Error = err.Error()
+			return res
+		}
+		res.Available = newer
+		res.Release = rel
 	}
-	newer, err := IsNewer(rel.Tag, s.Local.Version)
-	if err != nil {
-		res.Error = err.Error()
-		return res
+	// Electron 门控（取代旧无条件止血）：Electron 安装形态只认 app.zip 增量
+	// 语义；更新源若只有 Wails 单 exe（≤alpha.42 的 latest.json），点更新会
+	// 把 resources\sidecar.exe 换成单 exe 打坏安装形态（BuildApplyBat 单 exe
+	// move 语义），此时宁可报无更新。Dev 分支同样受此门控约束。
+	if res.Available && IsElectronInstall() {
+		if a, err := rel.FindAsset(DefaultAppZipAsset); err != nil || a == nil {
+			res.Available = false
+			res.UnavailableReason = fmt.Sprintf("更新源 %s 尚无 Electron 增量资产（%s）；为防 Wails 单 exe 打坏安装形态，暂不提示更新", rel.Tag, DefaultAppZipAsset)
+		}
 	}
-	res.Available = newer
-	res.Release = rel
 	return res
 }
 

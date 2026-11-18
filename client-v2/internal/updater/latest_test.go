@@ -81,7 +81,7 @@ func TestLatestTagFromAtomEmptyFeed(t *testing.T) {
   <id>tag:github.com,2008:https://github.com/Adsryen/zhenguojian/releases</id>
   <link type="text/html" rel="alternate" href="https://github.com/Adsryen/zhenguojian/releases"/>
 </feed>`,
-		"空应答":      "",
+		"空应答":   "",
 		"纯垃圾文本": "not xml at all",
 	}
 	for name, feed := range cases {
