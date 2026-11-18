@@ -4,6 +4,9 @@
 
 要回答的问题很具体：真机那一趟（`client-v2.exe --selftest` 与手点）
 第一次会执行到哪些核心动作？
+（62 轮换壳后的等价物：打包态 electron selftest —— CI workflow
+ electron-win-package 的 Run packaged selftest 步；叙述保留原文是因为
+ 第 53 轮那次 Windows VM 真跑的历史证据仍挂在这个名字下。）
 这件事以前只在我手写的 `v2-windows-followups.md` 里靠叙述，
 而本任务已经反复证明：叙述会漂，能算的必须算。
 

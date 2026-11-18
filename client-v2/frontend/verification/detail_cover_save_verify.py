@@ -4,6 +4,8 @@
 
 态：**非 mock dev @5184 + window.go.main.App stub**（沿用 detail_download_verify 的真实态套路），
 因为高清取图走的是 `App.Cover`，mock 面根本没有这条链路。
+（壳侧标注同 detail_download_verify：stub 形状 = Electron preload，脚本壳无关；
+ stub 桥 ≠ 真桥，真桥面错误由 electron selftest + sidecar_protocol_test.go 兜。）
 
 stub 记录每次 `Cover(dramaJSON, force)`，用 `window.__coverMode` 切分支：
   ok            所有请求都回 1x1 PNG data URL

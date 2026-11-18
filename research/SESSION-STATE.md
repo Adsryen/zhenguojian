@@ -4,19 +4,19 @@
 
 # 会话状态（现测）
 
-生成时间：2026-11-15 13:34:49 +0000
+生成时间：2026-11-18 03:50:05 +0000
 
 | 指标 | 值 | 怎么量的 |
 |---|---|---|
-| 累计提交（相对 `a1a1c89`） | **202** | `git rev-list --count` + 首笔 |
-| HEAD | `b5716ee` | `git rev-parse --short HEAD` |
-| 工作区未提交条目 | 7 | `git status --porcelain` 行数 |
+| 累计提交（相对 `a1a1c89`） | **231** | `git rev-list --count` + 首笔 |
+| HEAD | `ae4ad49` | `git rev-parse --short HEAD` |
+| 工作区未提交条目 | 9 | `git status --porcelain` 行数 |
 | 前端验收脚本 | 30 只 | `verification/*_verify.py` |
 | 端口号（独占/冲突） | 34 个 / 0 处冲突 | `ports_audit.audit_dir` |
-| Go 绑定 | 88 个，前端零引用 3 个 | `evidence_audit` |
-| 绑定证据等级 | 仅桥接 55 / 桥接+Go单测 30 / 只有编译级证据 2 / 仅Go单测 1 | `evidence_audit` |
+| Go 绑定 | 89 个（桥面/sidecar 反射表 89 ｜ contract 登记 82），前端零引用 3 个 | `evidence_audit` |
+| 绑定证据等级 | 仅桥接 49 / 桥接+Go单测 37 / 仅Go单测 2 / 只有编译级证据 1 | `evidence_audit` |
 | 核心动作 | 生产 26，假核心覆盖 11，只有真机第一次执行 15 | `core_action_audit` |
-| i18n 键 | zh 622 / en 622，字面量用到 572，动态取键 12，真死候选 17 | `i18n_key_audit` |
+| i18n 键 | zh 624 / en 624，字面量用到 574，动态取键 12，真死候选 17 | `i18n_key_audit` |
 
 ## 只有真实核心才会第一次执行的动作（真机清单的机器生成版）
 
@@ -36,15 +36,15 @@
 |---|---|
 | internal/danmaku | 27 |
 | internal/downloadsvc | 45 |
-| internal/mpv | 26 |
+| internal/mpv | 29 |
 | internal/native | 18 |
 | internal/player | 23 |
 | internal/selftest | 21 |
 | internal/tray | 13 |
 | internal/updater | 60 |
 | internal/watchstore | 27 |
-| (root) | 37 |
-| **合计** | **297** |
+| (root) | 43 |
+| **合计** | **306** |
 
 ## 验收脚本清单
 

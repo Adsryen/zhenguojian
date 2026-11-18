@@ -8,6 +8,11 @@
     → hasBridge=true → realApi → stub 的 App.DownloadStart（bindings_download.go:42
       DownloadStart(dramaJSON, entriesJSON「[{chapter,index}]」, quality) → {added}）
 
+壳侧标注（62 轮换壳）：stub 的形状 = Electron preload 暴露的 window.go 形状，
+所以本脚本对壳无关、继续有效；但 stub 桥 ≠ 真桥——它只断言前端接线，
+「方法在反射表里不存在」这类真桥错误归打包态 electron selftest
++ sidecar_protocol_test.go 管，别指望这里红。
+
 断言（任何 FAIL 退出码非 0）：
   ① mock 态点「下载全部」→ localStorage 'downloads.queue' 长度=按钮 N 集、旧 toast
      文案「本地队列/尚未开始下载」在；「下载当集」同理（去重文案「已在队列中」）

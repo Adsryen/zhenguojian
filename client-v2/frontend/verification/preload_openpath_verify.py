@@ -3,6 +3,8 @@
 """
 preload_openpath_verify.py — 预缓冲 + 打开下载目录 前端接线断言
 （自管理两台 dev server：mock @5198、非 mock stub 桥 @5199，启停走 _devserver）
+（壳侧标注同 detail_download_verify：@5199 的 stub 形状 = Electron preload，
+ 断言的是前端接线；stub 桥 ≠ 真桥，真桥面由 electron selftest 兜。）
 ①下载行「打开所在目录」按钮不再 disabled，点击落 __zgjOpenPath=dir/folder
 ②归档行同款按钮可点
 ③播放器真实会话（window.go stub + api 非 mock 太复杂）→ mock 态验证 preload 不发（demoMode 守卫）

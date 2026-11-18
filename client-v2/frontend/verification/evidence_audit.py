@@ -118,6 +118,68 @@ ALL_IDENT_RE = re.compile(r"\b([A-Z][A-Za-z0-9_]+)\b")
 LINE_COMMENT_RE = re.compile(r"^\s*//.*$", re.M)
 TRAILING_COMMENT_RE = re.compile(r"\s*//[^\n]*$", re.M)
 
+# —— 方向 S（62 轮，换壳）：sidecar 反射表的静态镜像 ——
+# Electron 时代前端的真实调用面**不是**「Go 有这个方法」，而是
+# 「方法进了 sidecar 反射表」：buildDispatchTable（client-v2/sidecar_main.go:71）
+# 运行期 reflect 枚举 `*App` 的导出方法，且只收三种返回形状
+# (string, error) / string / error，其余**静默排除**——被排除的方法
+# 在 Electron 里调用得到「原生方法不存在」。Wails 的正则判据（上面那条
+# `([A-Z]\w+)\(`）看不见这层过滤，壳一换就会把「Go 有、桥上没有」误判成绿。
+# 这里用同样的规则静态解析；与运行期的一致性由两道真跑兜底：
+#   ① sidecar_protocol_test.go（go-local.sh：contract.ts ⊆ 反射表）
+#   ② electron selftest 的 bridge_method_count（键数 == 反射表长）
+# 已知局限：receiver 名不限、参数可跨行，但返回类型必须与 `{` 同行——
+# 跨行返回签名会漏收（现仓 0 处；若出现，①②会先红，这里不静默）。
+APP_METHOD_FULL_RE = re.compile(
+    r"^func \(\w+ \*App\) ([A-Z]\w+)\s*\((?:[^()]|\([^()]*\))*\)\s*([^\n{]*)\{", re.M)
+
+
+def _norm_returns(raw):
+    """返回类型归一：去空白、去外层括号、命名返回只留类型。
+    `(err error)`→error，`(a string, b error)`→"string, error"。"""
+    r = re.sub(r"\s+", " ", raw).strip()
+    if not r:
+        return "void"
+    if r.startswith("(") and r.endswith(")"):
+        parts = [p.strip() for p in r[1:-1].split(",")]
+    else:
+        parts = [r]
+    out = []
+    for p in parts:
+        toks = p.split()
+        out.append(toks[-1] if toks else p)
+    return ", ".join(out)
+
+
+def parse_sidecar_table(root=ROOT):
+    """静态复刻 buildDispatchTable → (进表方法集, {名字: 归一返回} 被排除表)。"""
+    in_table, excluded = {}, set()
+    for path in sorted(glob.glob(os.path.join(root, "*.go"))):
+        if path.endswith("_test.go"):
+            continue  # 测试文件不进生产构建，反射表自然不含
+        text = io.open(path, encoding="utf-8").read()
+        for m in APP_METHOD_FULL_RE.finditer(text):
+            name, ret = m.group(1), _norm_returns(m.group(2))
+            if ret in ("string, error", "string", "error"):
+                in_table[name] = path
+            else:
+                excluded.add(name)
+    return set(in_table), sorted(excluded)
+
+
+def parse_contract_registered(frontend=FRONTEND):
+    """contract.ts 两张表（GO_BINDINGS + GO_BINDINGS_EMBED）登记的 App.X 名集合。
+    登记=前端文档承诺的方法面；承诺了但桥上没有=运行时「方法不存在」，硬拦。"""
+    ct = os.path.join(frontend, "src", "services", "contract.ts")
+    if not os.path.exists(ct):
+        return set()
+    text = io.open(ct, encoding="utf-8").read()
+    text = LINE_COMMENT_RE.sub("", text)
+    names = set()
+    for m in re.finditer(r"(?:GO_BINDINGS|GO_BINDINGS_EMBED)[^{}]*\{(.*?)\n\}", text, re.S):
+        names.update(re.findall(r"App\.([A-Za-z0-9_]+)", m.group(1)))
+    return names
+
 
 def read_all(paths):
     """读多个文件并**剥掉行注释**。
@@ -169,6 +231,12 @@ def parse_ts_calls(frontend):
     """
     paths = glob.glob(os.path.join(frontend, "src/**/*.ts"), recursive=True)
     paths += glob.glob(os.path.join(frontend, "src/**/*.vue"), recursive=True)
+    # 排除测试件（62 轮补）：`src/services/bridge.test.ts` 用 `callGoRaw('Foo')`
+    # 做假桥桩，被当真实调用扫进方向 A → run_all 预检硬拦假红。
+    # 「前端调了没有」审计的对象是**出厂代码**，vitest fixture 不在其中。
+    paths = [p for p in paths
+             if not (p.endswith((".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"))
+                     or "__tests__" in p.replace(os.sep, "/"))]
     text = strip_trailing_comments(read_all(paths))
     strict = set(call_go_targets(text))
     strict.update(BRIDGE_DIRECT_RE.findall(text))
@@ -259,14 +327,24 @@ def audit(root=ROOT, frontend=FRONTEND):
     go_test_text, n_test_files = parse_go_test_refs(root)
     scripts = parse_verify_scripts(frontend)
     tiers = classify(bindings, called, mentioned, go_test_text)
+    sidecar, sidecar_excluded = parse_sidecar_table(root)
+    contract = parse_contract_registered(frontend)
 
-    missing_in_go = sorted(c for c in called if c not in bindings)
+    # 方向 A 的判据是**桥面**不是 Go 面（62 轮换壳改的，见方向 S 注释）：
+    # Electron 里「Go 有但没进反射表」= 前端拿到「原生方法不存在」，
+    # 和「Go 没有」是同一个故障。旧判据 `not in bindings` 会把这层漏放绿。
+    missing_in_go = sorted(c for c in called if c not in sidecar)
+    contract_missing = sorted(n for n in contract if n not in sidecar)
     not_called = sorted(n for n in bindings if n not in mentioned)
     distribution = {}
     for tier in tiers.values():
         distribution[tier] = distribution.get(tier, 0) + 1
     return {
         "bindings": len(bindings),
+        "sidecar": len(sidecar),
+        "sidecar_excluded": sidecar_excluded,
+        "contract_registered": len(contract),
+        "contract_not_in_sidecar": contract_missing,
         "called": len(called),
         "mentioned": len(mentioned & set(bindings)),
         "ts_files": len(ts_paths),
@@ -420,7 +498,54 @@ def _selftest():
     # 真实仓库：这张表必须与 app.go 对得上（第六十一轮改签名后没人核对过）
     rr, rb = embed_signature_audit()
     t('G3 真实仓库内嵌签名全部一致', not rb, str(rb))
-    t('G4 真实仓库抓到 4 条内嵌签名', len(rr) == 4, len(rr))
+    # 62 轮修正：4 是 P3 之前的写死数——P3 把 diag(EmbedDiag) 登进表后
+    # 这条一直红着，但 --selftest 不在 run_all 链上，没人看见（潜伏红的
+    # 标准样本）。语义是「contract 登记的内嵌面全在、且形状一致」，
+    # 数量只当下限用，别再把键数钉死。
+    t('G4 真实仓库内嵌签名抓到 ≥5 条（attach/setBounds/hitBands/detach/diag）', len(rr) >= 5, len(rr))
+
+    # S：方向 S 静态镜像 —— 假源码覆盖反射过滤（三种形状入表、其余排除、
+    # receiver 变体、命名返回、非导出不算、_test.go 不进生产构建）
+    with tempfile.TemporaryDirectory() as ds:
+        io.open(os.path.join(ds, "app.go"), "w", encoding="utf-8").write(
+            "package main\n"
+            "func (a *App) K0(x string) (string, error) { return \"\", nil }\n"
+            "func (app *App) K1() string { return \"\" }\n"
+            "func (s *App) K2() error { return nil }\n"
+            "func (a *App) BadShape() (int, error) { return 0, nil }\n"
+            "func (a *App) NRNamed() (err error) { return nil }\n"
+            "func (a *App) priv() string { return \"\" }\n"
+        )
+        io.open(os.path.join(ds, "app_test.go"), "w", encoding="utf-8").write(
+            "package main\nfunc (a *App) TestOnly() string { return \"\" }\n")
+        tbl, excl = parse_sidecar_table(ds)
+        t("S1 绑定三形状全入表（含 receiver 变体与命名返回）",
+          {"K0", "K1", "K2", "NRNamed"} <= tbl, sorted(tbl))
+        t("S2 非绑定形状排除且点名（防『Go 有桥上没有』静默失真）",
+          excl == ["BadShape"], excl)
+        t("S3 非导出不入表", "priv" not in tbl, sorted(tbl))
+        t("S4 _test.go 的方法不进生产反射表",
+          "TestOnly" not in tbl and "TestOnly" not in excl, (sorted(tbl), excl))
+        # contract 侧假表：GO_BINDINGS ∪ GO_BINDINGS_EMBED 都要扫到
+        fs2 = os.path.join(ds, "fe")
+        os.makedirs(os.path.join(fs2, "src", "services"))
+        io.open(os.path.join(fs2, "src", "services", "contract.ts"), "w", encoding="utf-8").write(
+            "export const GO_BINDINGS = {\n"
+            "  k0: 'App.K0(x) -- ok',\n"
+            "  ghost: 'App.GhostMethod()'\n}\n"
+            "export const GO_BINDINGS_EMBED = {\n"
+            "  k1: 'App.K1()'\n}\n")
+        reg = parse_contract_registered(fs2)
+        t("S5 contract 两张表全解析", reg == {"K0", "GhostMethod", "K1"}, sorted(reg))
+        t("S6 登记但不在桥面的名字抓得出（真实仓库上这条进硬闸）",
+          "GhostMethod" in (reg - tbl), sorted(reg - tbl))
+    # 真实仓库：桥面存在且规模合理；fixture 假红（bridge.test.ts 的 Foo）必须已排除
+    res_s = audit()
+    t("S7 真实仓库 contract 登记面 ⊆ 桥面", not res_s["contract_not_in_sidecar"],
+      res_s["contract_not_in_sidecar"])
+    t("S8 真实仓库桥面 > 40", res_s["sidecar"] > 40, res_s["sidecar"])
+    t("S9 vitest fixture（Foo/NoSuchMethod）不再进方向 A 红名单",
+      not (set(res_s["missing_in_go"]) & {"Foo", "NoSuchMethod"}), res_s["missing_in_go"])
 
     total = counts[0]
     print("\n===== evidence_audit --selftest: %d/%d PASS =====" % (total - len(fails), total))
@@ -438,20 +563,33 @@ def main():
 
     res = audit()
     bindings_loc = parse_go_bindings(ROOT)
+    bridge_bad = bool(res["missing_in_go"] or res["contract_not_in_sidecar"])
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=1))
-        return 1 if res["missing_in_go"] else 0
+        return 1 if bridge_bad else 0
 
-    print("绑定 %d 个｜前端引用名 %d 个｜Go 测试文件 %d 个｜验收脚本 %d 只"
-          % (res["bindings"], res["called"], res["go_test_files"], res["verify_scripts"]))
+    print("绑定 %d（桥面 %d｜被形状排除 %d）｜contract 登记 %d｜前端引用名 %d｜Go 测试文件 %d 个｜验收脚本 %d 只"
+          % (res["bindings"], res["sidecar"], len(res["sidecar_excluded"]),
+             res["contract_registered"], res["called"], res["go_test_files"], res["verify_scripts"]))
 
     if res["missing_in_go"]:
-        print("\nFAIL 前端调用了 Go 里不存在的绑定（运行时只会得到「原生方法不存在」，"
+        print("\nFAIL 前端调用了**桥面（sidecar 反射表）**上没有的绑定（运行时只会得到「原生方法不存在」，"
               "而 mock 面不走桥，Playwright 看不见）：")
         for n in res["missing_in_go"]:
             print("  - %s" % n)
     else:
-        print("\nPASS 方向 A：前端调用的绑定名全部在 Go 里存在")
+        print("\nPASS 方向 A：前端调用的绑定名全部在桥面上（sidecar 反射表，62 轮起判据不再是 Go 面）")
+
+    if res["contract_not_in_sidecar"]:
+        print("\nFAIL 方向 S：contract.ts 登记了、但不在 sidecar 反射表上的方法（文档承诺的方法面"
+              "与真实桥面不一致，前端按文档调用必得「原生方法不存在」）：")
+        for n in res["contract_not_in_sidecar"]:
+            print("  - %s" % n)
+    if res["sidecar_excluded"]:
+        print("\n注意：以下 App 导出方法**返回形状非绑定兼容**，不会进桥（Wails 时代会按形状自动"
+              "适配、Electron  sidecar 直接排除；前端不可调用）：")
+        for n in res["sidecar_excluded"]:
+            print("  - %s" % n)
 
     print("\n方向 B：Go 有、前端没调（只登记不判红，删不删是 API 决定）：")
     for n in res["not_called"]:
@@ -484,7 +622,7 @@ def main():
     if not only_compile:
         print("  （无）")
 
-    return 1 if res["missing_in_go"] else 0
+    return 1 if bridge_bad else 0
 
 
 if __name__ == "__main__":

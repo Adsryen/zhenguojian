@@ -192,7 +192,11 @@ def selftest():  # 分母必须把两组用例都算进去——
 
 
 
-HEAVY_PROCS = ("client-v2-linux", "client-v2.exe", "mpv")
+HEAVY_PROCS = ("client-v2-linux", "client-v2.exe", "mpv",
+               # 62 轮换壳：Electron 壳与 sidecar 残留同样会干扰回归
+               # （selftest/开发实例没退干净就是「有人在放电影」的场景重演）。
+               # /proc/*/comm 截断到 15 字符，这里三个名字都 ≤15。
+               "sidecar-linux", "sidecar.exe", "electron")
 
 
 def heavy_processes(proc_root="/proc"):
@@ -370,13 +374,21 @@ def main():
     # 要硬拦就单独跑 `ports_audit.py --check-spec`（我提交文档前自己跑）。
     _ = ports_audit.check_spec(HERE)
 
-    # 绑定层证据审计：方向 A（前端调了 Go 没有）是真 bug，硬拦；
+    # 绑定层证据审计：方向 A（前端调了桥面上没有的）是真 bug，硬拦；
+    # 62 轮换壳起判据=sidecar 反射表（Electron 里「Go 有但没进桥」同样报
+    # 「原生方法不存在」，见 evidence_audit 方向 S 注释）；contract 登记面
+    # 与桥面的对账同闸（S 段）。
     # 等级分布与"前端零引用"名单只报告——它是给我看趋势用的，
     # 拿它拦路会让人开始绕过门禁（同 ports_audit 的 spec 对账只提示不拦路的理由）。
     import evidence_audit
     _ev = evidence_audit.audit()
-    if _ev["missing_in_go"]:
-        print("FAIL 前端调用了 Go 里不存在的绑定：%s" % ", ".join(_ev["missing_in_go"]))
+    if _ev["missing_in_go"] or _ev.get("contract_not_in_sidecar"):
+        if _ev["missing_in_go"]:
+            print("FAIL 前端调用了桥面（sidecar 反射表）上不存在的绑定：%s"
+                  % ", ".join(_ev["missing_in_go"]))
+        if _ev.get("contract_not_in_sidecar"):
+            print("FAIL contract.ts 登记但不在桥面上的方法：%s"
+                  % ", ".join(_ev["contract_not_in_sidecar"]))
         print("     （mock 面不走桥，Playwright 全绿也看不见这类错，所以在这里硬拦）")
         return 1
     _dist = " / ".join("%s %d" % (k.split("（")[0], v) for k, v in

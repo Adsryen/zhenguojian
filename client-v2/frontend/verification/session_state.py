@@ -154,8 +154,9 @@ def main(argv=None):
     _per, _owner, _conf = ports_audit.audit_dir(HERE)
     a("| 端口号（独占/冲突） | %d 个 / %d 处冲突 | `ports_audit.audit_dir` |"
       % (len(_owner), len(_conf)))
-    a("| Go 绑定 | %d 个，前端零引用 %d 个 | `evidence_audit` |"
-      % (ev["bindings"], len(ev["not_called"])))
+    a("| Go 绑定 | %d 个（桥面/sidecar 反射表 %d ｜ contract 登记 %d），前端零引用 %d 个 | `evidence_audit` |"
+      % (ev["bindings"], ev.get("sidecar", -1), ev.get("contract_registered", -1),
+         len(ev["not_called"])))
     a("| 绑定证据等级 | %s | `evidence_audit` |"
       % " / ".join("%s %d" % (k.split("（")[0], v)
                    for k, v in sorted(ev["distribution"].items(), key=lambda kv: -kv[1])))

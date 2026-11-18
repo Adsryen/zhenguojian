@@ -135,11 +135,30 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   `--wid==surfaceXid`（0x20000c 实锤）→ 视频区**两帧差分** 627083 像素
   变化（色数判据被首跑证伪：整区 14995 色但中心恒 32 色，分不清
   没画与量到 testsrc 静态区）；xwininfo 窗树 surface=stage 原样
-  1079x597@200,91。Windows 侧（HWND 8 字节分支）未执行级验证
-  （无 Windows 环境，winvet 仅编译级）——靠 P5 CI 补齐。
-- **P4 门禁迁移**：verification/ 预检体系适配（mock E2E 不变；真桥 E2E
+  1079x597@200,91。Windows 侧（HWND 8 字节分支）已 CI 实锤
+  （electron-win-package run6 @ae4ad49 全绿：mpv_wid
+  surfaceXid==mpvWid=0x2021a + NSIS 打包产物自检 16 PASS；像素差分
+  两项 SKIP 待真机——CI 无法证明「人眼见画」，最终判据=用户实机）。
+  踩坑沉淀：打包 exe 是 GUI 子系统（PE subsystem=2），pwsh `&` 不等待
+  GUI 进程直接返回，自检步五连败的「json 缺失」实为检查跑在 app 刚
+  启动 2s 时（自检要 30s+）——必须 Start-Process -PassThru +
+  WaitForExit 显式等（npx/node 与 Linux bash 都会等子进程，唯独这条
+  不等）。
+- **P4 门禁迁移**（✅ 2026-11-18 完成）：verification/ 预检体系适配（mock E2E 不变；真桥 E2E
   改走 Electron CDP 或先冻结标注）；session_state/evidence_audit 适配
   「80 绑定=sidecar 方法表」。
+  落地实况：30 个 *_verify.py 经全量侦察没有一个起过真 Wails（27 纯 mock +
+  3 个「非 mock vite + window.go stub」双轨，stub 形状=Electron preload，
+  壳无关继续有效），所以「冻结标注」分支 = 只加注释不改代码，真桥面由
+  electron selftest + sidecar_protocol_test.go 覆盖；CDP 真桥 E2E 本体系
+  从无（非迁移债），留 P5 后新增能力。
+  evidence_audit 判据换桥面：方向 A = 前端调用名 ⊆ sidecar 反射表静态镜像
+  （新增方向 S 三种形状 (string,error)/string/error，「Go 有但没进桥」在
+  Electron 里同样报「原生方法不存在」，旧 Go 面判据会静默放行）；
+  S 段 contract.ts 登记面（主表 77+EMBED 5）⊆ 桥面（实测 89）进 run_all
+  预检硬拦。踩坑沉淀：G4「==4」是 P3 加 diag 后的过期写死数，--selftest
+  不在 run_all 链上潜伏红无人见（62 轮全量才暴露）；bridge.test.ts 假桥桩
+  Foo/NoSuchMethod 被 callGo 解析器扫入造成方向 A 假红——fixture 必须排除。
 - **P5 发布**：electron-builder（win x64 + linux）、latest.json 更新链
   移植（electron-updater 或自研下载）、CI 双 job 改写、release-check
   适配。
