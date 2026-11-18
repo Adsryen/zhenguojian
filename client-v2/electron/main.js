@@ -17,7 +17,7 @@
  */
 'use strict'
 
-const { app, BrowserWindow, ipcMain } = require('electron')
+const { app, BrowserWindow, ipcMain, screen } = require('electron')
 const { spawn, execSync } = require('child_process')
 const path = require('path')
 const fs = require('fs')
@@ -504,7 +504,17 @@ async function runSelfTest(win) {
             return s && s.win && !s.win.isDestroyed() ? s.win.getBounds() : null
           } catch { return null }
         })()
-        if (!sr || sr.width < 50 || sr.height < 50) {
+        // getBounds 返回 DIP；CopyFromScreen 要**物理像素**——缩放≠100% 的
+        // 机器上不换算会抓到偏小偏位的区域（CI 100% dpr=1 掩盖）。
+        const srPhys = sr && (() => {
+          let sc = 1
+          try { sc = screen.getDisplayMatching(sr).scaleFactor || 1 } catch {}
+          return {
+            x: Math.round(sr.x * sc), y: Math.round(sr.y * sc),
+            width: Math.round(sr.width * sc), height: Math.round(sr.height * sc),
+          }
+        })()
+        if (!srPhys || srPhys.width < 50 || srPhys.height < 50) {
           add('video_moving', false, 'win32 视频面几何不可得 sr=' + JSON.stringify(sr), { skip: true })
           add('video_pixels', false, '同上', { skip: true })
         } else {
@@ -553,7 +563,7 @@ async function runSelfTest(win) {
               '$bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Bmp)\r\n' +
               '$g.Dispose(); $bmp.Dispose()\r\n')
             execSync(
-              `powershell -NoProfile -ExecutionPolicy Bypass -File "${ps}" -X ${sr.x} -Y ${sr.y} -W ${sr.width} -H ${sr.height} -Out "${file}"`,
+              `powershell -NoProfile -ExecutionPolicy Bypass -File "${ps}" -X ${srPhys.x} -Y ${srPhys.y} -W ${srPhys.width} -H ${srPhys.height} -Out "${file}"`,
               { timeout: 30000 }
             )
           }
@@ -700,6 +710,10 @@ async function runSelfTest(win) {
 }
 
 /* ── 入口 ─────────────────────────────────────────────────────────── */
+// 注：曾考虑 ZGJ_FORCE_SCALE=--force-device-scale-factor 做 CI 缩放回归，
+// 已否决——它只改 Chromium dpr，不改 Electron display.scaleFactor（OS 缩放
+// 仍 100%），两者失配会制造假红而非复现实机。实机 150% 时二者同源都是 1.5。
+// 换算链正确性改由 videoSurface.test.js 单测钉（mock scaleFactor）。
 
 app.whenReady().then(async () => {
   if (SELFTEST) fs.mkdirSync(SELFTEST_OUT, { recursive: true })

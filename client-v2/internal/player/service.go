@@ -316,7 +316,24 @@ func (s *Service) mpvConfig() mpv.Config {
 		Wid:        s.wid,
 		HWDec:      s.cfg.HWDec,
 		Backend:    s.cfg.Backend,
+		LogFile:    s.mpvLogPath(),
 	}
+}
+
+// mpvLogPath mpv --log-file → DataDir/logs/mpv.log。mpv stderr 被 sidecar
+// 继承后在打包态（GUI 子系统）无处可看，vo=gpu 初始化失败这类「有声无画」
+// 黑屏当前零记录——实机排查全靠它。mpv 每次启动**截断重写** log-file，天然
+// 只留最近一次会话，不撑盘。DataDir 未设（单测/裸环境）返回 ""=不传，行为
+// 与旧版一致。
+func (s *Service) mpvLogPath() string {
+	if s.cfg.DataDir == "" {
+		return ""
+	}
+	dir := filepath.Join(s.cfg.DataDir, "logs")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "mpv.log")
 }
 
 // SetWid 切换 mpv --wid 宿主句柄（内嵌接线 PlayerAttach 在进播放页、

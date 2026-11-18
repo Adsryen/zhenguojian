@@ -23,7 +23,7 @@
  */
 'use strict'
 
-const { BaseWindow } = require('electron')
+const { BaseWindow, screen } = require('electron')
 const { execSync } = require('node:child_process')
 
 /* 句柄读数：Linux XID 是 4 字节；Windows HWND 是 8 字节（JavdBviewed 同款
@@ -135,23 +135,40 @@ class VideoSurface {
     return true
   }
 
-  /* 摆到 (relX,relY,relW,relH)——相对父窗**内容区**的物理像素（前端原样上报
-     的视口坐标）。换算成屏幕绝对坐标后 setBounds；钳进内容区（JavdBviewed
-     的 surfaceBoundsInScreen 同款，防视频面跑出父窗）。 */
+  /* 父窗所在显示器的 DIP→物理缩放。前端 dpr 与它同源（页面缩放 100% 时
+     devicePixelRatio==scaleFactor）；CI 100% 缩放恒 1，实机 125/150% 才走
+     非 1 分支。取不到显示器的极端情况兜 1（=旧行为）。 */
+  _scale(cb) {
+    try {
+      return screen.getDisplayMatching(cb).scaleFactor || 1
+    } catch {
+      return 1
+    }
+  }
+
+  /* 摆到 (relX,relY,relW,relH)——相对父窗**内容区**的**物理像素**（前端
+     getBoundingClientRect×dpr 原样上报，PlayerView.vue reportBounds；Wails
+     时代直传 Win32 SetWindowPos，物理像素即正确语义）。
+     Electron bounds API 全是 **DIP**：必须显式 ÷scaleFactor——否则缩放≠100%
+     时视频面按 DIP 解释物理像素，向右下偏 (scale−1)× 并放大（run10 CI 恒
+     100% 缩放 dpr=1 掩盖；用户实机 125/150% 即「有声无画」候选根因）。
+     换算后钳进内容区（JavdBviewed surfaceBoundsInScreen 同款）。
+     this.last 存**原始物理像素**：reposition 回灌走同一换算，debug/徽标
+     字段与 Wails 时代 HostDebug 语义一致。 */
   place(relX, relY, relW, relH, show) {
     if (relW < 1 || relH < 1) return false // 无几何：不摆（可见性另行处理）
     if (!this.ensure()) return false
-    const pb = this.parent.getBounds()
     const cb = this.parent.getContentBounds()
-    const px = Math.round(cb.x + relX)
-    const py = Math.round(cb.y + relY)
+    const sc = this._scale(cb)
+    const px = Math.round(cb.x + relX / sc)
+    const py = Math.round(cb.y + relY / sc)
     // 钳：不超出父窗内容区右/下边缘（左/上不钳——前端量出来的本就在视口内）。
     const maxX = Math.round(cb.x + cb.width)
     const maxY = Math.round(cb.y + cb.height)
-    const w = Math.min(Math.round(relW), maxX - px)
-    const h = Math.min(Math.round(relH), maxY - py)
+    const w = Math.min(Math.round(relW / sc), maxX - px)
+    const h = Math.min(Math.round(relH / sc), maxY - py)
     if (w < 1 || h < 1) return false
-    this.last = { x: relX, y: relY, w, h }
+    this.last = { x: relX, y: relY, w: relW, h: relH }
     this.lastShow = !!show
     this.win.setBounds({ x: px, y: py, width: w, height: h })
     if (show) this.show()
@@ -203,8 +220,10 @@ class VideoSurface {
     let contains = false
     if (this.last && this.last.w > 1 && this.last.h > 1) {
       const cb = this.parent.getContentBounds()
-      const cx = Math.round(cb.x + this.last.x + this.last.w / 2)
-      const cy = Math.round(cb.y + this.last.y + this.last.h / 2)
+      // last 是物理像素；中心点换算成 DIP 再查根树（与 place 同一 ÷scale 规则）
+      const sc = this._scale(cb)
+      const cx = Math.round(cb.x + (this.last.x + this.last.w / 2) / sc)
+      const cy = Math.round(cb.y + (this.last.y + this.last.h / 2) / sc)
       const id = x11TopWindowAt(cx, cy)
       if (id) {
         top = id
