@@ -379,13 +379,15 @@ async function runUpdateFlow(win, add) {
     add('update_download', dlOk, `asset=${d && d.asset} state=${d && d.state} err=${(d && d.error) || ''}`)
     if (!dlOk) return false
     if (process.env.ZGJ_UPDATE_APPLY === '1') {
-      await setP({ mirrorPrefix: '' }) // 还原：新实例不许再指这台假服务器
+      await setP({ mirrorPrefix: '' }) // apply 前先还原（finally 也要跑，双保险幂等）
       applied = true // Apply 由 runSelfTest 落盘 json 后触发（bat 会杀进程）
-    } else {
-      await setP({ mirrorPrefix: '' })
     }
     return applied
   } finally {
+    // 失败早退（checkOk/dlOk false）同样必须还原 mirrorPrefix：残留会把
+    // 后续 run 的 Check 指到已死端口，回落真实 GitHub 后被门控拦红——
+    // 红因错到让人去查门控。还原幂等，成功路径已还原过也无害。
+    try { await setP({ mirrorPrefix: '' }) } catch {}
     if (!applied) srv.close()
   }
 }
