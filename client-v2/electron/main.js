@@ -491,13 +491,94 @@ async function runSelfTest(win) {
     )
     if (st.running) {
       if (isWin) {
-        // Windows：视频面是独立 BaseWindow（父窗 WebView 之上、capturePage 截不到
-        // 它，父窗截图也不含它），本机没有可信的像素差分执行路径。不假装通过
-        // （绿=测过且过），标成透明 skip：本平台「mpv 真的画进 BaseWindow」的
-        // 架构保证由 mpv_wid（mpv spawn 带 --wid=<BaseWindow HWND>）承担，
-        // 像素级「画面可见」待真机/后续 GDI 抓帧补齐。诚实边界见方案文档。
-        add('video_moving', false, 'Windows 无像素差分执行路径（待真机/GDI 补）', { skip: true })
-        add('video_pixels', false, '同上', { skip: true })
+        // Windows 像素路径：GDI CopyFromScreen 抓视频面 BaseWindow 的屏幕区域
+        // （capturePage 截不到 airspace 子窗，CI Windows 又无 ImageMagick）。
+        // 与 Linux 同判据（moved>100 / uniqueColors>32），BMP 用 Node 侧自制
+        // 解码。**本轮全部 skip:true**：这条路径本机无法预验（pwsh/GDI/BMP 任一
+        // 环节都可能踩坑），run7 拿 skip 里的实测值当证据，证实后下一批才去掉
+        // skip 转正——先取数再断言，不拿未验证的路径赌 CI 红。
+        await new Promise((r) => setTimeout(r, 3000))
+        const sr = (() => {
+          try {
+            const s = getSurface()
+            return s && s.win && !s.win.isDestroyed() ? s.win.getBounds() : null
+          } catch { return null }
+        })()
+        if (!sr || sr.width < 50 || sr.height < 50) {
+          add('video_moving', false, 'win32 视频面几何不可得 sr=' + JSON.stringify(sr), { skip: true })
+          add('video_pixels', false, '同上', { skip: true })
+        } else {
+          const bmpPixels = (file) => {
+            const b = fs.readFileSync(file)
+            if (b.length < 54 || b[0] !== 0x42 || b[1] !== 0x4d) return null
+            const off = b.readUInt32LE(10)
+            const w = b.readInt32LE(18)
+            let h = b.readInt32LE(22)
+            const topdown = h < 0
+            if (h < 0) h = -h
+            if (b.readUInt16LE(28) !== 24 || w <= 0 || h <= 0) return null
+            const stride = (w * 3 + 3) & ~3
+            const px = Buffer.alloc(w * h * 3) // top-down RGB
+            for (let y = 0; y < h; y++) {
+              const src = off + (topdown ? y : h - 1 - y) * stride
+              b.copy(px, y * w * 3, src, src + w * 3)
+            }
+            return { w, h, px }
+          }
+          const winshot = (file) => {
+            const ps = path.join(out, 'winshot.ps1')
+            fs.writeFileSync(ps,
+              'param($X,$Y,$W,$H,$Out)\r\n' +
+              'Add-Type -AssemblyName System.Drawing\r\n' +
+              '$bmp = New-Object System.Drawing.Bitmap ([int]$W), ([int]$H)\r\n' +
+              '$g = [System.Drawing.Graphics]::FromImage($bmp)\r\n' +
+              '$sz = New-Object System.Drawing.Size ([int]$W), ([int]$H)\r\n' +
+              '$g.CopyFromScreen([int]$X, [int]$Y, 0, 0, $sz)\r\n' +
+              '$bmp.Save($Out, [System.Drawing.Imaging.ImageFormat]::Bmp)\r\n' +
+              '$g.Dispose(); $bmp.Dispose()\r\n')
+            execSync(
+              `powershell -NoProfile -ExecutionPolicy Bypass -File "${ps}" -X ${sr.x} -Y ${sr.y} -W ${sr.width} -H ${sr.height} -Out "${file}"`,
+              { timeout: 30000 }
+            )
+          }
+          let moved = NaN
+          let uniqA = '0'
+          let lastErr = null
+          for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+              const shotA = path.join(out, 'play_t0.bmp')
+              const shotB = path.join(out, 'play_t2.bmp')
+              winshot(shotA)
+              await new Promise((r) => setTimeout(r, 2000))
+              winshot(shotB)
+              const a = bmpPixels(shotA)
+              const b2 = bmpPixels(shotB)
+              if (!a || !b2) throw new Error('BMP 解码失败')
+              if (a.w !== b2.w || a.h !== b2.h) throw new Error(`尺寸漂移 ${a.w}x${a.h} vs ${b2.w}x${b2.h}`)
+              let diff = 0
+              const colors = new Set()
+              for (let i = 0; i < a.px.length; i += 3) {
+                if (Math.abs(a.px[i] - b2.px[i]) + Math.abs(a.px[i + 1] - b2.px[i + 1]) + Math.abs(a.px[i + 2] - b2.px[i + 2]) > 16) diff++
+                colors.add((a.px[i] << 16) | (a.px[i + 1] << 8) | a.px[i + 2])
+              }
+              moved = diff
+              uniqA = String(colors.size)
+              lastErr = null
+              if (diff > 100) break
+              log(`video 像素 win32 第 ${attempt} 次两帧差=${diff}（未达 100，重试）`)
+              await new Promise((r) => setTimeout(r, 2500))
+            } catch (e) {
+              lastErr = String((e && e.message) || e)
+              log(`video 像素 win32 第 ${attempt} 次异常：${lastErr.slice(0, 120)}（重试）`)
+              await new Promise((r) => setTimeout(r, 2500))
+            }
+          }
+          const ev = `win32 GDI 实测 rect=${JSON.stringify(sr)} 两帧差=${moved} uniqueColors=${uniqA}` +
+            (lastErr ? ` 最后异常=${lastErr.slice(0, 120)}` : '') +
+            '（首验取数轮，skip 保绿；证实后转正）'
+          add('video_moving', Number.isFinite(moved) && moved > 100, ev, { skip: true })
+          add('video_pixels', Number(uniqA) > 32, ev, { skip: true })
+        }
       } else {
         // 等画面稳定 3s，截全屏找视频区：pl-stage 的 getBoundingClientRect
         await new Promise((r) => setTimeout(r, 3000))
