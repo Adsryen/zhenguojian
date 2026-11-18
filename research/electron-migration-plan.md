@@ -236,12 +236,14 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   钉换算链（force-device-scale-factor 模拟已否决：只改 dpr 不改
   scaleFactor，失配假红）。
 - **可观测性补齐（同批）**：mpv --log-file=DataDir/logs/mpv.log——此前
-  mpv stderr 打包态零记录，候选②无从查证；run11+ 用户日志自动带 vo 初始化
+  mpv stderr 打包态零记录，候选②无从查证；run12+ 用户日志自动带 vo 初始化
   结果。
-- **run11（44252935137 @a958341）**：带修复+mpv 日志的 Windows artifact，
-  交付用户复测。若仍黑：mpv.log 直接定候选②（d3d11/opengl 失败行），
-  ZHENGUO_NO_EMBED=1 独立窗测试定候选③。
-- **顺带发现（未修）**：Electron 安装版顶部更新横幅仍说「单文件 20MB 覆盖
-  exe」=旧 Wails latest.json 契约——用户点更新会把 Electron 版覆盖回 Wails
-  版。更新链 A 方案落地前，latest.json 不应指向 Wails exe 或横幅需屏蔽
-  （已提醒用户点「跳过此版本」）。
+- **run11（44252935137 @a958341）已取消**：不含横幅止血，重跑。交付包=
+  **run12（44253480635 @173b235）**：DPI 修复+mpv 日志+横幅止血三合一，
+  装后 selftest 18 PASS（GDI 实测差 52929/色 7865）。若复测仍黑：mpv.log
+  直接定候选②（d3d11/opengl 失败行），ZHENGUO_NO_EMBED=1 独立窗测试定候选③。
+- **顺带发现（已止血 173b235）**：Electron 安装版顶部更新横幅曾提示
+  「单文件 20MB 覆盖 exe」=旧 Wails latest.json 契约——用户点更新会把
+  Electron 版覆盖回 Wails 版。修复=main.js spawn sidecar 设
+  ZHENGUO_SHELL=electron、updater.Check 据此短路报无更新（更新链 A 方案
+  落地时移除该短路）。
