@@ -223,3 +223,25 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   core_client.py 的 respawn 逻辑是现成参考）。
 - 迁移期间 Wails 版线继续维护（小修照发），直到 Electron 版整链验证通过
   才停。
+
+## 6. 实机反馈线（run10 交付后，2026-11-18）
+- **用户实机（NSIS 安装版）：能播放（有声、进度走）但视频区全黑**（截图
+  06:13）。CI run10 全绿但 runner=100% 缩放+软件渲染，恰好绕开两类实机
+  差异 → 根因候选①DPI 单位混用、②mpv vo=gpu 实机 GPU 初始化失败、
+  ③窗口遮挡。
+- **候选①已实锤并修复（a958341）**：前端 PlayerSetBounds 报物理像素
+  （×dpr；Wails 时代直传 Win32 SetWindowPos 语义正确），Electron bounds
+  API 是 DIP——缩放≠100% 时视频面偏移 (scale−1)× 并放大。place()/debug()
+  ÷scaleFactor、winshot 抓屏 rect ×scaleFactor、videoSurface.test.js 6 用例
+  钉换算链（force-device-scale-factor 模拟已否决：只改 dpr 不改
+  scaleFactor，失配假红）。
+- **可观测性补齐（同批）**：mpv --log-file=DataDir/logs/mpv.log——此前
+  mpv stderr 打包态零记录，候选②无从查证；run11+ 用户日志自动带 vo 初始化
+  结果。
+- **run11（44252935137 @a958341）**：带修复+mpv 日志的 Windows artifact，
+  交付用户复测。若仍黑：mpv.log 直接定候选②（d3d11/opengl 失败行），
+  ZHENGUO_NO_EMBED=1 独立窗测试定候选③。
+- **顺带发现（未修）**：Electron 安装版顶部更新横幅仍说「单文件 20MB 覆盖
+  exe」=旧 Wails latest.json 契约——用户点更新会把 Electron 版覆盖回 Wails
+  版。更新链 A 方案落地前，latest.json 不应指向 Wails exe 或横幅需屏蔽
+  （已提醒用户点「跳过此版本」）。
