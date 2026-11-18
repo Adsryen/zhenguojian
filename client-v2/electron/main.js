@@ -21,6 +21,11 @@ const { app, BrowserWindow, ipcMain, screen } = require('electron')
 const { spawn, execSync, spawnSync } = require('child_process')
 const http = require('http')
 const crypto = require('crypto')
+// app.asar 本身是归档文件：electron 给 require('fs') 打了 asar 穿透补丁，
+// 直接 copyFileSync(<...>\app.asar) 会被当归档内路径解析并抛
+// 「ENOENT, not found in <asarpath>」（run15 实锤）。碰归档本体必须用
+// 未打补丁的 original-fs。
+const ofs = require('original-fs')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -319,22 +324,22 @@ async function runUpdateFlow(win, add) {
   const resDir = path.join(path.dirname(process.execPath), 'resources')
   const asarSrc = path.join(resDir, 'app.asar')
   const sidecarSrc = path.join(resDir, 'sidecar.exe')
-  if (!fs.existsSync(asarSrc) || !fs.existsSync(sidecarSrc)) {
+  if (!ofs.existsSync(asarSrc) || !ofs.existsSync(sidecarSrc)) {
     add('update_flow', false, `非 NSIS 安装形态（缺 ${asarSrc} 或 sidecar.exe）`)
     return false
   }
   const work = path.join(SELFTEST_OUT, 'update-exercise')
   fs.rmSync(work, { recursive: true, force: true })
   const stage = path.join(work, 'stage')
-  fs.mkdirSync(stage, { recursive: true })
-  fs.copyFileSync(asarSrc, path.join(stage, 'app.asar'))
-  fs.copyFileSync(sidecarSrc, path.join(stage, 'sidecar.exe'))
-  fs.writeFileSync(path.join(stage, 'update-marker.json'),
+  ofs.mkdirSync(stage, { recursive: true })
+  ofs.copyFileSync(asarSrc, path.join(stage, 'app.asar'))
+  ofs.copyFileSync(sidecarSrc, path.join(stage, 'sidecar.exe'))
+  ofs.writeFileSync(path.join(stage, 'update-marker.json'),
     JSON.stringify({ exercisedAt: new Date().toISOString(), pid: process.pid }))
   const zipPath = path.join(work, 'app.zip')
   const tr = spawnSync('tar', ['-a', '-cf', zipPath, '-C', stage,
     'app.asar', 'sidecar.exe', 'update-marker.json'], { encoding: 'utf8' })
-  const zipBuf = fs.existsSync(zipPath) ? fs.readFileSync(zipPath) : null
+  const zipBuf = ofs.existsSync(zipPath) ? ofs.readFileSync(zipPath) : null
   if (!zipBuf) {
     add('update_flow', false, 'tar 造 zip 失败 status=' + tr.status + ' ' + (tr.stderr || ''))
     return false
