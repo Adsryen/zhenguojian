@@ -141,3 +141,20 @@ release-check.sh 的 EXPECTED_ASSETS 与 latest.json 断言仍是 Wails 三件�
 - 遗留提醒：发布 2.1.0-alpha.N 后生产 latest.json 切到 Electron 资产，
   **仍在用 Wails alpha.42 的用户点更新会吃到 NSIS 全量包**（老 updater 无
   zip 门控）——当前唯一用户已装 Electron 版，风险记录在案即可。
+
+## §10 首发完成 + 更新源端到端实锤（v2.1.0-alpha.22，2026-11-18）
+- 发布链 run 44288999976 success（tag push 首跑 44288824260 红在 CRLF 对账
+  bug，修后 dispatch 重放绿）。Release v2.1.0-alpha.22 四资产：
+  zhenGuoJian-v2.exe(NSIS 202MB) / zhenGuoJian-v2-app.zip(14.8MB) /
+  build-info.txt / latest.json。
+- **通道语义钉死（读实 latest.go:48/148/207）**：Go 端 Prerelease 以 tag 文本
+  判定（IsPrereleaseTag），alpha 系在 stable 通道恒被「语义异常」拒收——
+  这意味着 ①老 Wails alpha.42 的 latest.json 永远不会喂给 stable 默认用户
+  （危险窗口本不存在，门控只是双保险）；②**alpha 线更新=测试版通道**，
+  用户设置页开关（update-prerelease）即入口；③无需归档旧 Releases。
+- **端到端真实验证（临时脚本跑完即删）**：模拟装机版 2.0.0-alpha.21 +
+  prerelease=true → 真实网络 atom→v2.1.0-alpha.22→latest.json→
+  available=true ✓ E2E_OK。用户实机路径=设置→测试版通道→检查更新→
+  下载 14.8MB→应用重启。
+- 真实跨版本 apply 演练（装机 21 升 22）由用户实机点击完成即收官；
+  CI 同版本替换演练（marker）已在前实锤。
