@@ -190,12 +190,14 @@ jobs:
       # 证明「打包布局可用」：app.isPackaged=true 走 resourcesPath 解析
       # sidecar/frontend/runtime。mpv_wid=架构判据；像素判据 Windows 透明 skip。
       #
-      # 结果判读（run 44159214616 教训）：打包 exe 是 Windows GUI 子系统，
-      # pwsh `& app 1>st.out` 的流重定向对它不生效（st.out/st.err 双双空、
-      # exit 0）——开发态 npx electron 有 node 父进程持控制台所以 selftest
-      # job 一直是绿的。main.js 在打 stdout 那行**之前**已把结果写到
-      # SELFTEST_OUT/selftest.json（文件写入，不依赖任何流），所以这里以
-      # selftest.json 为准、stdout 为兜底。
+      # 真根因（run 44171840052 实锤，纠正上一轮的误诊）：打包 exe 的 PE
+      # subsystem=2（GUI），pwsh 的 `&` 调用符**不等待 GUI 子系统进程**——
+      # 立即返回，$LASTEXITCODE 还是上一条（ffmpeg）的 0，脚本 ~2s 后就查
+      # selftest.json，而自检要跑 30s+，于是「缺失(exit 0)」。开发态 npx
+      # electron 绿是因为 node 父进程会等；Linux 本机绿是因为 bash 会等。
+      # 修法：Start-Process -PassThru + WaitForExit(300s) 显式等待，句柄
+      # 直接给文件（GUI 子系统的 stdout 也能落进 st.out）。结果仍以
+      # main.js 写盘的 selftest.json 为准、stdout 行为兜底。
       - name: Run packaged selftest
         working-directory: client-v2/electron
         env:
@@ -214,9 +216,17 @@ jobs:
           $bffmpeg = Join-Path (Get-Item .).FullName "staging/runtime/ffmpeg/ffmpeg.exe"
           & $bffmpeg -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -c:a aac "$vid" 2>$null
           if (-not (Test-Path $vid)) { throw "test video generation failed" }
-          # 跑打包态自检
-          & $app --selftest 1>st.out 2>st.err
-          $rc = $LASTEXITCODE
+          # 跑打包态自检：GUI 子系统必须显式等待（`&` 对 GUI 不等）。
+          $appFull = (Resolve-Path $app).Path
+          $outAbs = Join-Path $PWD "st.out"
+          $errAbs = Join-Path $PWD "st.err"
+          $p = Start-Process -FilePath $appFull -ArgumentList '--selftest' -NoNewWindow -PassThru `
+               -RedirectStandardOutput $outAbs -RedirectStandardError $errAbs
+          if (-not $p.WaitForExit(600000)) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            throw "packaged selftest 600s 未退出（app 卡死）"
+          }
+          $rc = $p.ExitCode
           Write-Host "----- stderr (tail 40) -----"
           Get-Content st.err -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
           # 结果判读：以 selftest.json 为准（文件写入，不依赖 GUI exe 的流重定向），
