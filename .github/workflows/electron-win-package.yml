@@ -493,8 +493,13 @@ jobs:
           # ④.6 run C：bat start 起的 GUI 实例先清（无单实例锁，留着会双 sidecar），
           #     新 bundle 全套自检证明替换后 app.asar/sidecar 仍可用
           Start-Sleep -Seconds 5
+          # bat start 的 GUI 实例可能尚未 spawn：taskkill 找不到进程返回 128，
+          # pwsh 结尾会把残留 $LASTEXITCODE 传播成步骤退出码（run18 实锤：
+          # 全链断言绿却 exit 1）。清掉，让失败只由 throw 表达。
           & taskkill /F /T /IM zgj-v2.exe 2>$null | Out-Null
+          $LASTEXITCODE = 0
           & taskkill /F /IM sidecar.exe 2>$null | Out-Null
+          $LASTEXITCODE = 0
           $sp3 = Start-Process -FilePath $app -ArgumentList '--selftest' -NoNewWindow -PassThru `
                -RedirectStandardOutput (Join-Path $PWD "nsis-runC.out") -RedirectStandardError (Join-Path $PWD "nsis-runC.err")
           if (-not $sp3.WaitForExit(600000)) {
@@ -522,4 +527,5 @@ jobs:
             Get-ChildItem $dir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("  left: " + $_.Name) }
             throw "app.exe survives uninstall（120s 轮询后仍在，见上残留）"
           }
-          Write-Host "NSIS smoke: install → bundle → selftest → uninstall 全绿"
+          Write-Host "NSIS smoke: install → bundle → selftest → apply exercise → uninstall 全绿"
+          exit 0
