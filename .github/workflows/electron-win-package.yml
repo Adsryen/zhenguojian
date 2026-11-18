@@ -297,12 +297,21 @@ jobs:
           $nsis = Get-ChildItem client-v2/electron/out/*.exe | Where-Object { $_.Name -like "*win-x64*.exe" } | Select-Object -First 1
           if (-not $nsis) { throw "NSIS installer not produced" }
           # ① 静默安装（electron-builder NSIS /S 对 assisted oneClick:false 同样有效）
+          # ⚠ NSIS 双 spawn：Setup.exe 复制自身到 temp 再起子进程继续装，父进程
+          # 先退——Start-Process -Wait 等到的 exit=0 只证「外壳拉起成功」，不证
+          # 500MB 解压完成。装后必须轮询等 app.exe 就位，别拿瞬时快照断言。
           $ip = Start-Process -FilePath $nsis.FullName -ArgumentList '/S' -Wait -PassThru
           if ($ip.ExitCode -ne 0) { throw ("installer exit=" + $ip.ExitCode) }
           # electron-builder 默认 perMachine:false → %LOCALAPPDATA%\Programs\<productName>
           $dir = Join-Path $env:LOCALAPPDATA "Programs\zhenguojian-v2"
           $app = Join-Path $dir "zgj-v2.exe"
-          if (-not (Test-Path $app)) { throw ("post-install zgj-v2.exe not found under " + $dir) }
+          $deadline = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $deadline -and -not (Test-Path $app)) { Start-Sleep -Milliseconds 1500 }
+          if (-not (Test-Path $app)) {
+            Write-Host "----- Programs\ 实际目录树（定案装到哪了）-----"
+            Get-ChildItem (Join-Path $env:LOCALAPPDATA "Programs") -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("  " + $_.FullName) }
+            throw ("post-install zgj-v2.exe not found under " + $dir + "（180s 轮询超时，见上目录树）")
+          }
           # ② bundle 布局就位（extraResources 三件套；不锁死文件名，验目录有 exe）
           foreach ($sub in @("resources\sidecar.exe", "resources\runtime\mpv", "resources\runtime\ffmpeg", "resources\frontend\dist")) {
             $p = Join-Path $dir $sub
@@ -335,10 +344,15 @@ jobs:
             Write-Host ("  [" + $tag + "] " + $_.name + "  " + $_.detail)
           }
           if (-not $obj.ok) { throw "installed selftest ok=false（见上）" }
-          # ⑤ 静默卸载（electron-builder NSIS 卸载器名 "Uninstall <productName>.exe"，带空格）
+          # ⑤ 静默卸载（卸载器同样双 spawn：复制到 temp 起子进程 → 等消失别等退出码）
           $uni = Get-ChildItem $dir -Filter "Uninstall*.exe" | Select-Object -First 1
           if (-not $uni) { throw "uninstaller not found under $dir" }
           $up = Start-Process -FilePath $uni.FullName -ArgumentList '/S' -Wait -PassThru
           if ($up.ExitCode -ne 0) { throw ("uninstaller exit=" + $up.ExitCode) }
-          if (Test-Path $app) { throw "app.exe survives uninstall" }
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and (Test-Path $app)) { Start-Sleep -Milliseconds 1500 }
+          if (Test-Path $app) {
+            Get-ChildItem $dir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("  left: " + $_.Name) }
+            throw "app.exe survives uninstall（120s 轮询后仍在，见上残留）"
+          }
           Write-Host "NSIS smoke: install → bundle → selftest → uninstall 全绿"

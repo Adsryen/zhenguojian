@@ -494,9 +494,9 @@ async function runSelfTest(win) {
         // Windows 像素路径：GDI CopyFromScreen 抓视频面 BaseWindow 的屏幕区域
         // （capturePage 截不到 airspace 子窗，CI Windows 又无 ImageMagick）。
         // 与 Linux 同判据（moved>100 / uniqueColors>32），BMP 用 Node 侧自制
-        // 解码。**本轮全部 skip:true**：这条路径本机无法预验（pwsh/GDI/BMP 任一
-        // 环节都可能踩坑），run7 拿 skip 里的实测值当证据，证实后下一批才去掉
-        // skip 转正——先取数再断言，不拿未验证的路径赌 CI 红。
+        // 解码。**转正依据（run8 @d5a972c 取数轮实证）**：两帧差=51078（阈 100
+        // 的 500 倍）、uniqueColors=8102（阈 32 的 250 倍），32bpp 解码器修复后
+        // 数据即断言。几何不可得仍走 skip——没截图对象就没法假装任何结论。
         await new Promise((r) => setTimeout(r, 3000))
         const sr = (() => {
           try {
@@ -590,10 +590,9 @@ async function runSelfTest(win) {
             }
           }
           const ev = `win32 GDI 实测 rect=${JSON.stringify(sr)} 两帧差=${moved} uniqueColors=${uniqA}` +
-            (lastErr ? ` 最后异常=${lastErr.slice(0, 120)}` : '') +
-            '（首验取数轮，skip 保绿；证实后转正）'
-          add('video_moving', Number.isFinite(moved) && moved > 100, ev, { skip: true })
-          add('video_pixels', Number(uniqA) > 32, ev, { skip: true })
+            (lastErr ? ` 最后异常=${lastErr.slice(0, 120)}` : '')
+          add('video_moving', Number.isFinite(moved) && moved > 100, ev)
+          add('video_pixels', Number(uniqA) > 32, ev)
         }
       } else {
         // 等画面稳定 3s，截全屏找视频区：pl-stage 的 getBoundingClientRect
