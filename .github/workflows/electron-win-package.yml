@@ -458,6 +458,56 @@ jobs:
             Write-Host ("  [" + $tag + "] " + $_.name + "  " + $_.detail)
           }
           if (-not $obj.ok) { throw "installed selftest ok=false（见上）" }
+          # ④.5 更新链 apply 演练：run B 带 ZGJ_UPDATE_APPLY=1——selftest 进程内
+          #     假镜像服务器喂 latest.json/app.zip（tag v9.9.9 真实仓库不存在，
+          #     回落只会失败，红得干净），跑通 Check→Download(默认选 app.zip)→
+          #     UpdateApply：bat 真 taskkill /T 进程树 + tar 解压 + robocopy 替换
+          #     resources + start 新版。zip 内容=当前安装件原样副本+marker，
+          #     替换后应用必须仍健康。Apply 只在 run B 全套 ok=true 时触发
+          #     （main.js 守卫），bat 失败路径兜底 start 旧 exe——失败模式收敛为
+          #     「marker 不出现」而非应用死亡。
+          $env:ZGJ_UPDATE_APPLY = "1"
+          $sp2 = Start-Process -FilePath $app -ArgumentList '--selftest' -NoNewWindow -PassThru `
+               -RedirectStandardOutput (Join-Path $PWD "nsis-upB.out") -RedirectStandardError (Join-Path $PWD "nsis-upB.err")
+          if (-not $sp2.WaitForExit(600000)) {
+            Stop-Process -Id $sp2.Id -Force -ErrorAction SilentlyContinue
+            throw "update-apply selftest(B) 600s 未退出"
+          }
+          Remove-Item Env:ZGJ_UPDATE_APPLY -ErrorAction SilentlyContinue
+          # run B 是被 bat taskkill 掉的，ExitCode 无意义——以 json 为准
+          $objB = Get-Content (Join-Path $env:ZGJ_SELFTEST_OUT "selftest.json") -Raw | ConvertFrom-Json
+          Write-Host "----- run B update exercise checks -----"
+          $objB.checks | Where-Object { $_.name -like "update*" } | ForEach-Object {
+            $t2 = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
+            Write-Host ("  [" + $t2 + "] " + $_.name + "  " + $_.detail)
+          }
+          if (-not $objB.ok) { throw "run B ok=false——update 门没绿则 apply 未触发（main.js 守卫），见上 update_* 明细" }
+          $marker = Join-Path (Split-Path $app) "resources\update-marker.json"
+          $dl2 = (Get-Date).AddSeconds(180)
+          while ((Get-Date) -lt $dl2 -and -not (Test-Path $marker)) { Start-Sleep -Milliseconds 1500 }
+          if (-not (Test-Path $marker)) {
+            Get-ChildItem (Split-Path $app)\resources -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ("  res: " + $_.Name) }
+            throw "update-marker.json 180s 未出现——疑似 bat 走了 :fail 路径（已兜底拉旧 exe）；查 robocopy/tar 现场"
+          }
+          if (-not ((Get-Content $marker -Raw | ConvertFrom-Json).exercisedAt)) { throw "marker 内容无效" }
+          # ④.6 run C：bat start 起的 GUI 实例先清（无单实例锁，留着会双 sidecar），
+          #     新 bundle 全套自检证明替换后 app.asar/sidecar 仍可用
+          Start-Sleep -Seconds 5
+          & taskkill /F /T /IM zgj-v2.exe 2>$null | Out-Null
+          & taskkill /F /IM sidecar.exe 2>$null | Out-Null
+          $sp3 = Start-Process -FilePath $app -ArgumentList '--selftest' -NoNewWindow -PassThru `
+               -RedirectStandardOutput (Join-Path $PWD "nsis-runC.out") -RedirectStandardError (Join-Path $PWD "nsis-runC.err")
+          if (-not $sp3.WaitForExit(600000)) {
+            Stop-Process -Id $sp3.Id -Force -ErrorAction SilentlyContinue
+            throw "run C (post-apply) 600s 未退出"
+          }
+          $objC = Get-Content (Join-Path $env:ZGJ_SELFTEST_OUT "selftest.json") -Raw | ConvertFrom-Json
+          if (-not $objC.ok) {
+            Write-Host "----- run C checks -----"
+            $objC.checks | ForEach-Object { Write-Host ("  [" + $(if ($_.skip) {"SKIP"} elseif ($_.ok) {"PASS"} else {"FAIL"})) + "] " + $_.name + "  " + $_.detail) }
+            throw "run C（apply 后新 bundle）ok=false，见上"
+          }
+          Write-Host "update apply exercise: bat 替换 ✓ marker ✓ 新 bundle 全套自检 ✓"
           # ⑤ 静默卸载（卸载器同样双 spawn：复制到 temp 起子进程 → 等消失别等退出码）
           $uni = Get-ChildItem $dir -Filter "Uninstall*.exe" | Select-Object -First 1
           if (-not $uni) { throw "uninstaller not found under $dir" }

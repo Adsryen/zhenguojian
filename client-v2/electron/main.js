@@ -18,7 +18,9 @@
 'use strict'
 
 const { app, BrowserWindow, ipcMain, screen } = require('electron')
-const { spawn, execSync } = require('child_process')
+const { spawn, execSync, spawnSync } = require('child_process')
+const http = require('http')
+const crypto = require('crypto')
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -303,6 +305,90 @@ ipcMain.on('zgj:quit', async () => {
   }
   app.quit()
 })
+
+/* ── 更新链演练（仅 win32 selftest）─────────────────────────────────
+ * 起一个「镜像形状」假更新服务器（latest.json/app.zip 按 mirror 契约
+ * prefix+完整URL 的路径形状应答），把 updater 的 mirrorPrefix 指过去，
+ * 端到端跑 Check→Download（空资产必须默认选 app.zip）→（ZGJ_UPDATE_APPLY=1
+ * 时）Apply：bat 用真实 tar/robocopy/taskkill/start 替换 resources。zip
+ * 内容=当前安装 app.asar+sidecar.exe 原样副本+update-marker.json（断言
+ * 产物），替换后应用仍健康，marker 证明 bat 走完成功路径。
+ * 防「回落真实 GitHub」：tag 用 v9.9.9（真实仓库不存在），fallback 只会
+ * 失败——假服务器没接住请求就会红。 */
+async function runUpdateFlow(win, add) {
+  const resDir = path.join(path.dirname(process.execPath), 'resources')
+  const asarSrc = path.join(resDir, 'app.asar')
+  const sidecarSrc = path.join(resDir, 'sidecar.exe')
+  if (!fs.existsSync(asarSrc) || !fs.existsSync(sidecarSrc)) {
+    add('update_flow', false, `非 NSIS 安装形态（缺 ${asarSrc} 或 sidecar.exe）`)
+    return false
+  }
+  const work = path.join(SELFTEST_OUT, 'update-exercise')
+  fs.rmSync(work, { recursive: true, force: true })
+  const stage = path.join(work, 'stage')
+  fs.mkdirSync(stage, { recursive: true })
+  fs.copyFileSync(asarSrc, path.join(stage, 'app.asar'))
+  fs.copyFileSync(sidecarSrc, path.join(stage, 'sidecar.exe'))
+  fs.writeFileSync(path.join(stage, 'update-marker.json'),
+    JSON.stringify({ exercisedAt: new Date().toISOString(), pid: process.pid }))
+  const zipPath = path.join(work, 'app.zip')
+  const tr = spawnSync('tar', ['-a', '-cf', zipPath, '-C', stage,
+    'app.asar', 'sidecar.exe', 'update-marker.json'], { encoding: 'utf8' })
+  const zipBuf = fs.existsSync(zipPath) ? fs.readFileSync(zipPath) : null
+  if (!zipBuf) {
+    add('update_flow', false, 'tar 造 zip 失败 status=' + tr.status + ' ' + (tr.stderr || ''))
+    return false
+  }
+  const zipSha = crypto.createHash('sha256').update(zipBuf).digest('hex')
+  const R = 'https://github.com/Adsryen/zhenguojian/releases'
+  const latest = JSON.stringify({
+    schema: 1, generatedAt: new Date().toISOString(),
+    tag: 'v9.9.9', version: '9.9.9', prerelease: false, notes: 'update exercise',
+    assets: {
+      exe: { name: 'zhenGuoJian-v2.exe', size: 1024, sha256: '0'.repeat(64), url: R + '/download/v9.9.9/zhenGuoJian-v2.exe' },
+      appZip: { name: 'zhenGuoJian-v2-app.zip', size: zipBuf.length, sha256: zipSha, url: R + '/download/v9.9.9/zhenGuoJian-v2-app.zip' },
+    },
+  })
+  const srv = http.createServer((req, resp) => {
+    const u = req.url || ''
+    if (u.endsWith('/latest/download/latest.json')) { resp.writeHead(200, { 'Content-Type': 'application/json' }); resp.end(latest); return }
+    if (u.endsWith('/zhenGuoJian-v2-app.zip')) { resp.writeHead(200); resp.end(zipBuf); return }
+    if (u.endsWith('/zhenGuoJian-v2.exe')) { resp.writeHead(200); resp.end(Buffer.alloc(1024)); return }
+    resp.writeHead(404); resp.end('exercise server: not handled ' + u)
+  })
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r))
+  const port = srv.address().port
+  const js = (expr) => win.webContents.executeJavaScript(expr)
+  const setP = (obj) => js(`window.go.main.App.UpdateSettingsSet(${JSON.stringify(JSON.stringify(obj))})`)
+  let applied = false
+  try {
+    await setP({ mirrorPrefix: 'http://127.0.0.1:' + port + '/' })
+    const chk = JSON.parse(await js('window.go.main.App.UpdateCheck(true)'))
+    const checkOk = chk.available === true && chk.release && chk.release.tag === 'v9.9.9'
+    add('update_check', checkOk,
+      `available=${chk.available} tag=${chk.release && chk.release.tag} err=${chk.error || ''}${chk.unavailableReason ? ' reason=' + chk.unavailableReason : ''}`)
+    if (!checkOk) return false
+    await js(`window.go.main.App.UpdateDownload('v9.9.9','')`)
+    let d = null
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 500))
+      d = JSON.parse(await js('window.go.main.App.UpdateStatus()')).download || null
+      if (d && (d.state === 'done' || d.state === 'error' || d.state === 'canceled')) break
+    }
+    const dlOk = !!d && d.state === 'done' && d.asset === 'zhenGuoJian-v2-app.zip'
+    add('update_download', dlOk, `asset=${d && d.asset} state=${d && d.state} err=${(d && d.error) || ''}`)
+    if (!dlOk) return false
+    if (process.env.ZGJ_UPDATE_APPLY === '1') {
+      await setP({ mirrorPrefix: '' }) // 还原：新实例不许再指这台假服务器
+      applied = true // Apply 由 runSelfTest 落盘 json 后触发（bat 会杀进程）
+    } else {
+      await setP({ mirrorPrefix: '' })
+    }
+    return applied
+  } finally {
+    if (!applied) srv.close()
+  }
+}
 
 /* ── selftest：桥探针 + 8 页导航（截图交给 selftest.sh 判蓝行）────── */
 
@@ -705,10 +791,29 @@ async function runSelfTest(win) {
     await new Promise((r) => setTimeout(r, 1500))
   }
 
+  // U. 更新链演练（仅 win32；其他平台 skip=判据无执行路径，不假装通过）
+  let pendingApply = false
+  if (isWin) {
+    try {
+      pendingApply = await runUpdateFlow(win, add)
+    } catch (e) {
+      add('update_flow', false, String((e && e.message) || e))
+    }
+  } else {
+    add('update_check', false, 'win32 only', { skip: true })
+  }
+
   const ok = checks.filter((c) => !c.skip).every((c) => c.ok)
   fs.writeFileSync(path.join(out, 'selftest.json'), JSON.stringify({ ok, checks }, null, 1))
   // 唯一允许出现在 stdout 的一行（selftest.sh 按前缀抓）
   console.log('SELFTEST_JSON ' + JSON.stringify({ ok, checks }))
+  if (pendingApply && ok) {
+    // json 已落盘才自杀：UpdateApply 写 bat→LaunchDetached→进程树终结，
+    // 本函数不能再有断言。workflow 侧轮询 resources\update-marker.json
+    // 出现 + 新版本再跑一次全套 selftest 完成闭环。
+    win.webContents.executeJavaScript('window.go.main.App.UpdateApply()').catch(() => {})
+    return
+  }
   setTimeout(() => app.exit(ok ? 0 : 1), 300)
 }
 
