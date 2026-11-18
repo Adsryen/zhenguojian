@@ -247,3 +247,17 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   Electron 版覆盖回 Wails 版。修复=main.js spawn sidecar 设
   ZHENGUO_SHELL=electron、updater.Check 据此短路报无更新（更新链 A 方案
   落地时移除该短路）。
+- **run13（44263473947 @652ca5a）**：加 ZGJ_DISABLE_GPU 诊断开关的复测包，
+  18 PASS。用户复测反馈「点击全屏瞬间见画」→ GPU 合成层蒙版候选升主嫌，
+  判定树已发（m01533）。**该包 DPI 修复已在**（用户前次测的 run10 旧包
+  不含，勿混淆）。
+- **run14（44270795517 @eaa6d35）+ linux（44270770125）双绿=更新链 CI 落地**：
+  win NSIS 名吃 alpha 号 `zhenguojian-v2-win-x64-2.0.0-alpha.16.exe`
+  （extraMetadata.version，root -c.version 被 26.18.0 schema 拒——本机
+  build-linux.sh 抓红先于 CI，三处注释留档）；**app.zip=14.1MB/40 条目**
+  （app.asar+sidecar.exe+frontend/dist 38，结构自检内置）；GDI 两轮
+  video_moving PASS（52934/52942）；NSIS 装后 selftest 全绿；linux B0
+  =2.0.0-alpha.10 注入生效。alpha 号=各 workflow 独立运行号（纪律已写
+  updater-options §6/§7：上 release 时 tag 必须对上产物号）。
+  版本注入消费链全通：CI ldflags → sidecar_main.go EmbeddedVersion 转发 →
+  updater.Current 真版本（「永远可更新」根因闭环）。
