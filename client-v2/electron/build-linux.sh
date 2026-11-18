@@ -72,6 +72,18 @@ step "B3 打包完成：$APPDIR"
 [ -f "$APPDIR/resources/runtime/mpv/mpv" ] || fail "resources/runtime/mpv/mpv 缺失"
 step "B3 布局校验通过（sidecar/frontend/runtime 就位）"
 
+# ── B3.5 chrome-sandbox 沙箱模式分流 ────────────────────────────────
+# 本机（unprivileged_userns_clone=1）：755 非 SUID 即可跑——Chrome 走
+# userns 沙箱，SUID helper 缺失无所谓。
+# GitHub runner（内核 userns 禁用）：必须 root:root 4755 SUID 路径，
+# 否则 FATAL:setuid_sandbox_host.cc「helper found but not configured」。
+# ZGJ_SUID_FIX=1 显式触发（workflow 设置），本机默认零行为变化。
+if [ "${ZGJ_SUID_FIX:-0}" = "1" ]; then
+  CS="$APPDIR/chrome-sandbox"
+  [ -f "$CS" ] && { sudo chown root:root "$CS" && sudo chmod 4755 "$CS"; } || fail "chrome-sandbox 缺失"
+  step "B3.5 chrome-sandbox → $(stat -c '%U:%G %a' "$CS")（CI SUID 路径）"
+fi
+
 # ── B4 打包态自检（isPackaged=true 路径）────────────────────────────
 DISPLAY_NUM="${ZGJ_DISPLAY:-99}"
 export "DISPLAY=:$DISPLAY_NUM"

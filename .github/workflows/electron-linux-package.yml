@@ -53,6 +53,11 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Build + packaged selftest
+        # ZGJ_SUID_FIX：runner 内核 userns 禁用，chrome-sandbox 必须
+        # root:root 4755 SUID 路径（run2 FATAL:setuid_sandbox_host 实锤）。
+        # 本机不设=零行为变化（本机走 userns 沙箱，755 即绿）。
+        env:
+          ZGJ_SUID_FIX: '1'
         # ZGJ_GO_BIN 传空会盖掉脚本 `${ZGJ_GO_BIN:-默认}` 的默认值吗——不会：
         # :- 展开对空串也回退默认。所以 CI 靠 setup-go 把 go 放进全局 PATH，
         # 脚本 prepend 的默认本机路径不存在只是无效项，无害。
