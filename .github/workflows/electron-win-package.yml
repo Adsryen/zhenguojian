@@ -504,7 +504,10 @@ jobs:
           $objC = Get-Content (Join-Path $env:ZGJ_SELFTEST_OUT "selftest.json") -Raw | ConvertFrom-Json
           if (-not $objC.ok) {
             Write-Host "----- run C checks -----"
-            $objC.checks | ForEach-Object { Write-Host ("  [" + $(if ($_.skip) {"SKIP"} elseif ($_.ok) {"PASS"} else {"FAIL"})) + "] " + $_.name + "  " + $_.detail) }
+            $objC.checks | ForEach-Object {
+              $t3 = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
+              Write-Host ("  [" + $t3 + "] " + $_.name + "  " + $_.detail)
+            }
             throw "run C（apply 后新 bundle）ok=false，见上"
           }
           Write-Host "update apply exercise: bat 替换 ✓ marker ✓ 新 bundle 全套自检 ✓"
