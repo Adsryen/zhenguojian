@@ -111,6 +111,14 @@ func (s *Service) Channel() string {
 // Check 执行一次检查；force=false 时套用 30s 手动冷却（参照语义）。
 // 成功/失败都会更新 lastCheck 与 settings.lastCheckAt。
 func (s *Service) Check(ctx context.Context, force bool) (*CheckResult, error) {
+	// Electron 壳止血（2026-11-18 实机反馈）：更新链尚未适配 Electron 产物
+	// （latest.json 契约= Wails 单 exe，research/electron-updater-options.md
+	// 待决策），横幅却照常提示——用户点「更新」会把 Electron 安装版覆盖回
+	// Wails 单 exe（黑屏旧版）。壳侧 ZHENGUO_SHELL=electron 声明，这里直接
+	// 报无更新；更新链落地时移除。
+	if sh := os.Getenv("ZHENGUO_SHELL"); sh == "electron" {
+		return &CheckResult{Available: false}, nil
+	}
 	s.mu.Lock()
 	if s.checking {
 		res := s.lastCheck

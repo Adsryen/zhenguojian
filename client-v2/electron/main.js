@@ -84,6 +84,9 @@ function startSidecar() {
   if (mpvExe) env.ZHENGUO_MPV = mpvExe
   if (ffExe) env.ZHENGUO_FFMPEG = ffExe
   if (ffprobeExe) env.ZHENGUO_FFPROBE = ffprobeExe
+  // 壳身份：sidecar/updater 据此禁用 Wails 更新链（latest.json=单 exe 契约
+  // 未适配 Electron 产物，横幅会把用户引回 Wails 旧版；见 updater.Check 注释）
+  env.ZHENGUO_SHELL = 'electron'
   try {
     sidecar = spawn(SIDECAR, args, { stdio: ['pipe', 'pipe', 'pipe'], env })
   } catch (e) {
