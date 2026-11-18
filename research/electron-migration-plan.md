@@ -261,3 +261,14 @@ stdin/stdout JSON 行协议（`{id, action, ...}` 进 → 合入 id 的 reply �
   updater-options §6/§7：上 release 时 tag 必须对上产物号）。
   版本注入消费链全通：CI ldflags → sidecar_main.go EmbeddedVersion 转发 →
   updater.Current 真版本（「永远可更新」根因闭环）。
+
+### run15–19：更新链 Windows 实锤收官（2026-11-18）
+- 详细记录在 `research/electron-updater-options.md` §8（唯一权威），此处只留
+  迁移线视角结论：**程序内更新全链已在真实 Windows runner 走通**——
+  NSIS 安装态 Check/Download（默认选 14MB app.zip）→ bat 真 taskkill/
+  robocopy 替换 → marker → 替换后全套 selftest 绿（run19 @24cf0fa，
+  18+2 PASS）。run15-18 四轮红全是演练脚本自身（electron asar 穿透补丁
+  三连修，判据=碰 `*.asar` 一律 original-fs；pwsh $LASTEXITCODE 尾传播）。
+- 发布接线（electron-release.yml）干跑修出 2 bug 后就绪；**首个 tag 号
+  必须对齐全绿 run 的 build-info version**（当前= v2.0.0-alpha.21），
+  对账护栏拒错位发布。剩外部输入：用户授权 tag + run19 包黑屏复测。
