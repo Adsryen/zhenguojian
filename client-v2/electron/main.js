@@ -508,20 +508,36 @@ async function runSelfTest(win) {
           add('video_moving', false, 'win32 视频面几何不可得 sr=' + JSON.stringify(sr), { skip: true })
           add('video_pixels', false, '同上', { skip: true })
         } else {
+          const bmpFail = []
           const bmpPixels = (file) => {
             const b = fs.readFileSync(file)
-            if (b.length < 54 || b[0] !== 0x42 || b[1] !== 0x4d) return null
+            if (b.length < 54 || b[0] !== 0x42 || b[1] !== 0x4d) {
+              bmpFail.push('magic/len hdr=' + b.slice(0, 34).toString('hex').replace(/(.{2})(?=.)/g, '$1 '))
+              return null
+            }
             const off = b.readUInt32LE(10)
             const w = b.readInt32LE(18)
             let h = b.readInt32LE(22)
             const topdown = h < 0
             if (h < 0) h = -h
-            if (b.readUInt16LE(28) !== 24 || w <= 0 || h <= 0) return null
-            const stride = (w * 3 + 3) & ~3
+            const bpp = b.readUInt16LE(28)
+            const comp = b.readUInt32LE(30)
+            if ((bpp !== 24 && bpp !== 32) || w <= 0 || h <= 0 || comp !== 0) {
+              bmpFail.push(`bpp=${bpp} comp=${comp} ${w}x${h} hdr=` + b.slice(0, 34).toString('hex').replace(/(.{2})(?=.)/g, '$1 '))
+              return null
+            }
+            const cpp = bpp / 8
+            const stride = (w * cpp + 3) & ~3
             const px = Buffer.alloc(w * h * 3) // top-down RGB
             for (let y = 0; y < h; y++) {
               const src = off + (topdown ? y : h - 1 - y) * stride
-              b.copy(px, y * w * 3, src, src + w * 3)
+              for (let x = 0; x < w; x++) {
+                const s = src + x * cpp
+                const d0 = (y * w + x) * 3
+                px[d0] = b[s + 2] // BI_RGB 像素小端=BGRA(x)
+                px[d0 + 1] = b[s + 1]
+                px[d0 + 2] = b[s]
+              }
             }
             return { w, h, px }
           }
@@ -530,7 +546,7 @@ async function runSelfTest(win) {
             fs.writeFileSync(ps,
               'param($X,$Y,$W,$H,$Out)\r\n' +
               'Add-Type -AssemblyName System.Drawing\r\n' +
-              '$bmp = New-Object System.Drawing.Bitmap ([int]$W), ([int]$H)\r\n' +
+              '$bmp = New-Object System.Drawing.Bitmap ([int]$W), ([int]$H), ([System.Drawing.Imaging.PixelFormat]::Format24bppRgb)\r\n' +
               '$g = [System.Drawing.Graphics]::FromImage($bmp)\r\n' +
               '$sz = New-Object System.Drawing.Size ([int]$W), ([int]$H)\r\n' +
               '$g.CopyFromScreen([int]$X, [int]$Y, 0, 0, $sz)\r\n' +
@@ -553,7 +569,7 @@ async function runSelfTest(win) {
               winshot(shotB)
               const a = bmpPixels(shotA)
               const b2 = bmpPixels(shotB)
-              if (!a || !b2) throw new Error('BMP 解码失败')
+              if (!a || !b2) throw new Error('BMP 解码失败 ' + (bmpFail.slice(-1)[0] || ''))
               if (a.w !== b2.w || a.h !== b2.h) throw new Error(`尺寸漂移 ${a.w}x${a.h} vs ${b2.w}x${b2.h}`)
               let diff = 0
               const colors = new Set()

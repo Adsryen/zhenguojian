@@ -283,3 +283,62 @@ jobs:
             build-info-*.txt
           if-no-files-found: error
           retention-days: 14
+
+      # ── NSIS 安装链冒烟（P5：安装包本身从未验证过 安装→就位→启动→卸载）──
+      # 独立成步的意义：win-unpacked 自检证「产物能跑」，本步证「用户拿
+      # Setup.exe 双击安装这条路是活的」。run1-5 教训同规：NSIS 安装器、
+      # 装后 app、Uninstall 全是 GUI 子系统 exe，一律 Start-Process 显式等。
+      - name: NSIS installer smoke
+        shell: pwsh
+        env:
+          ZHENGUO_DATA: ${{ github.workspace }}\zgj-nsis-data
+          ZGJ_SELFTEST_OUT: ${{ github.workspace }}\zgj-nsis-selftest
+        run: |
+          $nsis = Get-ChildItem client-v2/electron/out/*.exe | Where-Object { $_.Name -like "*win-x64*.exe" } | Select-Object -First 1
+          if (-not $nsis) { throw "NSIS installer not produced" }
+          # ① 静默安装（electron-builder NSIS /S 对 assisted oneClick:false 同样有效）
+          $ip = Start-Process -FilePath $nsis.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($ip.ExitCode -ne 0) { throw ("installer exit=" + $ip.ExitCode) }
+          # electron-builder 默认 perMachine:false → %LOCALAPPDATA%\Programs\<productName>
+          $dir = Join-Path $env:LOCALAPPDATA "Programs\zhenguojian-v2"
+          $app = Join-Path $dir "zgj-v2.exe"
+          if (-not (Test-Path $app)) { throw ("post-install zgj-v2.exe not found under " + $dir) }
+          # ② bundle 布局就位（extraResources 三件套；不锁死文件名，验目录有 exe）
+          foreach ($sub in @("resources\sidecar.exe", "resources\runtime\mpv", "resources\runtime\ffmpeg", "resources\frontend\dist")) {
+            $p = Join-Path $dir $sub
+            if (-not (Test-Path $p)) { throw ("bundle layout missing: " + $sub) }
+          }
+          # ③ 用装后的 bundle ffmpeg 生成测试视频（顺带证 bundle ffmpeg 可执行）
+          $dataDir = Join-Path $env:ZHENGUO_DATA "downloads"
+          New-Item -ItemType Directory -Force $dataDir | Out-Null
+          $vid = Join-Path $dataDir "p3-selftest.mp4"
+          $bffmpeg = Get-ChildItem (Join-Path $dir "resources\runtime\ffmpeg") -Filter "*.exe" | Select-Object -First 1
+          & $bffmpeg.FullName -y -f lavfi -i "testsrc=duration=30:size=1280x720:rate=25" -f lavfi -i "sine=frequency=440:duration=30" -c:v libx264 -preset ultrafast -pix_fmt yuv420p -c:a aac "$vid" 2>$null
+          if (-not (Test-Path $vid)) { throw "bundle ffmpeg failed to generate test video" }
+          # ④ 装后 --selftest（同 packaged 步的 Start-Process + json 模式）
+          $sp = Start-Process -FilePath $app -ArgumentList '--selftest' -NoNewWindow -PassThru `
+               -RedirectStandardOutput (Join-Path $PWD "nsis-st.out") -RedirectStandardError (Join-Path $PWD "nsis-st.err")
+          if (-not $sp.WaitForExit(600000)) {
+            Stop-Process -Id $sp.Id -Force -ErrorAction SilentlyContinue
+            throw "installed selftest 600s 未退出（app 卡死）"
+          }
+          $jsonFile = Join-Path $env:ZGJ_SELFTEST_OUT "selftest.json"
+          if (-not (Test-Path $jsonFile)) {
+            Write-Host "----- nsis-st.err (tail 40) -----"
+            Get-Content nsis-st.err -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+            throw "installed selftest.json missing（exit $($sp.ExitCode)）"
+          }
+          $obj = Get-Content $jsonFile -Raw | ConvertFrom-Json
+          Write-Host "----- installed-state checks -----"
+          $obj.checks | ForEach-Object {
+            $tag = if ($_.skip) { "SKIP" } elseif ($_.ok) { "PASS" } else { "FAIL" }
+            Write-Host ("  [" + $tag + "] " + $_.name + "  " + $_.detail)
+          }
+          if (-not $obj.ok) { throw "installed selftest ok=false（见上）" }
+          # ⑤ 静默卸载（electron-builder NSIS 卸载器名 "Uninstall <productName>.exe"，带空格）
+          $uni = Get-ChildItem $dir -Filter "Uninstall*.exe" | Select-Object -First 1
+          if (-not $uni) { throw "uninstaller not found under $dir" }
+          $up = Start-Process -FilePath $uni.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($up.ExitCode -ne 0) { throw ("uninstaller exit=" + $up.ExitCode) }
+          if (Test-Path $app) { throw "app.exe survives uninstall" }
+          Write-Host "NSIS smoke: install → bundle → selftest → uninstall 全绿"
