@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的 tag（如 v2.0.0-alpha.16，必须已存在于仓库）"
+        description: "要发布的 tag（如 v2.0.0-alpha.21，必须已存在且该 commit 有全绿 win-package run）"
         required: true
 
 permissions:
@@ -40,7 +40,9 @@ jobs:
           # lightweight 与 annotated 两种 tag 都归一到 commit sha）
           OBJ=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object | "\(.type) \(.sha)"')
           TYPE=${OBJ%% *}; SHA=${OBJ##* }
-          [ "$TYPE" = "tag" ] && SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$SHA" --jq '.commit.sha')
+          # annotated tag 对象的 commit 指针在 .object.sha（不是 .commit.sha，
+          # 本地干跑实测：后者恒空 → 会把「tag 存在」错判成「无绿 run」拒发）
+          [ "$TYPE" = "tag" ] && SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$SHA" --jq '.object.sha')
           { [ -z "$SHA" ] || [ "$TYPE" = "missing" ]; } && { echo "::error::tag $TAG 不存在"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
@@ -49,7 +51,9 @@ jobs:
       - name: Find green electron-win-package run on that commit
         id: run
         run: |
+          # 本地干跑实测：gh run list 的 --jq 必须与 --json 并用，否则直接报错
           RUN=$(gh run list --workflow electron-win-package.yml --limit 30 \
+                --json databaseId,headSha,status,conclusion \
                 --jq '.[] | select(.headSha=="${{ steps.tag.outputs.sha }}") | select(.status=="completed") | select(.conclusion=="success") | .databaseId' \
                 | head -1)
           [ -z "$RUN" ] && { echo "::error::commit ${{ steps.tag.outputs.sha }} 上没有成功的 electron-win-package run；先在该 commit 触发打包并等全绿，再打 tag"; exit 1; }
