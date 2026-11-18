@@ -1,6 +1,6 @@
 {
   "name": "zhenguojian-v2-electron",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "author": "Adsryen",
   "private": true,
   "description": "真果鉴 V2 Electron 壳（第九十八轮 P2）：spawn Go sidecar + 加载 frontend/dist",

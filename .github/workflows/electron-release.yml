@@ -1,5 +1,5 @@
 # Electron 发布线（方案 A，见 research/electron-updater-options.md §7）：
-# tag v2.0.0-alpha.N → 找回「同一 commit 上成功跑完的 electron-win-package
+# tag v2.1.0-alpha.N → 找回「同一 commit 上成功跑完的 electron-win-package
 # run」的 artifact，按 updater 契约名（zhenGuoJian-v2.exe=NSIS 全量、
 # zhenGuoJian-v2-app.zip=主程序增量）发布 GitHub prerelease + latest.json。
 #
@@ -12,11 +12,11 @@ name: electron-release
 
 on:
   push:
-    tags: ["v2.0.0-alpha.*"]
+    tags: ["v2.1.0-alpha.*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "要发布的 tag（如 v2.0.0-alpha.21，必须已存在且该 commit 有全绿 win-package run）"
+        description: "要发布的 tag（如 v2.1.0-alpha.22，必须已存在且该 commit 有全绿 win-package run）"
         required: true
 
 permissions:

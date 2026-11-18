@@ -124,3 +124,20 @@ release-check.sh 的 EXPECTED_ASSETS 与 latest.json 断言仍是 Wails 三件�
 - run18：产品语义全绿——run A/B update_check(available=true tag=v9.9.9)+update_download(asset=zhenGuoJian-v2-app.zip state=done) PASS、bat 真 taskkill/tar 解压/robocopy 替换、update-marker.json 出现、run C 替换后全套 selftest 绿、卸载绿。唯一红=步骤尾 $LASTEXITCODE 传播 exit 1（24cf0fa：taskkill 后清零+显式 exit 0，失败表达收归 throw）。
 - **run19（44281918355 @24cf0fa）success = 更新链 Windows 实锤完成**：「update apply exercise: bat 替换 ✓ marker ✓ 新 bundle 全套自检 ✓」。演练设计=进程内假镜像（tag v9.9.9 真实仓库不存在→回落必败，杜绝 round8 式假绿）+ zip 内容=安装件原样副本+marker（替换后应用必然仍可用）。artifact `zhenguojian-v2-electron-win-x64-24cf0fa…`（489MB）。
 - **剩余唯一外部项：tag v2.0.0-alpha.N 发布授权**（electron-release.yml 已就位，打 tag 即通电；发布后补 alpha.21→22 真实升级演练收尾；Wails 链已被 `if: !contains(ref_name,'-')` 堵污染）。
+
+## §9 版本系切换 v2.0.0-alpha.* → **v2.1.0-alpha.***（2026-11-18，tag 执行前夜抓出）
+- 动手打 tag 时发现：**v2.0.0-alpha.1–42 全被 Wails 时代 tag/Release 占用**
+  （alpha.42=生产 Latest，alpha.21 也有完整 Wails Release 四资产）。
+  GITHUB_RUN_NUMBER 与历史号段完全重叠 → 「tag 号=alpha.$RUN_NUMBER」方案
+  在旧号段内必然撞车；electron-release 的重复 tag 拒发护栏此刻救命。
+- 决策：**换新号段 v2.1.0-alpha.N**（N=RUN_NUMBER，历史零占用；semver
+  2.1.0-alpha.N > 2.0.0-alpha.42，客户端 IsNewer 天然成立）。不选 3.0.0：
+  跨度大且无必要。改动最小集=electron/package.json 基号 2.1.0 +
+  electron-release.yml tags 过滤，构建版号自动传导（ZGJ_BUILD_VERSION 机制）。
+- 代价与处置：run19 产物（内嵌 2.0.0-alpha.21）**作废不发布**——版本对账
+  护栏会正确拒绝；首个 Electron 发布=新 commit 的新全绿 run
+  （预期 2.1.0-alpha.22）。用户实机推荐包不受影响（artifact 仍可用，只是
+  其内嵌 version 与未来 release 对不上属预期）。
+- 遗留提醒：发布 2.1.0-alpha.N 后生产 latest.json 切到 Electron 资产，
+  **仍在用 Wails alpha.42 的用户点更新会吃到 NSIS 全量包**（老 updater 无
+  zip 门控）——当前唯一用户已装 Electron 版，风险记录在案即可。

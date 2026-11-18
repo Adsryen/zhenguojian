@@ -219,7 +219,7 @@ jobs:
           #     ——2026-11-18 本机 --linux dir 实测抓红，Windows 同版本必同样红。
           #   extraMetadata 合并进 package.json 元数据，version 语义与
           #   artifactName 的 ${version} 宏都吃合并后的值，其余 yml 配置原样。
-          # ⚠ artifactName 含 ${version}，改名后 NSIS 名变 …win-x64-2.0.0-alpha.N.exe；
+          # ⚠ artifactName 含 ${version}，改名后 NSIS 名变 …win-x64-2.1.0-alpha.N.exe；
           #   下方与 Rename/Smoke 步的判据都是 *win-x64*.exe 中段匹配，不受影响
           #   （run9 教训：判据别用 -x64.exe 这种后缀形，会假失败）。
           if (-not $env:ZGJ_BUILD_VERSION) { throw "ZGJ_BUILD_VERSION missing (Capture build info 步没跑?)" }
@@ -228,7 +228,7 @@ jobs:
           Get-ChildItem out/*.exe, out/*.zip -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host ("  artifact: " + $_.Name + " (" + [math]::Round($_.Length/1MB,1) + " MB)")
           }
-          # artifactName=zhenguojian-v2-win-x64-2.0.0-alpha.N.exe（arch 在**中段**，
+          # artifactName=zhenguojian-v2-win-x64-2.1.0-alpha.N.exe（arch 在**中段**，
           # 判据匹配 *win-x64*.exe，不是 *-x64.exe（后者要求名字以 -x64.exe 结尾；
           # 本地 pwsh 复现对现名 count=0 → 假失败）。
           if (-not (Get-ChildItem out/*.exe | Where-Object { $_.Name -like "*win-x64*.exe" })) { throw "NSIS installer not produced" }
