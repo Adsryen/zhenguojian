@@ -31,14 +31,18 @@ fail() { echo "[build-linux] FAIL: $*"; exit 1; }
 OV=/tmp/zhenguojian-overlay.json
 python3 "$CLIENT/scripts/make-overlay.py" "$OV" || fail "make-overlay 失败"
 mkdir -p "$CLIENT/build/bin"
-if find "$CLIENT/app.go" "$CLIENT/embed_host.go" "$CLIENT/sidecar_main.go" "$CLIENT/internal" \
-   -name '*.go' -newer "$CLIENT/build/bin/sidecar-linux" -print -quit 2>/dev/null | grep -q .; then
-  step "B1 sidecar 源码较新，重建…"
+SIDECAR="$CLIENT/build/bin/sidecar-linux"
+# 存在性判断必须在 -newer 之前：CI 干净环境没有 sidecar-linux 时，
+# `find -newer <缺失参照>` 打错但输出空 → 旧版误走「新鲜」分支直接 fail
+# （本地二进制恒在，此分支从未暴露——正是 CI 化要抓的「本机绿、脚本腐」）。
+if [ ! -x "$SIDECAR" ] || find "$CLIENT/app.go" "$CLIENT/embed_host.go" "$CLIENT/sidecar_main.go" "$CLIENT/internal" \
+     -name '*.go' -newer "$SIDECAR" -print -quit 2>/dev/null | grep -q .; then
+  [ -x "$SIDECAR" ] && step "B1 sidecar 源码较新，重建…" || step "B1 sidecar 不存在（干净环境），首次构建…"
   CGO_ENABLED=0 go build -C "$CLIENT" -tags "zgj_sidecar v2overlay" -overlay "$OV" -o build/bin/sidecar-linux . || fail "sidecar 构建失败"
 else
-  step "B1 sidecar 新鲜（$(stat -c%s "$CLIENT/build/bin/sidecar-linux") bytes）"
+  step "B1 sidecar 新鲜（$(stat -c%s "$SIDECAR") bytes）"
 fi
-[ -x "$CLIENT/build/bin/sidecar-linux" ] || fail "sidecar-linux 缺失"
+[ -x "$SIDECAR" ] || fail "sidecar-linux 缺失"
 
 # ── B2 staging/runtime（mpv + ffmpeg + ffprobe，系统拷贝）────────────
 STAGE="$HERE/staging"
