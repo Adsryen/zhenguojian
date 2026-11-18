@@ -61,9 +61,9 @@ jobs:
           "commit=$sha" | Out-File -Append build-info.txt
           "built=$([datetime]::UtcNow.ToString('yyyy-MM-dd HH:mm:ssZ'))" | Out-File -Append build-info.txt
           "platform=windows-x64 (Electron)" | Out-File -Append build-info.txt
-          "sidecar=main.buildVersion 已按上述 version 经 -ldflags 注入（updater.Current 暂未消费，见 Build sidecar.exe 步 TODO 注释）" | Out-File -Append build-info.txt
-          "note=Electron 壳测试包：结构性修 Windows 黑屏（视频窗改 Electron 自管 BaseWindow，不再 WS_CHILD 塞 WebView2）" | Out-File -Append build-info.txt
-          "用法：装完 zgj-v2.exe 后，进播放页看视频是否出现；仍黑屏就点复制内嵌诊断贴回" | Out-File -Append build-info.txt
+          "sidecar=main.buildVersion 已按上述 version 经 -ldflags 注入，updater 消费链已通（EmbeddedVersion→GetBuildInfo→latest 对账）" | Out-File -Append build-info.txt
+          "note=Electron 壳测试包：视频窗=Electron 自管 BaseWindow（弃 WS_CHILD 塞 WebView2）；含 DPI 物理像素→DIP 换算修复与 ZGJ_DISABLE_GPU 诊断开关" | Out-File -Append build-info.txt
+          "用法：装完 zgj-v2.exe 进播放页看画面；仍黑→set ZGJ_DISABLE_GPU=1 重启判定合成层蒙版；都黑→发 logs\mpv.log 定 vo 根因" | Out-File -Append build-info.txt
           "SHA=$sha" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Append
           "version=$ver" | Out-File -FilePath "$env:GITHUB_OUTPUT" -Append
 
