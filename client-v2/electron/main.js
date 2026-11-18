@@ -329,7 +329,7 @@ async function runUpdateFlow(win, add) {
     return false
   }
   const work = path.join(SELFTEST_OUT, 'update-exercise')
-  fs.rmSync(work, { recursive: true, force: true })
+  ofs.rmSync(work, { recursive: true, force: true }) // shim 会把任何 .asar 路径当归档：递归删除必须 original-fs（run17 EBUSY 实锤）
   const stage = path.join(work, 'stage')
   ofs.mkdirSync(stage, { recursive: true })
   ofs.copyFileSync(asarSrc, path.join(stage, 'app.asar'))
