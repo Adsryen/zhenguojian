@@ -718,6 +718,13 @@ async function runSelfTest(win) {
 // 仍 100%），两者失配会制造假红而非复现实机。实机 150% 时二者同源都是 1.5。
 // 换算链正确性改由 videoSurface.test.js 单测钉（mock scaleFactor）。
 
+// 实机诊断开关（2026-11-18 用户复测「黑屏但全屏瞬间见画、像有蒙版挡着」）：
+// 若 GPU 合成器的 DirectComposition visual tree 把 mpv WS_CHILD 子窗盖在
+// 下面（airspace，Wails/WebView2 黑屏同款根因），禁用硬件加速后 Chromium
+// 走软件输出，子窗 z-order 恢复可见。用法：set ZGJ_DISABLE_GPU=1 再启动。
+// 若见效，再细化 --disable-direct-composition（保留 GPU）定折中方案。
+if (process.env.ZGJ_DISABLE_GPU) app.disableHardwareAcceleration()
+
 app.whenReady().then(async () => {
   if (SELFTEST) fs.mkdirSync(SELFTEST_OUT, { recursive: true })
   startSidecar()
