@@ -37,6 +37,7 @@ import type {
 } from './types'
 import { ApiError, clampOpacityPercent } from './contract'
 import type { EmbedSetStatus, AttachResult, EmbedHostDebug, EmbedDiagInfo, ExactApiImpl } from './contract'
+import { webBridgeEnabled, whenWsReady, wsCall } from './wsBridge'
 
 /** 真实桥探测：exe 内 window.go 必在；纯浏览器/WebView2 异常时自动降级 local 面，
    避免整页 bridge_missing 死锁（降级会显示顶部提示横幅）。 */
@@ -103,6 +104,23 @@ export async function callGoRaw(method: string, ...args: any[]): Promise<string>
 }
 
 async function callGoRawInner(method: string, ...args: any[]): Promise<string> {
+  // v3 容器形态：无桌面桥 + http(s) 页面 → 走 WS 桥。协议信封与 stdio 同构，
+  // wsCall 返回的仍是「Go 侧原始字符串」；错误字符串同样带 `[code]` 尾，
+  // 剥码逻辑与 window.go 分支逐行一致（唯一剥码处的两段）。
+  if (webBridgeEnabled()) {
+    const ok = await whenWsReady()
+    if (!ok) {
+      throw new ApiError('WS 桥未连接（容器模式）', 'bridge_missing')
+    }
+    try {
+      const raw = await wsCall(method, ...args)
+      return typeof raw === 'string' ? raw : JSON.stringify(raw)
+    } catch (err: any) {
+      const message = typeof err === 'string' ? err : err?.message ?? String(err)
+      const m = message.match(/\[([a-z_]+)\]\s*$/)
+      throw new ApiError(m ? message.slice(0, m.index).replace(/\s+$/, '') : message, m ? m[1] : '')
+    }
+  }
   const fn = wailsApp()[method]
   if (typeof fn !== 'function') {
     throw new ApiError(`原生方法 ${method} 不存在`, 'bridge_missing')

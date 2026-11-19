@@ -5,6 +5,7 @@ go 1.24.1
 require (
 	duanjuapp/native v0.0.0
 	github.com/BurntSushi/xgb v0.0.0-20210121224620-deaf085860bc
+	github.com/gorilla/websocket v1.5.3
 	github.com/wailsapp/wails/v2 v2.10.1
 	golang.org/x/sys v0.39.0
 )

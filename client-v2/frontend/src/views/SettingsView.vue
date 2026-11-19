@@ -9,6 +9,10 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import SourceGrid from '@/components/settings/SourceGrid.vue'
 import SoraniLoginDialog from '@/components/SoraniLoginDialog.vue'
 import { api, MOCK_MODE } from '@/services/api'
+import { webBridgeEnabled } from '@/services/wsBridge'
+
+// v3 容器形态：隐藏桌面专属的「应用更新」节（更新=重新拉镜像）。
+const isWebMode = webBridgeEnabled()
 import { locale, setLocale, t, tf } from '@/services/i18n'
 import { cleanReleaseBody } from '@/services/updatenotes'
 import { applyTheme, loadTheme, type ThemeMode } from '@/styles/theme'
@@ -667,8 +671,10 @@ onMounted(async () => {
       </div>
     </section>
 
-    <!-- ⑤-前插 更新（V-UPD）：GitHub Releases 检查/下载/应用 + 通道/自动检查/加速前缀 -->
-    <section class="card sec" data-testid="update-section">
+    <!-- ⑤-前插 更新（V-UPD）：GitHub Releases 检查/下载/应用 + 通道/自动检查/加速前缀。
+         v3 容器形态整节隐藏：应用更新走「compose pull && up -d」，程序内更新器
+         是桌面（Wails/Electron）专属面。 -->
+    <section v-if="!isWebMode" class="card sec" data-testid="update-section">
       <div class="sec-head">
         <span class="sec-title">{{ t('update.section') }}</span>
         <span v-if="MOCK_MODE" class="badge badge-warn">{{ t('settings.mockBadge') }}</span>

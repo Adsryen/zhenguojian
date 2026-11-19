@@ -36,3 +36,5 @@ client-v2/electron/node_modules/
 # out/ 有 100MB+ 的打包输出，staging/ 是构建前填的 mpv/ffmpeg 拷贝）。
 client-v2/electron/out/
 client-v2/electron/staging/
+.env
+client-v2/data

@@ -9,16 +9,21 @@
    - VITE_MOCK=1：fixtures 双实现，可在纯浏览器里验证 UI */
 import type { EmbedSetStatus, AttachResult, NativeApi, EmbedDiagInfo } from './contract'
 import { hasBridge, realApi, embedBridge, callGoRaw } from './bridge'
+import { webBridgeEnabled } from './wsBridge'
 import { mockApi } from './mock'
 import { mockEmbedApi } from './mock/embed'
 
 const isMock = import.meta.env.VITE_MOCK === '1'
+// v3 容器形态：无桌面桥但 http(s) 页面（WS 可达）→ 仍走 realApi（其 callGo 经
+// bridge 的 WS 分支落地）。桌面 loadFile(file:) / vite mock dev 不满足此条件。
+const hasWebBridge = !isMock && !hasBridge && webBridgeEnabled()
 
 /* 降级策略：真实 exe 里桥必在；若 WebView2 初始化竞态导致 window.go 短暂缺失，
-   首次访问时重试探测，仍缺失则回落 mock 面并亮横幅（DEGRADED），避免整页死锁。 */
-export const DEGRADED = !isMock && !hasBridge
+   首次访问时重试探测，仍缺失则回落 mock 面并亮横幅（DEGRADED），避免整页死锁。
+   容器形态不算降级（WS 是正式传输），DEGRADED 仅指「桌面应有桥却没有」。 */
+export const DEGRADED = !isMock && !hasBridge && !hasWebBridge
 export const bridgeMissing = DEGRADED
-export const api: NativeApi = isMock ? mockApi : hasBridge ? realApi : mockApi
+export const api: NativeApi = isMock ? mockApi : hasBridge || hasWebBridge ? realApi : mockApi
 export const MOCK_MODE = isMock
 
 /* 旧命名再导出：调用方一行不改（'@/services/api' 的全部具名导出原位保留）。 */

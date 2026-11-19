@@ -1,7 +1,9 @@
 import { createRouter, createWebHashHistory, type RouteRecordRaw } from 'vue-router'
+import { checkAuth, webBridgeEnabled } from '@/services/wsBridge'
 
 // wails 的资产协议用 http://wails.localhost/，history 模式会丢路径 → 用 hash 路由
 const routes: RouteRecordRaw[] = [
+  { path: '/login', name: 'login', component: () => import('@/views/LoginView.vue') },
   { path: '/', redirect: '/discover' },
   {
     path: '/discover',
@@ -71,7 +73,20 @@ const routes: RouteRecordRaw[] = [
   }
 ]
 
-export default createRouter({
+const router = createRouter({
   history: createWebHashHistory(),
   routes
 })
+
+/* v3 容器鉴权守卫：仅 web 形态启用。未登录 → 弹 /login；已登录访问 /login → 回 /discover。
+   桌面/mock 形态 checkAuth 恒 true，守卫直接放行（/login 路由存在但不可达）。 */
+if (webBridgeEnabled()) {
+  router.beforeEach(async (to) => {
+    const authed = await checkAuth()
+    if (!authed && to.path !== '/login') return { path: '/login' }
+    if (authed && to.path === '/login') return { path: '/discover' }
+    return true
+  })
+}
+
+export default router

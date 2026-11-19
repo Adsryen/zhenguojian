@@ -176,6 +176,122 @@ type protoRequest struct {
 	Args   []json.RawMessage `json:"args"`
 }
 
+// sidecarRuntime 是 stdio/web 两个 serve loop 共享的服务核心：app 实例、
+// 反射方法表、并发槽、事件 sink 接线。v3 容器（web 模式）与 Electron（stdio
+// 模式）走同一核心，方法面/并发纪律/收尾链零分叉。
+type sidecarRuntime struct {
+	app    *App
+	ctx    context.Context
+	table  map[string]protoMethod
+	appRef reflect.Value
+	slots  chan struct{}
+	group  sync.WaitGroup
+}
+
+func newSidecarRuntime() *sidecarRuntime {
+	app := NewApp()
+	ctx := context.Background()
+	app.ctx = ctx
+	rev := ""
+	if bi := readBuildVCS(); bi != nil {
+		rev, _ = bi["revision"].(string)
+	}
+	appLogStartup(buildVersion, rev)
+	// 与 Wails 入口 startup 对齐，但**不启托盘**：sidecar 没有窗，托盘图标
+	// 会指向一个不存在的窗口（Windows 上表现为一个点了没反应的图标）。
+	// 托盘的两个动作由宿主壳承接（Electron=win.show/__shutdown；容器版无托盘，
+	// web 前端的退出=浏览器关页，sidecar 随容器停）。
+	if err := native.Init(); err != nil {
+		fmt.Fprintf(os.Stderr, "[zhenguojian] engine initialize 失败: %v\n", err)
+	}
+	app.downloadSvc.OnStartup(ctx)
+	sidecarQuit = func() {
+		go func() {
+			app.shutdown(ctx)
+			os.Exit(0)
+		}()
+	}
+	return &sidecarRuntime{
+		app:    app,
+		ctx:    ctx,
+		table:  buildDispatchTable(),
+		appRef: reflect.ValueOf(app), // call() 需要把 *App 排进 receiver 位
+		// 并发槽纪律（v1 sidecar=6→8→32 的教训见 runStdioSidecar 原注释）：
+		// 慢网络调用不许饿死快本地调用。
+		slots: make(chan struct{}, 32),
+	}
+}
+
+// finish 收尾：等在飞请求落定 + 有界 shutdown（两 serve loop 共用）。
+func (rt *sidecarRuntime) finish() {
+	rt.group.Wait()
+	rt.app.shutdown(rt.ctx)
+}
+
+// handleProtoRequest 处理一个协议请求（__shutdown/__methods/__embed_*/反射表）。
+// 返回 shutdown=true 表示收到 __shutdown，serve loop 应结束读循环。
+// respond 由调用方按传输注入（stdio 行写 / WS 帧写），id 语义一致。
+func (rt *sidecarRuntime) handleProtoRequest(req protoRequest, respond func(id *json.RawMessage, result string, err error)) (shutdown bool) {
+	app := rt.app
+	table := rt.table
+	if req.Method == "__shutdown" {
+		respond(req.ID, "ok", nil)
+		return true
+	}
+	// __methods：返回本表全部方法名（JSON 数组）。Electron 壳的 preload
+	// 用它把 window.go.main.App 建成**真·普通对象**（contextBridge 克隆
+	// 不了 Proxy，但克隆普通函数对象没问题）——方法面与反射表同源，
+	// 与 Wails「App = 恰好这些绑定方法」的形态一致。容器版 WS 桥前端
+	// 也用它做自检（方法数对账）。
+	if req.Method == "__methods" {
+		names := make([]string, 0, len(table))
+		for n := range table {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		b, _ := json.Marshal(names)
+		respond(req.ID, string(b), nil)
+		return false
+	}
+	// __embed_set_wid / __embed_get_wid（P3/Electron 专用）：主进程↔sidecar
+	// 私有协议面，不进 __methods 反射表。web 模式保留（无 mpv 窗时 SetWid
+	// 无副作用），协议面与 stdio 严格同源。
+	if req.Method == "__embed_set_wid" {
+		if len(req.Args) != 1 {
+			respond(req.ID, "", fmt.Errorf("__embed_set_wid: 需要 1 个参数（句柄数字）"))
+			return false
+		}
+		var wid uint64
+		if json.Unmarshal(req.Args[0], &wid) != nil {
+			respond(req.ID, "", fmt.Errorf("__embed_set_wid: 句柄必须是数字"))
+			return false
+		}
+		app.playerSvc.SetWid(uintptr(wid))
+		appLogEvent("embed-set-wid 0x%x", wid)
+		respond(req.ID, "ok", nil)
+		return false
+	}
+	if req.Method == "__embed_get_wid" {
+		b, _ := json.Marshal(uint64(app.playerSvc.EmbedWid()))
+		respond(req.ID, string(b), nil)
+		return false
+	}
+	pm, ok := table[req.Method]
+	if !ok {
+		respond(req.ID, "", fmt.Errorf("method '%s' not registered", req.Method))
+		return false
+	}
+	rt.group.Add(1)
+	go func(id *json.RawMessage, pm protoMethod, args []json.RawMessage) {
+		defer rt.group.Done()
+		rt.slots <- struct{}{}
+		defer func() { <-rt.slots }()
+		res, err := pm.call(rt.appRef, args)
+		respond(id, res, err)
+	}(req.ID, pm, req.Args)
+	return false
+}
+
 // runStdioSidecar 是协议服务主体，拆成函数是为了测试可注入管道。
 // 返回 0=正常收尾（EOF 或 __shutdown）。
 func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
@@ -189,41 +305,9 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 		w.line(protoEvent{Event: name, Data: data})
 	}
 
-	app := NewApp()
-	ctx := context.Background()
-	app.ctx = ctx
-	rev := ""
-	if bi := readBuildVCS(); bi != nil {
-		rev, _ = bi["revision"].(string)
-	}
-	appLogStartup(buildVersion, rev)
-	// 与 Wails 入口 startup 对齐，但**不启托盘**：sidecar 没有窗，托盘图标
-	// 会指向一个不存在的窗口（Windows 上表现为一个点了没反应的图标）。
-	// 托盘的两个动作由 Electron 主进程承接（显示主窗=win.show；退出=__shutdown）。
-	if err := native.Init(); err != nil {
-		fmt.Fprintf(os.Stderr, "[zhenguojian] engine initialize 失败: %v\n", err)
-	}
-	app.downloadSvc.OnStartup(ctx)
-	sidecarQuit = func() {
-		go func() {
-			app.shutdown(ctx)
-			os.Exit(0)
-		}()
-	}
-
-	table := buildDispatchTable()
-	appRef := reflect.ValueOf(app) // call() 需要把 *App 排进 receiver 位
+	rt := newSidecarRuntime()
 
 	reader := bufio.NewReaderSize(in, 1<<20)
-	group := sync.WaitGroup{}
-	// 并发槽：v1 sidecar=6。这里放宽到 32——**慢网络调用不许饿死快本地调用**。
-	// 首版=8 时被 selftest 实锤：无网沙箱下 DiscoverView 的 9 个 Cover（海报抓取）
-	// 各挂满 30s 超时，把 8 个槽占满，快调用 Ping 排队等槽、错过自己的 30s 预算
-	// （「sidecar call Ping timed out after 30000ms」）。主进程侧的超时**不会**
-	// 释放这里的槽（native 抓取仍在跑），所以只能把槽数抬到明显高于启动期
-	// 并发突发的水平，让本地调用永远有位。生产同样受益：一次 UI 动作不该排在
-	// 一堆海报抓取后面。
-	slots := make(chan struct{}, 32)
 	respond := func(id *json.RawMessage, result string, err error) {
 		if id == nil {
 			return
@@ -248,86 +332,13 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 				}
 				continue
 			}
-			if req.Method == "__shutdown" {
-				respond(req.ID, "ok", nil)
-				if readErr != nil {
-					break
-				}
-				// 收尾：等所有在飞请求落定，再走有界 shutdown（同 Wails 退出链）。
+			if rt.handleProtoRequest(req, respond) {
+				// __shutdown：收尾同 Wails 退出链（等在飞请求落定+有界 shutdown）。
 				break
 			}
-			// __methods：返回本表全部方法名（JSON 数组）。Electron 壳的 preload
-			// 用它把 window.go.main.App 建成**真·普通对象**（contextBridge 克隆
-			// 不了 Proxy，但克隆普通函数对象没问题）——方法面与反射表同源，
-			// 与 Wails「App = 恰好这些绑定方法」的形态一致。
-			if req.Method == "__methods" {
-				names := make([]string, 0, len(table))
-				for n := range table {
-					names = append(names, n)
-				}
-				sort.Strings(names)
-				b, _ := json.Marshal(names)
-				respond(req.ID, string(b), nil)
-				if readErr != nil {
-					break
-				}
-				continue
+			if readErr != nil {
+				break
 			}
-			// __embed_set_wid / __embed_get_wid（P3）：Electron 壳的视频面是一个
-			// 主进程自管的 BaseWindow（X11 XID / Win32 HWND 归主进程），sidecar
-			// 只持有这个句柄给 mpv --wid（playerSvc.SetWid）。内嵌方法
-			// （PlayerAttach/SetBounds/HitBands/Detach/ForceWindow）由**主进程
-			// 拦截**——窗口几何的真相在主进程手里，Go 侧不建窗。这两个方法是
-			// 主进程↔sidecar 的私有协议面，**不进** __methods 反射表（那是前端
-			// 契约面，preload 只该看到真正的绑定）。
-			if req.Method == "__embed_set_wid" {
-				if len(req.Args) != 1 {
-					respond(req.ID, "", fmt.Errorf("__embed_set_wid: 需要 1 个参数（句柄数字）"))
-					if readErr != nil {
-						break
-					}
-					continue
-				}
-				var wid uint64
-				if json.Unmarshal(req.Args[0], &wid) != nil {
-					respond(req.ID, "", fmt.Errorf("__embed_set_wid: 句柄必须是数字"))
-					if readErr != nil {
-						break
-					}
-					continue
-				}
-				app.playerSvc.SetWid(uintptr(wid))
-				appLogEvent("embed-set-wid 0x%x", wid)
-				respond(req.ID, "ok", nil)
-				if readErr != nil {
-					break
-				}
-				continue
-			}
-			if req.Method == "__embed_get_wid" {
-				b, _ := json.Marshal(uint64(app.playerSvc.EmbedWid()))
-				respond(req.ID, string(b), nil)
-				if readErr != nil {
-					break
-				}
-				continue
-			}
-			pm, ok := table[req.Method]
-			if !ok {
-				respond(req.ID, "", fmt.Errorf("method '%s' not registered", req.Method))
-				if readErr != nil {
-					break
-				}
-				continue
-			}
-			group.Add(1)
-			go func(id *json.RawMessage, pm protoMethod, args []json.RawMessage) {
-				defer group.Done()
-				slots <- struct{}{}
-				defer func() { <-slots }()
-				res, err := pm.call(appRef, args)
-				respond(id, res, err)
-			}(req.ID, pm, req.Args)
 		}
 		if readErr != nil {
 			if readErr != io.EOF {
@@ -336,8 +347,7 @@ func runStdioSidecar(in io.Reader, rawOut io.Writer) int {
 			break
 		}
 	}
-	group.Wait()
-	app.shutdown(ctx)
+	rt.finish()
 	return 0
 }
 
@@ -353,6 +363,20 @@ func main() {
 		if dir := strings.TrimSpace(os.Args[1]); dir != "" {
 			os.Setenv("ZHENGUO_DATA", dir)
 		}
+	}
+	// v3 容器 web 模式分流（spec research/web-container-design.md §1）：
+	// ZGJ_WEB=1 → HTTP+WS 服务（静态前端 + /rpc 桥面 + /login 鉴权）；
+	// 否则走 stdio（Electron 主进程管道，行为零变化）。
+	if os.Getenv("ZGJ_WEB") == "1" {
+		addr := os.Getenv("ZGJ_WEB_ADDR")
+		if addr == "" {
+			addr = ":8080"
+		}
+		staticDir := os.Getenv("ZGJ_WEB_STATIC")
+		if staticDir == "" {
+			staticDir = "web/static"
+		}
+		os.Exit(runWebSidecar(addr, staticDir))
 	}
 	os.Exit(runStdioSidecar(os.Stdin, os.Stdout))
 }

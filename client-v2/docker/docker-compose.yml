@@ -1,0 +1,21 @@
+# 从**仓库根**执行：docker compose -f client-v2/docker/docker-compose.yml up -d --build
+# 凭据走 **compose 文件同目录**的 .env（从 .env.example 复制）：ZGJ_WEB_USER / ZGJ_WEB_PASS
+#（缺失拒绝启动=设计行为）。
+services:
+  zgj-web:
+    build:
+      context: ../../
+      dockerfile: client-v2/docker/Dockerfile
+      args:
+        ZGJ_BUILD_VERSION: ${ZGJ_BUILD_VERSION:-dev}
+    image: zgj-v3:latest
+    container_name: zgj-v3
+    restart: unless-stopped
+    ports:
+      - "${ZGJ_WEB_PORT:-9320}:8080"
+    environment:
+      ZGJ_WEB_USER: ${ZGJ_WEB_USER:?请在 .env 设置 ZGJ_WEB_USER}
+      ZGJ_WEB_PASS: ${ZGJ_WEB_PASS:?请在 .env 设置 ZGJ_WEB_PASS}
+      ZHENGUO_DATA: /data/appdata
+    volumes:
+      - ../../client-v2/data:/data

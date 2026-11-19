@@ -1,0 +1,19 @@
+# 构建 context 最小化：只进 Dockerfile 需要的路径
+# （Dockerfile COPY 的是 client-v2/frontend、client-v2/{go.mod,go.sum,内部go,scripts,coreoverlay}、guoapp-src）
+.git
+zhenguojian/
+dist-win/
+reference/
+.trellis/
+research/
+client-v2/electron/
+client-v2/build/
+client-v2/spike/
+client-v2/frontend/node_modules/
+client-v2/frontend/dist/
+client-v2/data/
+node_modules/
+*.univer
+*.png
+*.jpg
+.env
