@@ -665,6 +665,31 @@ export const usePlayerStore = defineStore('player', {
     /** R22a：打开一个下载根下的成品文件（会话建立在这里，不在页面里拼参数）。 */
     async openLocal(drama: Drama, path: string, resumeSec = 0) {
       const name = path.split(/[\\/]/).pop() ?? path
+      // v3 web 模式（P2）：容器无 mpv，本地成片走 /file 代理（下载根白名单+Range）
+      // 喂同一个 <video>，不走 playerOpenLocal（会 spawn mpv 失败）。
+      if (webBridgeEnabled()) {
+        this.webMediaUrl = '/file?p=' + encodeURIComponent(path)
+        this.webPendingSeek = Math.max(0, resumeSec)
+        this.webDanmakuSession = '' // 本地成片无弹幕会话
+        this.localFailed = false
+        this.drama = drama
+        this.localPath = path
+        this.episodeIndex = 0
+        this.currentChapter = null
+        this.title = tf('player.localTitle', { name })
+        this.eof = false
+        this.eofHandledAt = 0
+        this.nextSeason = null
+        this.status = ''
+        this.lastWatchAt = Date.now()
+        this.lastWatchPos = resumeSec
+        this.opened = true
+        this.running = true
+        this.paused = false
+        this.demoMode = false
+        this.attach()
+        return
+      }
       const snap = await api.playerOpenLocal(path, resumeSec)
       this.localFailed = false
       this.drama = drama

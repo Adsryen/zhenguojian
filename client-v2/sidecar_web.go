@@ -30,6 +30,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -121,6 +122,44 @@ func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
 		}
 		// 媒体字节：流式回灌（不整体入内存，mp4 可能几百 MB）。
 		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+// newLocalFileHandler 构建 /file 处理函数（P2 本地成片播放）。
+// ?p=<容器内绝对路径>&t=<续播秒>：只放行下载根**之下**的成品文件
+// （checkLocalPlayable 与 PlayerOpenLocal 同一安全口径，防越界读盘）。
+// 校验通过后交给 http.ServeFile——它原生支持 Range/Content-Type/If-Modified-Since，
+// 与 /video/seg 的流服务器是同一套"浏览器 <video>+Range"消费面。
+func newLocalFileHandler(auth *webAuthStore, rt *sidecarRuntime) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if c, err := r.Cookie(sessionCookie); err != nil || !auth.valid(c.Value) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		p := strings.TrimSpace(r.URL.Query().Get("p"))
+		if p == "" {
+			http.Error(w, "missing path", http.StatusBadRequest)
+			return
+		}
+		root, err := rt.app.downloadRootDir()
+		if err != nil {
+			http.Error(w, "no download root: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			http.Error(w, "bad path", http.StatusBadRequest)
+			return
+		}
+		if err := checkLocalPlayable(root, abs); err != nil {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
+		if st, err := os.Stat(abs); err != nil || st.IsDir() {
+			http.Error(w, "file not found", http.StatusNotFound)
+			return
+		}
+		http.ServeFile(w, r, abs)
 	}
 }
 
@@ -367,6 +406,8 @@ func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuth
 	// P1 视频代理：转发容器内 loopback 流服务器字节到浏览器（Range 透传 +
 	// HLS 清单分段地址改写）。详见 newVideoSegHandler 注释。
 	mux.HandleFunc("/video/seg", newVideoSegHandler(store))
+	// P2 本地成片：下载根白名单 + http.ServeFile 原生 Range
+	mux.HandleFunc("/file", newLocalFileHandler(store, rt))
 	// 静态前端（hash 路由，/ 回退 index.html）。
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {

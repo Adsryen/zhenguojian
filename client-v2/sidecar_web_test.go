@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -176,7 +177,117 @@ func parseRangeNum(s string) int64 {
 	return n
 }
 
-// newWebTestApp 起 buildWebMux + httptest（真 NewApp 全链，同 stdio e2e）。
+// TestLocalFileEndpoint 专测 /file（P2 本地成片播放）：无 cookie 401、缺参 400、
+// 越界路径 403、根内成品 200+Range 字节一致。下载根口径=nativeDownloadLocation
+// （guoapp-src app_storage.go:48）：ZHENGUO_DATA/download-location.json 绝对路径
+// 生效，否则 <ZHENGUO_DATA>/downloads。
+func TestLocalFileEndpoint(t *testing.T) {
+	static := t.TempDir()
+	if err := os.WriteFile(static+"/index.html", []byte("<html>zgj-web</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv := newWebTestApp(t, "ryen", "s3cret", static)
+	dataDir := os.Getenv("ZHENGUO_DATA") // newWebTestApp 的 t.TempDir()
+	dlRoot := filepath.Join(dataDir, "downloads")
+	if err := os.MkdirAll(filepath.Join(dlRoot, "合并"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	video := filepath.Join(dlRoot, "合并", "某剧 S01 合并.mp4")
+	payload := make([]byte, 4<<10)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(video, payload, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 登录拿 cookie
+	jar, _ := cookiejar.New(nil)
+	c := &http.Client{Jar: jar}
+	resp, err := c.Post(srv.URL+"/login", "application/json", strings.NewReader(`{"user":"ryen","pass":"s3cret"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("/login: %v %v", err, resp)
+	}
+	baseURL, _ := url.Parse(srv.URL)
+	cj := jar.Cookies(baseURL)
+	cookie := sessionCookie + "=" + cj[0].Value
+	get := func(path string) *http.Response {
+		r, _ := http.NewRequest("GET", srv.URL+path, nil)
+		r.Header.Set("Cookie", cookie)
+		rr, e := c.Do(r)
+		if e != nil {
+			t.Fatalf("GET %s: %v", path, e)
+		}
+		return rr
+	}
+
+	// 无 cookie → 401
+	r1, _ := http.Get(srv.URL + "/file?p=" + url.QueryEscape(video))
+	if r1.StatusCode != 401 {
+		t.Errorf("无 cookie 应 401，got %d", r1.StatusCode)
+	}
+	r1.Body.Close()
+
+	// 缺参 → 400
+	r2 := get("/file")
+	if r2.StatusCode != 400 {
+		t.Errorf("缺 p 应 400，got %d", r2.StatusCode)
+	}
+	r2.Body.Close()
+
+	// 越界（下载根之外）→ 403
+	outside := filepath.Join(dataDir, "outside.mp4")
+	_ = os.WriteFile(outside, payload, 0644)
+	r3 := get("/file?p=" + url.QueryEscape(outside))
+	if r3.StatusCode != 403 {
+		t.Errorf("越界应 403，got %d", r3.StatusCode)
+	}
+	r3.Body.Close()
+	// .. 上跳伪装成根内 → 403（HasPrefix 骗不过 Rel 判定）
+	sneaky := filepath.Join(dlRoot, "..", "outside.mp4")
+	r3b := get("/file?p=" + url.QueryEscape(sneaky))
+	if r3b.StatusCode != 403 {
+		t.Errorf(".. 上跳应 403，got %d", r3b.StatusCode)
+	}
+	r3b.Body.Close()
+
+	// 不存在 → 404
+	r4 := get("/file?p=" + url.QueryEscape(filepath.Join(dlRoot, "nope.mp4")))
+	if r4.StatusCode != 404 {
+		t.Errorf("不存在应 404，got %d", r4.StatusCode)
+	}
+	r4.Body.Close()
+
+	// 根内成品 → 200 + 全量字节；再 Range 中段 206 + 字节偏移一致
+	r5 := get("/file?p=" + url.QueryEscape(video))
+	b5, _ := io.ReadAll(r5.Body)
+	r5.Body.Close()
+	if r5.StatusCode != 200 || len(b5) != len(payload) {
+		t.Fatalf("全量应 200+%d 字节，got %d/%d", len(payload), r5.StatusCode, len(b5))
+	}
+	if ct := r5.Header.Get("Content-Type"); ct != "video/mp4" {
+		t.Errorf("Content-Type 应 video/mp4（扩展名嗅探），got %q", ct)
+	}
+
+	r6, _ := http.NewRequest("GET", srv.URL+"/file?p="+url.QueryEscape(video), nil)
+	r6.Header.Set("Cookie", cookie)
+	r6.Header.Set("Range", "bytes=100-199")
+	resp6, err := c.Do(r6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b6, _ := io.ReadAll(resp6.Body)
+	resp6.Body.Close()
+	if resp6.StatusCode != 206 || len(b6) != 100 {
+		t.Fatalf("Range 应 206+100 字节，got %d/%d", resp6.StatusCode, len(b6))
+	}
+	for i := 0; i < 100; i++ {
+		if b6[i] != payload[100+i] {
+			t.Fatalf("Range 字节偏移 %d 不一致", i)
+		}
+	}
+}
+
 func newWebTestApp(t *testing.T, user, pass, staticDir string) *httptest.Server {
 	t.Setenv("ZHENGUO_DATA", t.TempDir())
 	native.ResetInitForTest()

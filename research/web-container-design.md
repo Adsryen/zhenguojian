@@ -89,6 +89,19 @@
 纪律：每批独立提交、代码+验收同批；既有验证链保留适配（run_all 前端 mock E2E、
 sidecar_protocol_test.go、go test）。
 
+### P2 落地状态（2026-11-19，实网验收绿）
+- **Go /file 端点**（sidecar_web.go `newLocalFileHandler`）：cookie 鉴权、
+  `?p=<容器内绝对路径>` 只放行下载根**之下**的成品（`checkLocalPlayable` 与
+  PlayerOpenLocal 同一安全口径，含 `..` 上跳拒）、`http.ServeFile` 原生 Range/
+  Content-Type。TestLocalFileEndpoint 钉死 401/400/403(含..)/404/200/206+字节一致。
+- **前端 openLocal web 分支**（player.ts）：`/file?p=` 喂同一个 <video>+pending seek，
+  不走 playerOpenLocal（会 spawn mpv 失败）；本地标题走 `player.localTitle`。
+- 下载/合并/归档/设置面=纯 WS 绑定已天然可用（P0 平迁覆盖）。
+- **实网验收**（容器内造 3s testsrc 成片）：curl 全量 200+video/mp4、Range 206+
+  Content-Range、**md5 与源文件逐字节一致**（f427ac9e…）、越界 403、无 cookie 401；
+  浏览器 `#/player?lp=` 本地成片播放（title=本地播放、dur=3、320px 帧、播完停）。
+- 观察项：容器重启会失效内存登录态（webSession 不落盘，设计内强度=内部工具级）。
+
 ### P1 落地状态（2026-11-19，实网验收绿）
 - **代理**：sidecar_web.go `/video/seg`（cookie 鉴权、loopback-only 防 SSRF、
   Range/If-Range 透传、m3u8 清单分段地址改写）。实网抓出并修掉两个真 bug：
