@@ -89,6 +89,23 @@
 纪律：每批独立提交、代码+验收同批；既有验证链保留适配（run_all 前端 mock E2E、
 sidecar_protocol_test.go、go test）。
 
+### P1 落地状态（2026-11-19，实网验收绿）
+- **代理**：sidecar_web.go `/video/seg`（cookie 鉴权、loopback-only 防 SSRF、
+  Range/If-Range 透传、m3u8 清单分段地址改写）。实网抓出并修掉两个真 bug：
+  ①WriteHeader 早于 Set 头 → Content-Range/Length 静默丢失（浏览器时长/seek 全废）；
+  ②清单改写后字节数变大但照抄上游 Content-Length → Go 丢弃整包（200+空体）。
+  回归测试 TestVideoSegProxy 双断言钉死。
+- **前端**：player.ts web 分支（openEpisode 走 Resolve 不 spawn mpv、togglePlay/
+  seek/setSpeed/applyVolume 委托 <video>、setWebVideo 元素事件链、bridgeAvailable
+  认 WS 桥防演示回落）；PlayerView 挂 <video>+hls.js（m3u8）+DanmakuCanvas 覆盖层
+  （DanmakuAll 数据、B 站滚动车道、顶/底固定淡入淡出）；toggleDanmaku/
+  setDanmakuOpacity web 分支不下发 mpv ASS。
+- **实网验收**（容器 192.168.0.115:9320，hongguo 源直 mp4）：播放 t 24→69 推进、
+  dur=96.9 已知、360x640 真实帧、弹幕 canvas 挂载、无演示回落。拖动/切档/音画
+  同步留待用户实机反馈（「用起来了就知道哪儿有问题了」）。
+- 观察项（非 bug）：hongguo 弹幕上游抽样稀疏（DanmakuAll total=342 但 items=4，
+  与桌面 mpv 同源同数据，canvas 忠实渲染）。
+
 ## 6. 协议面事实（2026-11-19 读实，实现依据）
 
 - `sidecar_main.go`：`protoRequest{ID *json.RawMessage, Method string, Args []json.RawMessage}`；

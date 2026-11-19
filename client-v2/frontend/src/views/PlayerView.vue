@@ -36,8 +36,21 @@ import { api, embedApi, MOCK_MODE, ipcLedgerSummary, type EmbedHostDebug, type E
 import type { Chapter } from '@/services/types'
 import EpisodeGrid from '@/components/EpisodeGrid.vue'
 import HotkeyHelp from '@/components/HotkeyHelp.vue'
+import DanmakuCanvas from '@/components/DanmakuCanvas.vue'
 import { t, tf } from '@/services/i18n'
 import { anyModalOpen, clearEscLedger, escSawOverlay } from '@/services/overlays'
+import { webBridgeEnabled } from '@/services/wsBridge'
+import Hls from 'hls.js'
+
+/** v3 web 模式（P1）：容器内无 mpv，画面=原生 <video>（/video/seg 代理喂流）。
+ *  .mp4 直源走原生 <video>+Range；.m3u8 源走 hls.js（MSE，ABR 天然降级）。 */
+const isWebMode = webBridgeEnabled()
+const webVideoEl = ref<HTMLVideoElement | null>(null)
+let hls: Hls | null = null
+/** 原生 src 只喂非 m3u8（m3u8 由 hls.js 接管元素，src 绑定必须让位） */
+const webNativeSrc = computed(() =>
+  isWebMode && store.webMediaUrl && !store.webMediaUrl.endsWith('.m3u8') ? store.webMediaUrl : undefined
+)
 
 /* ── V2-F 文案已收敛至 i18n.ts player.*（原组件内 L 表）；t() 随 locale 响应 ── */
 const hotkeys = computed(() => [
@@ -527,7 +540,49 @@ function bounded<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
   return Promise.race([p, new Promise<undefined>(res => setTimeout(() => res(undefined), ms))])
 }
 
+/* v3 web 模式（P1）：换集=webMediaUrl 变→:src 绑定自动重载；这里只做
+   元素登记（setWebVideo 装事件链）+ 自动播放。src 变更先等 nextTick 让
+   <video> 渲染出来（v-if 依赖 store.opened，同一 tick 内元素还没挂上）。 */
+if (isWebMode) {
+  watch(
+    () => store.webMediaUrl,
+    async (url) => {
+      if (!url) return
+      await nextTick()
+      const el = webVideoEl.value
+      if (!el) return
+      store.setWebVideo(el)
+      // HLS 源：hls.js 接管元素（m3u8 原生 <video> 不支持）
+      if (url.endsWith('.m3u8')) {
+        if (Hls.isSupported()) {
+          if (hls) { hls.destroy(); hls = null }
+          hls = new Hls()
+          hls.on(Hls.Events.ERROR, (_e, data) => {
+            // 网络级致命错误走 store 错误面（轻错由 hls.js 内部恢复）
+            if (data.fatal) store.error = t('player.playFailed')
+          })
+          hls.loadSource(url)
+          hls.attachMedia(el)
+        } else if (el.canPlayType('application/vnd.apple.mpegurl')) {
+          el.src = url // Safari 原生 HLS
+        }
+      }
+      // 换集后 :src 计算属性已换新；m3u8 分支元素由 hls.js 驱动，统一在这里起播
+      void el.play().catch(() => {
+        /* 自动播放被浏览器策略拦：大播放键还在，用户点一下即可 */
+      })
+    }
+  )
+}
+
 onMounted(async () => {
+  // v3 web 模式（P1）：无 mpv 宿主可 attach——跳过 embed 链（容器里没有
+  // window.go，embedApi 只会走降级路径，纯浪费一次 RPC）。
+  if (isWebMode) {
+    window.addEventListener('keydown', onHotkey)
+    await store.bootFromQuery({ ...route.query, title: dramaTitleFromQuery() })
+    return
+  }
   // attach 必须先于 bootFromQuery→PlayerOpen：mpv spawn 时 --wid 才已就位。
   const attach = await embedApi.attach()
   embedActive = attach.embedded
@@ -584,6 +639,8 @@ async function retryBoot() {
 }
 
 onBeforeUnmount(() => {
+  // v3 web 模式（P1）：hls.js 实例随页面卸载销毁（否则 MSE SourceBuffer 泄漏）
+  if (hls) { hls.destroy(); hls = null }
   stageRO?.disconnect()
   stageRO = undefined
   barsRO?.disconnect()
@@ -612,6 +669,25 @@ onBeforeUnmount(() => {
     <div class="pl-mid">
       <div class="pl-col">
         <div id="zgj-video-stage" ref="stageEl" class="pl-stage" @click="store.togglePlay()">
+          <!-- v3 web 模式（P1）：画面=原生 <video>（:src=store.webMediaUrl，/video/seg 代理喂
+               容器内 loopback 流）。放在所有浮层之下作底；换集靠 :src 绑定自动重载。 -->
+          <video
+            v-if="isWebMode && store.webMediaUrl"
+            ref="webVideoEl"
+            class="pl-webvideo"
+            :src="webNativeSrc"
+            playsinline
+            preload="auto"
+          ></video>
+          <!-- v3 web 模式（P1）：弹幕覆盖层（mpv ASS 的等价物），数据走 DanmakuAll 绑定 -->
+          <DanmakuCanvas
+            v-if="isWebMode && store.webMediaUrl && store.webDanmakuSession"
+            :session="store.webDanmakuSession"
+            :video="webVideoEl"
+            :enabled="store.danmakuOn"
+            :opacity="store.danmakuOpacity"
+            :on-count="(n: number) => { store.danmakuCount = n }"
+          />
           <div
             v-if="embedDebugOn && embedHost"
             class="pl-hint embed-debug"
@@ -645,7 +721,8 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-else class="pl-stage-inner">
-            <div class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
+            <!-- web 模式（P1）：画面就是 <video> 本体，不叠 mpv 占位转轮 -->
+            <div v-if="!isWebMode" class="pl-disc" :class="{ spin: store.running && !store.paused && !store.eof }">
               <span class="pl-disc-core" />
             </div>
             <div v-if="store.eof" class="pl-ended">
@@ -913,6 +990,17 @@ onBeforeUnmount(() => {
   justify-content: center;
   background: radial-gradient(120% 120% at 50% 0%, #10141c 0%, #000 90%);
   cursor: pointer;
+}
+/* v3 web 模式（P1）：<video> 作底——铺满 stage、居中裁切（object-fit contain 保比例，
+   两侧留黑边；舞台背景本就是黑的，视觉无缝）。absolute 脱离 flex 流，浮层仍在之上。 */
+.pl-webvideo {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+  outline: none;
 }
 .pl-hint {
   color: var(--muted, #9aa3b2);

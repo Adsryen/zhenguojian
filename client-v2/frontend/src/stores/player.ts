@@ -31,6 +31,7 @@ import {
 import { dramaFromQuery } from '@/services/dramaRef'
 import { lookupNextSeason, type NextSeasonHit } from '@/services/nextSeason'
 import { mockDanmakuAll } from '@/services/fixtures'
+import { webBridgeEnabled } from '@/services/wsBridge'
 
 export const VOLUME_KEY = 'zgj.player.volume'
 export const DM_OVERRIDE_KEY = 'zgj.danmaku.override'
@@ -62,6 +63,13 @@ function readQuality(): string {
   return q && (QUALITY_CHOICES as readonly string[]).includes(q) ? q : 'auto'
 }
 
+/** v3 web 模式（P1）：画质档位 → Resolve 的整数码（与 Go playerQualityCode 同源：
+ *  auto→0，1080/720/540→对应值）。Resolve 绑定 quality 形参是 int。 */
+function qualityToNum(q: string): number {
+  const n = Number(String(q).replace(/p$/i, ''))
+  return n > 0 ? n : 0
+}
+
 function readSpeed(): number {
   // 只认档内值（与 readQuality 同规则）：脏数据一律回落到 1，
   // 不做 clamp 到任意数——界面上根本没有那种档位。
@@ -70,6 +78,9 @@ function readSpeed(): number {
 }
 
 function bridgeAvailable(): boolean {
+  // v3 web 模式（P1）：WS 桥可连即视为桥可用（容器内无 window.go，
+  // 旧判据恒 false 会把 web 用户全打进演示模式）。
+  if (webBridgeEnabled()) return true
   return !!window.go?.main?.App?.PlayerOpen
 }
 
@@ -163,6 +174,19 @@ export interface PlayerStoreState {
   /** 本季真结局查到的下一季（v1 _check_next_season_after_end；查无=null） */
   nextSeason: NextSeasonHit | null
   hintTimer?: number
+  /** ── v3 web 模式（P1）：容器内无 mpv，播放面=原生 <video>+hls.js，
+   *  控制面（play/pause/seek/speed/volume）委托 <video> 元素，进度/播完
+   *  从元素 timeupdate/ended 回灌 store（不走 Go 事件/轮询）。───────────── */
+  /** web 模式当前媒体源（经 /video/seg 代理的绝对 URL，''=未开） */
+  webMediaUrl: string
+  /** web 模式 <video> 元素引用（PlayerView 挂上，控制/进度都靠它） */
+  webVideo: HTMLVideoElement | null
+  /** web tick 已绑定标记（元素引用重设时重绑） */
+  webTickBound: boolean
+  /** web 模式待 seek 秒（元素 loadedmetadata 后由 PlayerView 消费，断点续播） */
+  webPendingSeek: number
+  /** web 模式弹幕会话 id（Resolve plan.session；弹幕覆盖层拉 DanmakuAll 用） */
+  webDanmakuSession: string
 }
 
 export const usePlayerStore = defineStore('player', {
@@ -197,7 +221,13 @@ export const usePlayerStore = defineStore('player', {
     preMuteVolume: 0,
     lastWatchAt: 0,
     lastWatchPos: 0,
-    eofHandledAt: 0
+    eofHandledAt: 0,
+    // v3 web 模式（P1）：容器内无 mpv，播放面=原生 <video>+hls.js
+    webMediaUrl: '',
+    webVideo: null,
+    webTickBound: false,
+    webPendingSeek: 0,
+    webDanmakuSession: ''
   }),
 
   getters: {
@@ -306,6 +336,24 @@ export const usePlayerStore = defineStore('player', {
       if (this.status) this.status = '' // 清掉上一集「已播完」类提示，连播后不留残影
       this.lastWatchAt = Date.now() // 节流基线随会话重置（v1 换集重计）
       this.lastWatchPos = startPosSec
+      if (webBridgeEnabled()) {
+        // v3 web 模式（P1）：容器内无 mpv——绝不能 PlayerOpen（Go 会 spawn mpv，
+        // 容器里 spawn 失败）。走 Resolve 拿容器内 loopback 流 URL，经
+        // /video/seg 代理喂 <video>。hongguo 源=直 .mp4（原生 Range 播放）；
+        // HLS 源 .m3u8 走 hls.js（P1 后续批）。音量/倍速偏好在元素就绪时由
+        // PlayerView 应用（此刻 webVideo 还没挂上）。
+        const plan = await api.resolve(drama, chapter, ep, qualityToNum(this.quality))
+        if (!plan?.url) throw new ApiError('web 模式未拿到播放地址（Resolve 无 url）', 'resolve_empty')
+        this.webMediaUrl = '/video/seg?url=' + encodeURIComponent(plan.url)
+        this.webPendingSeek = startPosSec // 元素 loadedmetadata 后由 PlayerView 消费
+        this.webDanmakuSession = plan.session ?? '' // 弹幕覆盖层拉 DanmakuAll 的会话
+        this.opened = true
+        this.running = true
+        this.paused = false
+        this.demoMode = false
+        this.attach() // web 分支：不接 Go 事件（无 mpv），元素事件驱动
+        return
+      }
       const snap = await api.playerOpen(drama, chapter, ep, this.quality)
       /* ⚠ 发版前本机试跑补：倍速偏好要在这里**先读一次存住**。
          上一版我把判断写成 `if (this.speed !== 1)`，而下一行
@@ -430,9 +478,57 @@ export const usePlayerStore = defineStore('player', {
       }, 500) as unknown as number
     },
 
+    /** v3 web 模式（P1）：PlayerView 把 <video> 元素登记进来；进度/播完/
+     *  偏好回灌全在这条链上（容器无 mpv，Go 侧无 player:tick 事件）。 */
+    setWebVideo(el: HTMLVideoElement | null) {
+      if (el === this.webVideo) return
+      this.webVideo = el
+      if (!el) {
+        this.webTickBound = false
+        return
+      }
+      this.webTickBound = true
+      el.addEventListener('loadedmetadata', () => {
+        if (this.webVideo !== el) return // 元素已换（换集），旧监听作废
+        if (isFinite(el.duration) && el.duration > 0) {
+          this.duration = el.duration
+          this.position = el.currentTime
+        }
+        // 元素就绪才落偏好：音量/倍速（openEpisode 时元素还没挂上）
+        el.volume = this.volume / 100
+        el.playbackRate = this.speed
+        if (this.webPendingSeek > 0) {
+          try {
+            el.currentTime = Math.min(this.webPendingSeek, Math.max(0, (el.duration || this.webPendingSeek) - 0.5))
+            this.position = el.currentTime
+          } catch {
+            /* 元数据不全时忽略，timeupdate 会追平 */
+          }
+          this.webPendingSeek = 0
+        }
+      })
+      el.addEventListener('timeupdate', () => {
+        if (this.webVideo !== el) return
+        this.position = el.currentTime
+        if (!this.paused && !this.eof) this.maybePersistWatch()
+      })
+      el.addEventListener('ended', () => {
+        if (this.webVideo !== el) return
+        this.paused = false
+        this.markEnded()
+      })
+      el.addEventListener('error', () => {
+        if (this.webVideo !== el || !this.webMediaUrl) return // 空 src 初始态不报错
+        this.error = t('player.playFailed')
+      })
+    },
+
     /** 接线：真实事件订阅；mock/无事件总线 → 轮询 playerState() 兜底 */
     attach() {
       if (this.demoMode) return
+      // v3 web 模式（P1）：无 mpv → 无 Go 播放事件；进度/控制全走元素事件
+      // （setWebVideo 链），这里不订阅，免得轮询 PlayerState 打到空会话。
+      if (webBridgeEnabled()) return
       if (MOCK_MODE) {
         this.startPolling()
         return
@@ -630,6 +726,23 @@ export const usePlayerStore = defineStore('player', {
         }
         return
       }
+      // v3 web 模式（P1）：控制面委托 <video> 元素（容器无 mpv）
+      if (webBridgeEnabled() && this.webVideo) {
+        const el = this.webVideo
+        try {
+          if (this.paused) {
+            if (this.eof) el.currentTime = 0 // 播完 keep-open：从头播
+            await el.play()
+          } else {
+            el.pause()
+          }
+          this.paused = !this.paused
+          this.eof = false
+        } catch {
+          this.error = t('player.actionFailed')
+        }
+        return
+      }
       try {
         if (this.paused) {
           if (this.eof) await this.seek(0) // 播完 keep-open：从头播走 Seek 路径
@@ -653,6 +766,24 @@ export const usePlayerStore = defineStore('player', {
         this.eofHandledAt = 0 // seek 回片内允许再次判定播完
         return
       }
+      // v3 web 模式（P1）：seek 委托 <video>；元素未就绪（metadata 未到）则记 pending
+      if (webBridgeEnabled()) {
+        const el = this.webVideo
+        if (el && isFinite(el.duration) && el.duration > 0) {
+          try {
+            el.currentTime = target
+            this.position = target
+            this.eof = false
+            this.eofHandledAt = 0
+          } catch {
+            this.webPendingSeek = target
+          }
+        } else {
+          this.webPendingSeek = target
+          this.position = target
+        }
+        return
+      }
       try {
         await api.seekVideo(target * 1000)
         this.position = target
@@ -666,6 +797,13 @@ export const usePlayerStore = defineStore('player', {
     async setSpeed(v: number) {
       const snapped = v < 0.5 ? 0.5 : v > 3 ? 3 : v
       if (this.demoMode) {
+        this.speed = snapped
+        localStorage.setItem(SPEED_KEY, String(snapped))
+        return
+      }
+      // v3 web 模式（P1）：倍速委托 <video>.playbackRate（容器无 mpv）
+      if (webBridgeEnabled()) {
+        if (this.webVideo) this.webVideo.playbackRate = snapped
         this.speed = snapped
         localStorage.setItem(SPEED_KEY, String(snapped))
         return
@@ -686,6 +824,11 @@ export const usePlayerStore = defineStore('player', {
       this.volume = vol
       localStorage.setItem(VOLUME_KEY, String(vol)) // v1 变更即存（player.py:1899-1905 同源语义）
       if (this.demoMode || !this.opened) return
+      // v3 web 模式（P1）：音量委托 <video>.volume（0–1，容器无 mpv）
+      if (webBridgeEnabled()) {
+        if (this.webVideo) this.webVideo.volume = vol / 100
+        return
+      }
       try {
         await api.setVolume(vol)
       } catch {
@@ -740,6 +883,9 @@ export const usePlayerStore = defineStore('player', {
       const on = !this.danmakuOn
       this.danmakuOn = on
       if (this.demoMode) return
+      // v3 web 模式（P1）：弹幕画在 canvas 覆盖层上，直接读 store 状态——
+      // Go 的 setDanmaku 改的是 mpv 的 ASS 渲染（容器里没有 mpv），不必下发。
+      if (webBridgeEnabled()) return
       try {
         await api.setDanmaku(on)
         // 壳层的不透明度是进程内状态（v1 每次播放从 app-settings.json 读；
@@ -762,6 +908,8 @@ export const usePlayerStore = defineStore('player', {
         /* 存不进去不致命，本会话内仍然生效 */
       }
       if (this.demoMode || !this.danmakuOn) return
+      // v3 web 模式（P1）：canvas 覆盖层直接读 store.danmakuOpacity，无 mpv 可下发
+      if (webBridgeEnabled()) return
       try {
         await api.setDanmakuOpacity(n)
       } catch (e) {

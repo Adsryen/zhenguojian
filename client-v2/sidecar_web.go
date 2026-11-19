@@ -25,15 +25,104 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// ── P1 视频代理 /video/seg ──────────────────────────────────────────────────
+// Resolve 返回的 url 指向**容器内** loopback 流服务器（127.0.0.1:<随机端口>，
+// app_stream.go），它已内置 Range/解密/HLS 改写——mpv 一直从它读流。浏览器在
+// 容器外，够不到容器 loopback，所以 web mux 加一个 /video/seg 代理：同容器内
+// 转发到该流服务器（把浏览器请求的 Range/If-Range 透传，字节流回灌），并针对
+// .m3u8 把清单里指向 127.0.0.1 的分段地址改写成再经本代理的相对 URL（hls.js
+// 才能同源取到分段）。
+//
+// 安全：只放行 host=127.0.0.1（或 localhost）的 http 目标——流服务器唯一落点，
+// 防 SSRF 到外网。目标 URL 由前端从 Resolve 的 plan.url 透传，代理不信任其内容，
+// 仅按 host 白名单放行。
+var segLoopbackHostRe = regexp.MustCompile(`^http://(127\.0\.0\.1|localhost|::1)(:|$)`)
+var segStreamURLRe = regexp.MustCompile(`http://(127\.0\.0\.1|localhost|::1):[0-9]+/[^"'\s,<>]+`)
+
+// newVideoSegHandler 构建 /video/seg 处理函数。client 复用单实例（连接池）。
+func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
+	client := &http.Client{
+		// 流服务器在本进程 loopback，超时取宽松值：分段可能大、上游源站可能慢。
+		Timeout: 120 * time.Second,
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 鉴权：同其他认证端点（cookie）。
+		if c, err := r.Cookie(sessionCookie); err != nil || !auth.valid(c.Value) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		target := strings.TrimSpace(r.URL.Query().Get("url"))
+		if !segLoopbackHostRe.MatchString(target) {
+			http.Error(w, "forbidden target (loopback only)", http.StatusForbidden)
+			return
+		}
+		// 构造上游请求，透传方法 + Range/If-Range（视频 seek/缓冲都靠它）。
+		up, err := http.NewRequestWithContext(r.Context(), r.Method, target, nil)
+		if err != nil {
+			http.Error(w, "bad upstream", http.StatusBadGateway)
+			return
+		}
+		for _, name := range []string{"Range", "If-Range", "Accept"} {
+			if v := r.Header.Get(name); v != "" {
+				up.Header.Set(name, v)
+			}
+		}
+		resp, err := client.Do(up)
+		if err != nil {
+			http.Error(w, "upstream fetch failed", http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		// HLS 清单判定（在回灌头之前）：清单里的分段地址会被改写成再经本代理的
+		// 相对 URL（hls.js 才能同源取到分段），改写后字节数和 Content-Length 都变了，
+		// 所以清单**只回灌 Content-Type**——若连上游的 Content-Length 一起抄，Go 会在
+		// 写超长时直接丢弃全部响应（http: wrote more than the declared Content-Length，
+		// 2026-11-19 实网验收抓到的真 bug：m3u8 代理返回 200+空体，hls.js 拿到零清单）。
+		ct := strings.ToLower(resp.Header.Get("Content-Type"))
+		isPlaylist := (strings.Contains(ct, "mpegurl") || strings.HasSuffix(strings.ToLower(target), ".m3u8")) && r.Method == http.MethodGet
+		// ⚠ 顺序：先 Set 头再 WriteHeader。Go 服务端一旦 WriteHeader，头表即视为
+		// 已发出，之后再 Set 全被丢弃——首版把 WriteHeader 放前面导致 Content-Range/
+		// Content-Length 静默丢失（浏览器拿不到总长 → 时长/seek 全废），Content-Type
+		// 还退化成 Go 按字节嗅探（首块 ftyp→mp4、中段→octet-stream，纯巧合）。
+		if isPlaylist {
+			if ct != "" {
+				w.Header().Set("Content-Type", ct)
+			}
+		} else {
+			for _, name := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
+				if v := resp.Header.Get(name); v != "" {
+					w.Header().Set(name, v)
+				}
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		if isPlaylist {
+			body, rerr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+			if rerr != nil {
+				return
+			}
+			rewritten := segStreamURLRe.ReplaceAllStringFunc(string(body),
+				func(m string) string { return "/video/seg?url=" + url.QueryEscape(m) })
+			_, _ = io.WriteString(w, rewritten)
+			return
+		}
+		// 媒体字节：流式回灌（不整体入内存，mp4 可能几百 MB）。
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
 
 // webAuthEnv 是容器鉴权的最小凭证面。缺失其一容器拒绝启动。
 type webAuthEnv struct {
@@ -275,6 +364,9 @@ func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuth
 	mux.HandleFunc("/rpc", func(w http.ResponseWriter, r *http.Request) {
 		hub.serve(store, rt, w, r)
 	})
+	// P1 视频代理：转发容器内 loopback 流服务器字节到浏览器（Range 透传 +
+	// HLS 清单分段地址改写）。详见 newVideoSegHandler 注释。
+	mux.HandleFunc("/video/seg", newVideoSegHandler(store))
 	// 静态前端（hash 路由，/ 回退 index.html）。
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
