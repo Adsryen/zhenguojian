@@ -202,3 +202,65 @@ P3 无新代码（长尾/设置/契约都是"把已平迁的 WS 面证到证据�
 - 代理带宽：单用户局域网场景，不做限流/缓存（YAGNI）
 - 登录安全：口令走 env 明文（compose 文件权限 600；文档提醒）——强度=内部工具级
 - 既有 30 个 *_verify.py 门禁针对桌面桥；WS 桥的契约审计放 P3（evidence_audit 改指向）
+
+## 8. MCP 接入面（2026-11-19，用户后续 AI 接入需求）
+
+> 用户诉求（m04436）：「准备 mcp，后续接入 AI，搜索视频、下载、合并。然后将合并的资源，
+> 可以通过另外的 mcp 或方式，上传到别的地方去。」→ 拆成两半：**本 server 只做
+> 搜索→下载→合并→取成品交接地址**；上传侧是**另一个**独立 MCP/脚本，消费交接地址，
+> 不在本 server 职责内（本 server 不碰上传）。
+
+### 8.1 形态：stdio 单二进制 + WS 桥
+
+- `client-v2/mcp/main.go`（独立 `main` package，stdlib-only，CGO_ENABLED=0 → 9.3MB 纯静态，
+  `client-v2/build/bin/zgj-mcp`，build/bin 已 gitignore）。
+- **stdio JSON-RPC 2.0**（MCP 协议，newline-delimited）；stdout 只发协议帧，日志 stderr。
+- 后端复用容器 sidecar 的 **`/rpc` WebSocket**（与浏览器前端同一桥面、同一鉴权、同一
+  89 方法）：POST `/login` 拿 `zgj_session` cookie → WS `ws://<host>/rpc`，信封
+  `{"id","method","args":[raw...]}`，参数编码与 sidecar 反射解码严格对齐（P3 已执行级
+  验证 89/89）。
+- **断连自愈**：容器重启作废内存 cookie → 自动重登录+重连+重放一次调用（MCP 调用可
+  安全重试，因为 sidecar 侧是无状态桥转发）。
+- 协议协商：initialize 回显客户端 protocolVersion（兼容 2024-11-05 / 2026-07-28，实测
+  DSH 选 2026-07-28 正常握手）。
+
+### 8.2 工具面（11 个，`mcp__zgj__*`）
+
+zgj_sources / zgj_search / zgj_rankings / zgj_detail / zgj_download / zgj_downloads /
+zgj_wait_downloads / zgj_merge / zgj_wait_merges / zgj_outputs / zgj_cancel。
+**只暴露受控 11 工具**（不转发任意桥方法），写面仅 Download*/Merge*/Cancel 一族，受
+容器下载管线自身约束（≤500 集/次、磁盘检查、白名单端点）。wait 类有超时上限
+（下载 28min / 合并 55min），不无限挂起。
+
+### 8.3 关键设计决策（实现中实锤）
+
+1. **drama 对象原样透传，不裁剪**：搜索/榜单结果直接喂 Detail/DownloadStart/MergeStart。
+   裁剪（brief）会丢 sourceId/metadataSchema 等 core 管线可能读的字段 → 部分源静默失败。
+   宁可输出大，也要保证「搜索结果直接下一步」零摩擦。
+2. **交接主形态 = 容器 `/file` URL（fileUrl），hostPath 降级为辅**：容器以 **root** 跑，
+   合并产物 **root 属主**、数据树 **0700**（data/appdata 与 downloads 均 drwx------）→
+   host 上的 AI（ryen uid 1001）直读 hostPath 会 **Permission denied**（真实链实测撞点）。
+   `/file` 端点由容器内 root 进程出流（下载根白名单+原生 Range，P2 已验证）→ 天然跨
+   属主边界，是可靠交接面。fileUrl 需先 POST /login 拿 cookie 再 GET（支持 Range）。
+   `/file` 已实测：合并 mkv 206 Partial Content + `Content-Range: bytes 0-15/19087993` +
+   `video/x-matroska` + 整包 19087993B + MKV magic 1A45DFA3。
+3. **job 终态 = `completed`**（不是 done）；merge 终态 = `done`；merges 空时 MergeList
+   回 raw `"null"`（解析要容忍）。
+
+### 8.4 实网验收（2026-11-19）
+
+- stdio 会话：initialize（2026-07-28 回显 + capabilities.tools）→ tools/list=11 →
+  sources/search/rankings/detail 真数据。
+- **全链真实跑通**（~9min）：search「穿越八零」→ hongguo:7705824595416190014（317 集）→
+  detail → download [2,3]（added:2，ep1 已在前次跑过）→ wait（3 job 全 completed：
+  ep1 6425563B / ep2 5887709B / ep3 6830634B）→ merge（queued:1）→ wait（state=done，
+  19087993B）→ outputs（fileUrl + hostPath + 3 集分片）。
+- 推荐链路写进 initialize 的 server instructions，AI 拿到即用。
+
+### 8.5 注册（DSH profile）
+
+`/home/ryen/.dsh/profiles/web/cordis.patch.yml` insert 段加 stdio 条目
+（serverName=zgj，command 指 build/bin/zgj-mcp，env 注入 ZGJ_WEB_URL/USER/PASS，
+toolCallTimeoutMs=3600000 覆盖 55min 合并等待，failOnStartupError=false）。重启 DSH
+会话后工具以 `mcp__zgj__*` 出现。其他 MCP 客户端（Claude/Codex）同构：stdio + command + env。
+详见 `client-v2/mcp/README.md`。
