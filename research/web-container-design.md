@@ -89,6 +89,18 @@
 纪律：每批独立提交、代码+验收同批；既有验证链保留适配（run_all 前端 mock E2E、
 sidecar_protocol_test.go、go test）。
 
+### P4 落地状态（2026-11-19）
+- **CI 门禁**（.github/workflows/v3-docker-image.yml）：push 到 docker 配置/
+  sidecar web 前端/core overlay 触发；干净 ubuntu-latest 上 docker build 三阶段镜像
+  →起容器→`client-v2/docker/ci-acceptance.js` 14 项判据（零外网依赖：HTTP 鉴权面
+  6 项、WS 桥面 3 项含 __methods 必含 40 核心绑定子集的漂移检测、只读真调用 5 项含
+  GetBuildInfo 版本=构建参数 -ldflags 注入实锤）。CI 版本 ci-<run> 经 compose 同款
+  --build-arg 注入。本地容器实跑 14/14 绿后提交。
+- **使用文档**（client-v2/docker/README.md）：部署/更新（compose pull 语义=
+  up -d --build）/凭据轮换（内存 session 重启失效=设计内）/端口网络/排障表/
+  web vs 桌面形态对照。
+- Open objectives: v3 容器化 P0-P4 全部交付；剩 CI 首跑绿确认（workflow_dispatch 已触发待看）。
+
 ### P3 落地状态（2026-11-19，审计全绿）
 P3 无新代码（长尾/设置/契约都是"把已平迁的 WS 面证到证据级"），产出是三条审计：
 - **执行级可达性 89/89**（sweep2.js，零副作用）：反射解码 arity 检查先于逐参

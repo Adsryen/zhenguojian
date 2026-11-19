@@ -1,0 +1,75 @@
+# v3-docker-image —— v3 容器镜像 CI：build + 起容器 + 验收门禁。
+#
+# 动机：v3 容器（sidecar web 模式，P0-P3）目前只在 115 开发机 build 过——
+# 「本机绿、CI 没人看」正是 Windows 线 P5 立 CI 时的同一动机（防打包脚本腐）。
+# 这条 CI 在干净的 ubuntu-latest 上从零 build 镜像（三阶段：node 前端 +
+# golang sidecar + debian 运行时），起容器后跑 client-v2/docker/ci-acceptance.js
+# 的 14 项判据（HTTP 鉴权面 / WS 桥面 / 只读真调用 / -ldflags 版本注入实锤）。
+#
+# 判据分层：全部**不依赖外网到源站**（github runner 到红果源站不可达不可靠）——
+# 数据面只证「绑定可达+本地状态正确」，真数据流验证归 115 实网线。
+name: v3-docker-image
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'client-v2/docker/**'
+      - 'client-v2/sidecar_web.go'
+      - 'client-v2/sidecar_main.go'
+      - 'client-v2/frontend/**'
+      - 'guoapp-src/native/core/**'
+      - '.github/workflows/v3-docker-image.yml'
+
+jobs:
+  build-and-accept:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # CI 版本号：run 号注入 → 验收脚本断言 GetBuildInfo 回读一致
+      # （-ldflags -X main.buildVersion 注入链的执行级证据，同 build-linux.sh 语义）。
+      ZGJ_BUILD_VERSION: ci-${{ github.run_number }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build image
+        run: docker build -f client-v2/docker/Dockerfile --build-arg ZGJ_BUILD_VERSION="$ZGJ_BUILD_VERSION" -t zgj-v3:ci .
+
+      - name: Run container
+        run: |
+          docker run -d --name zgj-v3-ci \
+            -e ZGJ_WEB_USER=ciuser \
+            -e ZGJ_WEB_PASS=cipass123 \
+            -p 127.0.0.1:8080:8080 \
+            zgj-v3:ci
+          # 等 health（最多 60s；容器内 sidecar 启动要 NewApp+native.Init）
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then
+              echo "healthy after ${i}s"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "container 未就绪"; docker logs zgj-v3-ci; exit 1
+
+      - name: Acceptance gate
+        env:
+          ZGJ_BASE_URL: http://127.0.0.1:8080
+          ZGJ_WEB_USER: ciuser
+          ZGJ_WEB_PASS: cipass123
+          ZGJ_EXPECT_VERSION: ci-${{ github.run_number }}
+        # tee 落盘供 artifact 留证（门禁失败时日志是主要排查面）
+        run: node client-v2/docker/ci-acceptance.js 2>&1 | tee /tmp/v3-ci-accept.log; exit ${PIPESTATUS[0]}
+
+      - name: Upload acceptance log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v3-ci-accept-${{ github.sha }}
+          path: /tmp/v3-ci-accept.log
+          if-no-files-found: warn
+          retention-days: 7
