@@ -344,7 +344,13 @@ export const usePlayerStore = defineStore('player', {
         // PlayerView 应用（此刻 webVideo 还没挂上）。
         const plan = await api.resolve(drama, chapter, ep, qualityToNum(this.quality))
         if (!plan?.url) throw new ApiError('web 模式未拿到播放地址（Resolve 无 url）', 'resolve_empty')
-        this.webMediaUrl = '/video/seg?url=' + encodeURIComponent(plan.url)
+        // 同一集下载过之后，核心 Resolve 不再回 loopback 流 URL，而是直接回
+        // **本地文件路径**（<下载根>/<jobId>/media.mp4，桌面 mpv 两种都吃所以
+        // 桌面形态无感）。web 面按形状分流：绝对路径 → /file（下载根白名单+
+        // Range，与 openLocal 同一端点），http(s) loopback → /video/seg。
+        this.webMediaUrl = plan.url.startsWith('/')
+          ? '/file?p=' + encodeURIComponent(plan.url)
+          : '/video/seg?url=' + encodeURIComponent(plan.url)
         this.webPendingSeek = startPosSec // 元素 loadedmetadata 后由 PlayerView 消费
         this.webDanmakuSession = plan.session ?? '' // 弹幕覆盖层拉 DanmakuAll 的会话
         this.opened = true
@@ -511,6 +517,18 @@ export const usePlayerStore = defineStore('player', {
         if (this.webVideo !== el) return
         this.position = el.currentTime
         if (!this.paused && !this.eof) this.maybePersistWatch()
+      })
+      // 播放态以元素事件为唯一真源：自动播放被浏览器策略拦时（新会话无用户
+      // 手势），openEpisode 里的 el.play() 会 reject 但元素保持暂停——若不回灌
+      // store.paused，store 认为在播、用户再点一次反而走 pause 分支空转（2026-11-19
+      // 实机验收抓到的状态漂移）。ended 前元素会先发 pause，用 el.ended 挡掉那次。
+      el.addEventListener('play', () => {
+        if (this.webVideo !== el) return
+        this.paused = false
+      })
+      el.addEventListener('pause', () => {
+        if (this.webVideo !== el || el.ended) return
+        this.paused = true
       })
       el.addEventListener('ended', () => {
         if (this.webVideo !== el) return

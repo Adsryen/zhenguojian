@@ -109,11 +109,19 @@ sidecar_protocol_test.go、go test）。
   中途方案「往运行时加 curl」弃用：废 stage-3 apt 层缓存+探针引外网依赖，
   115 deb 源不稳时构建挂 25 分钟。验收：探针二进制对活服务 exit 0/坏端口 exit 1；
   容器重建后 docker-health 5s 内转 healthy。
-- **实机使用面新发现（待办，已记录）**：下载过整集后再播该集，核心 Resolve 直接回
-  **本地文件路径**（/data/appdata/downloads/<jobId>/media.mp4）而非 loopback 流
-  URL——web openEpisode 需按「绝对路径 vs http(s) loopback」分流到 /file 而非
-  /video/seg（桌面 mpv 两种都吃，故桌面形态无此问题）。
-- P0-P4 全部交付，CI 首跑绿（44524390911）。
+- **实机使用面两真 bug（已修复，player.ts）**：
+  ① **本地路径分流**：下载过整集后再播该集，核心 Resolve 直接回**本地文件路径**
+  （/data/appdata/downloads/<jobId>/media.mp4）而非 loopback 流 URL——web
+  openEpisode 若盲目 /video/seg?url= 会 403（loopback 白名单认不出绝对路径）。
+  修=按形状分流 `plan.url.startsWith('/')` → `/file?p=`（下载根白名单+Range，与
+  openLocal 同一端点），http(s) → `/video/seg?url=`。桌面 mpv 两种都吃故无感。
+  实网验收：下载过那集浏览器播 src=/file?p=%2Fdata%2F...、rs=4、dur=96.9、360px。
+  ② **play/pause 状态漂移**：自动播放被浏览器策略拦时（新会话无用户手势），
+  openEpisode 的 el.play() reject 但元素保持暂停——store.paused 不回灌则 store
+  认为在播、用户再点一次反而走 pause 分支空转。修=setWebVideo 挂
+  `play`/`pause` 元素事件回灌 store.paused（pause 用 el.ended 挡掉 ended 前那次）。
+  实网验收：新会话登录后点视频 t=30.7 paused=false 正常播。
+- P0-P4 全部交付，CI 首跑绿（44524390911），健康检查真 bug 修复绿（44537851948）。
 
 ### P3 落地状态（2026-11-19，审计全绿）
 P3 无新代码（长尾/设置/契约都是"把已平迁的 WS 面证到证据级"），产出是三条审计：
