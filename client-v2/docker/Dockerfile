@@ -30,7 +30,10 @@ ARG ZGJ_BUILD_VERSION=dev
 RUN cd client-v2 \
     && python3 scripts/make-overlay.py /tmp/ov.json \
     && CGO_ENABLED=0 go build -tags "zgj_sidecar v2overlay" -overlay /tmp/ov.json \
-       -ldflags "-X main.buildVersion=${ZGJ_BUILD_VERSION}" -o /out/sidecar .
+       -ldflags "-X main.buildVersion=${ZGJ_BUILD_VERSION}" -o /out/sidecar . \
+    # HEALTHCHECK 探针（独立 go module，stdlib-only）：dash 无 /dev/tcp、运行时
+    # 又不想为它加 curl（废 apt 缓存+外网依赖），所以随 sidecar 一起编成静态小二进制。
+    && cd docker/healthcheck && CGO_ENABLED=0 go build -o /out/healthcheck .
 
 # ── 阶段 3：运行时（debian + ca + ffmpeg；无图形栈）────────────────────────
 FROM debian:bookworm-slim
@@ -39,6 +42,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=web /build/dist /opt/zgj/web
 COPY --from=go /out/sidecar /opt/zgj/sidecar
+COPY --from=go /out/healthcheck /opt/zgj/healthcheck
 # web 模式开关 + 静态目录 + 数据目录（bind mount 到 /data，compose 注入凭据）。
 # 镜像**不含**任何代理 ENV：容器内是 LAN 流量，Go 的 http.ProxyFromEnvironment
 # 若读到 HTTP_PROXY 会让 /video/seg 等所有出站误走宿主代理。
@@ -49,6 +53,9 @@ ENV ZGJ_WEB=1 \
 RUN mkdir -p /data/appdata
 VOLUME ["/data"]
 EXPOSE 8080
+# 健康探针=随镜像编译的静态 Go 二进制（/opt/zgj/healthcheck，读 ZGJ_WEB_ADDR）。
+# 不用 /dev/tcp（dash 没有）也不用 curl（加它=废 apt 层缓存+给探针引外网依赖，
+# 2026-11-19 在 115 实锤过 deb 源挂 25 分钟）。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-    CMD /bin/sh -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf "GET /health HTTP/1.0\r\n\r\n" >&3 && head -1 <&3 | grep -q 200'
+    CMD ["/opt/zgj/healthcheck"]
 CMD ["/opt/zgj/sidecar"]

@@ -99,7 +99,21 @@ sidecar_protocol_test.go、go test）。
 - **使用文档**（client-v2/docker/README.md）：部署/更新（compose pull 语义=
   up -d --build）/凭据轮换（内存 session 重启失效=设计内）/端口网络/排障表/
   web vs 桌面形态对照。
-- Open objectives: v3 容器化 P0-P4 全部交付；剩 CI 首跑绿确认（workflow_dispatch 已触发待看）。
+- **健康检查真 bug（发现+修复）**：首版 HEALTHCHECK 用 bash 的 /dev/tcp，但
+  debian:bookworm-slim 的 /bin/sh 是 dash → `cannot create /dev/tcp/127.0.0.1/8080:
+  Directory nonexistent`，容器恒 unhealthy（FailingStreak 344）而服务其实好的。
+  CI 首跑（run 44524390911）没抓到——ci-acceptance 探 HTTP 端点不探 docker 健康态
+  →补 `docker inspect State.Health.Status==healthy` 断言防回归。修复=**静态 Go
+  健康探针** client-v2/docker/healthcheck/（独立 go module、stdlib-only，go 阶段
+  同编→COPY /opt/zgj/healthcheck→HEALTHCHECK 指向它，零新 apt 包零外网依赖）。
+  中途方案「往运行时加 curl」弃用：废 stage-3 apt 层缓存+探针引外网依赖，
+  115 deb 源不稳时构建挂 25 分钟。验收：探针二进制对活服务 exit 0/坏端口 exit 1；
+  容器重建后 docker-health 5s 内转 healthy。
+- **实机使用面新发现（待办，已记录）**：下载过整集后再播该集，核心 Resolve 直接回
+  **本地文件路径**（/data/appdata/downloads/<jobId>/media.mp4）而非 loopback 流
+  URL——web openEpisode 需按「绝对路径 vs http(s) loopback」分流到 /file 而非
+  /video/seg（桌面 mpv 两种都吃，故桌面形态无此问题）。
+- P0-P4 全部交付，CI 首跑绿（44524390911）。
 
 ### P3 落地状态（2026-11-19，审计全绿）
 P3 无新代码（长尾/设置/契约都是"把已平迁的 WS 面证到证据级"），产出是三条审计：

@@ -49,12 +49,21 @@ jobs:
           # 等 health（最多 60s；容器内 sidecar 启动要 NewApp+native.Init）
           for i in $(seq 1 30); do
             if curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1; then
-              echo "healthy after ${i}s"
-              exit 0
+              echo "http-healthy after ${i}s"
+              break
             fi
             sleep 2
           done
-          echo "container 未就绪"; docker logs zgj-v3-ci; exit 1
+          curl -sf http://127.0.0.1:8080/health >/dev/null 2>&1 || { echo "http 未就绪"; docker logs zgj-v3-ci; exit 1; }
+          # Docker 健康状态必须转 healthy——防「服务好的但 /dev/tcp 式 healthcheck
+          # 写坏了导致 docker ps 恒 unhealthy」的运维误导回归（P4 首跑在 115 实锤过）。
+          for i in $(seq 1 20); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' zgj-v3-ci 2>/dev/null)
+            echo "docker-health=${st}"
+            [ "$st" = "healthy" ] && exit 0
+            sleep 3
+          done
+          echo "docker 健康状态未转 healthy"; docker inspect --format '{{json .State.Health.Log}}' zgj-v3-ci; exit 1
 
       - name: Acceptance gate
         env:
