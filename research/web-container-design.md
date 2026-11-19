@@ -89,6 +89,33 @@
 纪律：每批独立提交、代码+验收同批；既有验证链保留适配（run_all 前端 mock E2E、
 sidecar_protocol_test.go、go test）。
 
+### P3 落地状态（2026-11-19，审计全绿）
+P3 无新代码（长尾/设置/契约都是"把已平迁的 WS 面证到证据级"），产出是三条审计：
+- **执行级可达性 89/89**（sweep2.js，零副作用）：反射解码 arity 检查先于逐参
+  json.Unmarshal（sidecar_main.go:112-114）→ 送 N+1 参必在参数解码前报
+  「需要 N 个参数，收到 N+1」，方法体不执行。全表 89 名逐一探针 + 16 只读方法
+  （Ping/GetBuildInfo/DataPath/ListSources/RankingBoards/DownloadList/DownloadSettings/
+  GetResourceSettings/MergeList/HistoryList/Watchlist/SeenList/DownloadDirectory/
+  UpdateStatus/UpdateSettingsGet/PlayerState）真调用全回真数据。
+- **契约三向对账**（go/ast dump 单一真源 /tmp/dump_table.go）：源码导出 90 中
+  OpenDownloadPath 双定义（_other.go `//go:build !windows` + _windows.go）→ unique 89
+  = WS 活表 __methods 89 精确相等；前端 contract.ts GO_BINDINGS 引用 77 unique App.*
+  全在表内；表内未前端引用 12 个=桌面形态专属（PlayerAttach/SetBounds/HitBands/
+  ForceWindow/Detach/EmbedDiag/Clipboard*/BrowseFiltered/DanmakuWindow/MergeList/
+  TrayStatus），WS 面照样可达（容器里前端不调而已）。
+- **evidence_audit 方向 A/S/G 全 PASS**（bridge 面 89、contract_not_in_sidecar 0、
+  内嵌签名 5 条一致）；方向 B 只登记不判红：BrowseFiltered/MergeList/TrayStatus。
+- **设置 parity 回环**：资源/下载/更新三组 get→set→get 值全部不变（容器真数据面）。
+- **下载→容器内播真链**（P2 验收尾）：WS DownloadStart 1 集→completed（6425563B
+  media.mp4 落盘 downloads/<jobId>/）→/file 流回（md5 e5cc2178… 与源逐字节一致、
+  206+Content-Range）→浏览器 #/player?lp= 播放（dur=96.9、360px、readyState=4）。
+- **审计事故留痕**：首版 sweep 用"类型对撞"探针，对 string 首参送了可解码 JSON
+  字符串→7 方法带假 id "1" 真实执行（ToggleSeen/RemoveFollow/RemoveHistory/
+  MergeCancel/CancelReservation/ClipboardWrite/Suggest）。已清理唯一真污染
+  （seen-library.json 假 "1" 键已删；其余 6 个 no-op 或只读）。教训：执行级探针
+  必须用 arity 不匹配（解码前拦截），类型对撞在"形参能吞下该类型"时照样执行。
+  重设计版 sweep2.js 已钉住零副作用口径。
+
 ### P2 落地状态（2026-11-19，实网验收绿）
 - **Go /file 端点**（sidecar_web.go `newLocalFileHandler`）：cookie 鉴权、
   `?p=<容器内绝对路径>` 只放行下载根**之下**的成品（`checkLocalPlayable` 与
