@@ -4,12 +4,12 @@
 
 # 会话状态（现测）
 
-生成时间：2026-11-18 11:06:53 +0000
+生成时间：2026-11-19 06:16:42 +0000
 
 | 指标 | 值 | 怎么量的 |
 |---|---|---|
-| 累计提交（相对 `a1a1c89`） | **278** | `git rev-list --count` + 首笔 |
-| HEAD | `fd6f814` | `git rev-parse --short HEAD` |
+| 累计提交（相对 `a1a1c89`） | **280** | `git rev-list --count` + 首笔 |
+| HEAD | `2cb971d` | `git rev-parse --short HEAD` |
 | 工作区未提交条目 | 0 | `git status --porcelain` 行数 |
 | 前端验收脚本 | 30 只 | `verification/*_verify.py` |
 | 端口号（独占/冲突） | 34 个 / 0 处冲突 | `ports_audit.audit_dir` |
@@ -43,8 +43,8 @@
 | internal/tray | 13 |
 | internal/updater | 66 |
 | internal/watchstore | 27 |
-| (root) | 43 |
-| **合计** | **312** |
+| (root) | 45 |
+| **合计** | **314** |
 
 ## 验收脚本清单
 
