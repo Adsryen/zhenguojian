@@ -39,7 +39,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -58,6 +60,10 @@ type config struct {
 	pollEvery time.Duration
 	listen    string // 非空=HTTP(streamable-http)模式监听地址，如 0.0.0.0:9330
 	token     string // HTTP 模式的 Bearer 鉴权 token
+	olBase    string // openlist（115 推送通道）地址，如 https://alist.prlrr.com；空=zgj_publish 只回签名 URL
+	olUser    string
+	olPass    string
+	publicURL string // 对外可达的容器基地址（签名 URL 给外部调用方时用）；空=用 baseURL
 }
 
 func loadConfig() *config {
@@ -69,6 +75,10 @@ func loadConfig() *config {
 		pollEvery: 3000 * time.Millisecond,
 		listen:    os.Getenv("ZGJ_MCP_LISTEN"),
 		token:     os.Getenv("ZGJ_MCP_TOKEN"),
+		olBase:    os.Getenv("ZGJ_OL_BASE"),
+		olUser:    os.Getenv("ZGJ_OL_USER"),
+		olPass:    os.Getenv("ZGJ_OL_PASS"),
+		publicURL: envOr("ZGJ_PUBLIC_URL", os.Getenv("ZGJ_WEB_URL")),
 	}
 	if ms := os.Getenv("ZGJ_MCP_POLL_MS"); ms != "" {
 		if n, err := strconv.Atoi(ms); err == nil && n >= 500 {
@@ -454,9 +464,17 @@ func (s *server) toolDetail(p map[string]any) (string, error) {
 }
 
 func (s *server) toolDownload(p map[string]any) (string, error) {
-	d, err := dramaOf(p)
-	if err != nil {
-		return "", err
+	// ③ id-only：drama 可为对象或 id 字符串（如 hongguo:7675932141238111256，
+	// 服务端 Detail 自查 title/source，空标题拒绝）。
+	var d drama
+	if v, ok := p["drama"].(string); ok && strings.Contains(v, ":") {
+		d, _ = s.normDrama(v)
+	} else {
+		var err error
+		d, err = dramaOf(p)
+		if err != nil {
+			return "", err
+		}
 	}
 	eps := intList(p, "episodes")
 	if len(eps) == 0 {
@@ -518,20 +536,129 @@ func mergeDone(state string) bool {
 	return false
 }
 
-func (s *server) toolDownloads() (string, error) {
+// jobDramaIDOf 从 job 里取 dramaId（drama.id；兼容平铺）。
+func jobDramaIDOf(jm map[string]any) string {
+	if d, ok := jm["drama"].(map[string]any); ok {
+		return getS(d, "id")
+	}
+	return getS(jm, "dramaId")
+}
+
+// jobIndexOf 取 job 集号（int，取不到 -1）。
+func jobIndexOf(jm map[string]any) int {
+	switch v := jm["index"].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
+	}
+	return -1
+}
+
+// jobBrief 单条 job 的紧凑视图（摘要 head 用；比 compactList 少 drama 全对象）。
+func jobBrief(jm map[string]any) map[string]any {
+	d := mustMap(jm["drama"])
+	return map[string]any{
+		"id":        getS(jm, "id"),
+		"state":     getS(jm, "state"),
+		"progress":  jm["progress"],
+		"ep":        jm["index"],
+		"title":     getS(d, "title"),
+		"quality":   jm["actualQuality"],
+		"bytes":     jm["bytes"],
+		"dramaId":   jobDramaIDOf(jm),
+		"created":   jm["created"],
+	}
+}
+
+// toolDownloads ②+⑦：dramaId/jobIds 过滤 + 大列表默认摘要（total+ids+前 5，full=true 全量）。
+func (s *server) toolDownloads(p map[string]any) (string, error) {
 	raw, err := s.b.call("DownloadList")
 	if err != nil {
 		return "", err
 	}
-	return compactList(parseResult(raw))
+	m := mustMap(parseResult(raw))
+	dramaID := strOf(p, "dramaId")
+	jobIDSet := map[string]bool{}
+	for _, v := range mustList(p["jobIds"]) {
+		if id, ok := v.(string); ok {
+			jobIDSet[id] = true
+		}
+	}
+
+	jobs := mustList(m["jobs"])
+	var jStates []string
+	var jIDs []string
+	var jFull []map[string]any
+	for _, j := range jobs {
+		jm := mustMap(j)
+		if dramaID != "" && jobDramaIDOf(jm) != dramaID {
+			continue
+		}
+		if len(jobIDSet) > 0 && !jobIDSet[getS(jm, "id")] {
+			continue
+		}
+		jStates = append(jStates, getS(jm, "state"))
+		jIDs = append(jIDs, getS(jm, "id"))
+		jFull = append(jFull, jobBrief(jm))
+	}
+
+	merges := mustList(m["merges"])
+	var mOut []map[string]any
+	for _, x := range merges {
+		mm := mustMap(x)
+		if dramaID != "" && getS(mm, "dramaId") != dramaID {
+			continue
+		}
+		mOut = append(mOut, map[string]any{
+			"id":         getS(mm, "id"),
+			"state":      getS(mm, "state"),
+			"stage":      getS(mm, "stage"),
+			"progress":   mm["progress"],
+			"title":      getS(mm, "title"),
+			"output":     getS(mm, "output"),
+			"outputName": getS(mm, "outputName"),
+			"bytes":      mm["bytes"],
+		})
+	}
+
+	full, _ := p["full"].(bool)
+	out := map[string]any{"status": getS(m, "status"), "merges": mOut}
+	if full {
+		out["jobs"] = jFull
+	} else {
+		head := jFull
+		if len(head) > summaryLimit {
+			head = head[:summaryLimit]
+		}
+		out["jobs"] = map[string]any{
+			"total":        len(jIDs),
+			"stateCounts":  stateCounts(jStates),
+			"ids":          jIDs,
+			"head":         head,
+			"full":         "jobs 默认只回 total+stateCounts+ids+前 5 条（防网关截断）；要全量传 full=true，或用 dramaId/jobIds 精过滤",
+		}
+	}
+	if dramaID != "" {
+		out["dramaId"] = dramaID
+	}
+	return pretty(out)
 }
 
-func compactList(v any) (string, error) {
+// compactList 紧凑视图；dramaID 非空时只回该剧的 jobs/merges（② 快照要按过滤
+// 形态返回，否则混入别的剧的 job 误导调用方）。
+func compactList(v any, dramaID string) (string, error) {
 	m := mustMap(v)
 	jobs := mustList(m["jobs"])
 	jOut := make([]map[string]any, 0, len(jobs))
 	for _, j := range jobs {
 		jm := mustMap(j)
+		if dramaID != "" && jobDramaIDOf(jm) != dramaID {
+			continue
+		}
 		d := mustMap(jm["drama"])
 		jOut = append(jOut, map[string]any{
 			"id":       getS(jm, "id"),
@@ -546,6 +673,9 @@ func compactList(v any) (string, error) {
 	mOut := make([]map[string]any, 0, len(mustList(m["merges"])))
 	for _, x := range mustList(m["merges"]) {
 		mm := mustMap(x)
+		if dramaID != "" && getS(mm, "dramaId") != dramaID {
+			continue
+		}
 		mOut = append(mOut, map[string]any{
 			"id":         getS(mm, "id"),
 			"state":      getS(mm, "state"),
@@ -559,10 +689,21 @@ func compactList(v any) (string, error) {
 	return pretty(map[string]any{"jobs": jOut, "merges": mOut, "status": getS(m, "status")})
 }
 
+// toolWaitDownloads ②：增量等待 + dramaId/jobIds 过滤 + 默认 45s。
+// 为什么默认 ≤45s：mcphub 对阻塞调用 ~60s 就掐，旧默认 600s 必然被掐死
+// 且调用方拿不到中间快照。增量等待=超时返回 timedOut:true + 当前快照，
+// 调用方（AI agent）循环再调即可——这是网关超时下的正确姿势。
 func (s *server) toolWaitDownloads(p map[string]any) (string, error) {
-	timeout := time.Duration(intOr(p, "timeoutSec", 600)) * time.Second
-	if timeout > 28*time.Minute {
-		timeout = 28 * time.Minute
+	timeout := time.Duration(intOr(p, "timeoutSec", 45)) * time.Second
+	if timeout > 120*time.Second {
+		timeout = 120 * time.Second // 硬上限 120s：两次增量窗口之间调用方还有时间思考
+	}
+	dramaID := strOf(p, "dramaId")
+	jobIDSet := map[string]bool{}
+	for _, v := range mustList(p["jobIds"]) {
+		if id, ok := v.(string); ok {
+			jobIDSet[id] = true
+		}
 	}
 	deadline := time.Now().Add(timeout)
 	for {
@@ -571,57 +712,167 @@ func (s *server) toolWaitDownloads(p map[string]any) (string, error) {
 			return "", err
 		}
 		m := mustMap(parseResult(raw))
-		jobs := mustList(m["jobs"])
-		active := 0
-		for _, j := range jobs {
-			if !jobDone(getS(mustMap(j), "state")) {
+		var active, failed, total int
+		for _, j := range mustList(m["jobs"]) {
+			jm := mustMap(j)
+			if dramaID != "" && jobDramaIDOf(jm) != dramaID {
+				continue
+			}
+			if len(jobIDSet) > 0 && !jobIDSet[getS(jm, "id")] {
+				continue
+			}
+			total++
+			switch st := getS(jm, "state"); {
+			case jobDone(st):
+				if st != "completed" && st != "done" {
+					failed++
+				}
+			default:
 				active++
 			}
 		}
+		listJSON, _ := pretty(map[string]any{"status": getS(m, "status")})
+		_ = listJSON
+		snapshot, _ := s.toolDownloads(p) // 复用过滤+摘要逻辑（full 参数透传）
 		if active == 0 {
-			out, _ := compactList(mustMap(mustMap(parseResult(raw))))
 			return pretty(map[string]any{
 				"timedOut": false,
-				"done":     len(jobs) == 0 || active == 0,
-				"list":     jsonRaw(out),
-				"next":     "下载完成后可 zgj_merge（dramas=[drama对象]）",
+				"done":     active == 0,
+				"failed":   failed,
+				"total":    total,
+				"list":     jsonRaw(snapshot),
+				"next":     "下载完成：可 zgj_merge（drama 传对象或 id 字符串）；有 failed 时看 list 里的 stateCounts",
 			})
 		}
 		if time.Now().After(deadline) {
-			out, _ := compactList(mustMap(mustMap(parseResult(raw))))
 			return pretty(map[string]any{
-				"timedOut": true, "activeJobs": active, "list": jsonRaw(out),
-				"next": "仍有任务进行中，可再次调用 zgj_wait_downloads 继续等",
+				"timedOut":   true,
+				"activeJobs": active,
+				"failed":     failed,
+				"total":      total,
+				"list":       jsonRaw(snapshot),
+				"next":       "增量等待超时：再次调用 zgj_wait_downloads（同参数）继续等，或 zgj_downloads 看快照",
 			})
 		}
 		time.Sleep(s.b.cfg.pollEvery)
 	}
 }
 
+// toolMerge ③+④+⑤：dramas 元素可为对象或 id 字符串；chunkSize>0 时按集切块
+// （每块一个「剧名 全NNN-MMM集.mkv」，selected mode 多次入队）；幂等=同区段
+// 重合并核心按 entry ID（dramaID#first-last）覆盖刷新，扩区段是**新名字**的
+// 新成品（旧的不自动删——要删用 zgj_cleanup kind=outputs）。
 func (s *server) toolMerge(p map[string]any) (string, error) {
-	dramas := dramaList(p, "dramas")
-	if len(dramas) == 0 {
-		return "", errors.New("dramas 必填（drama 对象数组，来自 zgj_search/zgj_rankings 的 items）")
+	refs := dramaRefs(p, "dramas")
+	if len(refs) == 0 {
+		return "", errors.New("dramas 必填（drama 对象或 id 字符串数组，如 [\"hongguo:7675932141238111256\"]）")
 	}
-	var raw string
-	var err error
-	if len(dramas) == 1 {
-		raw, err = s.b.call("MergeStart", strArg("season"), objArg(dramas[0]), strArg("[]"))
-	} else {
-		raw, err = s.b.call("MergeStartMulti", strListArg(dramas))
+	chunk := intOr(p, "chunkSize", 0)
+	// 归一化：id 字符串自查成完整对象（③ id-only；空标题在 dramaRefByID 拒绝）。
+	norm := make([]drama, 0, len(refs))
+	for _, it := range refs {
+		d, e := s.normDrama(it)
+		if e != nil {
+			return "", e
+		}
+		norm = append(norm, d)
 	}
+	// 多部剧=按剧整季合并（MergeStartMulti 不支持切块，chunkSize 只对单部有效）。
+	if len(norm) > 1 {
+		if chunk > 0 {
+			return "", errors.New("chunkSize 只对单部剧有效（多部剧按整季合并）")
+		}
+		raw, err := s.b.call("MergeStartMulti", strListArg(norm))
+		if err != nil {
+			return "", err
+		}
+		m := mustMap(parseResult(raw))
+		m["next"] = "用 zgj_wait_merges 等合并完成，再 zgj_outputs 拿成品路径"
+		return pretty(m)
+	}
+	dm := norm[0]
+	dramaID := getS(dm, "id")
+
+	if chunk <= 1 {
+		// 整季合并（默认；≤1 视为整季）
+		raw, err := s.b.call("MergeStart", strArg("season"), objArg(dm), strArg("[]"))
+		if err != nil {
+			return "", err
+		}
+		m := mustMap(parseResult(raw))
+		m["next"] = "用 zgj_wait_merges（dramaId 过滤）等合并完成，再 zgj_outputs 拿成品路径"
+		return pretty(m)
+	}
+
+	// chunkSize 切块：拉该剧全部 completed jobs，按集号升序切每 chunk 个一组，
+	// 逐组 MergeStart(selected, 显式 jobIDs)。核心要求同组集号连续
+	// （merge.go runMerge first..last）——completed jobs 的集号天然唯一，
+	// 切出的组只要组内连续就合法；有缺集时组内跳号会被核心拒绝，
+	// 报错会带组号，调用方可按报错补下载后重发。
+	raw, err := s.b.call("DownloadList")
 	if err != nil {
 		return "", err
 	}
 	m := mustMap(parseResult(raw))
-	m["next"] = "用 zgj_wait_merges 等合并完成，再 zgj_outputs 拿成品路径"
-	return pretty(m)
+	type epJob struct {
+		ep   int
+		id   string
+	}
+	var jobs []epJob
+	for _, j := range mustList(m["jobs"]) {
+		jm := mustMap(j)
+		if getS(jm, "state") != "completed" || jobDramaIDOf(jm) != dramaID {
+			continue
+		}
+		jobs = append(jobs, epJob{ep: jobIndexOf(jm), id: getS(jm, "id")})
+	}
+	sort.Slice(jobs, func(i, j int) bool { return jobs[i].ep < jobs[j].ep })
+	if len(jobs) < 2 {
+		return "", fmt.Errorf("《%s》可合并的已完成分集不足 2 集（现有 %d）", getS(dm, "title"), len(jobs))
+	}
+	// 切块：核心要求每组 ≥2 集且连续——尾组若只剩 1 集，并入上一组
+	// （221 集 chunk=50 → [1-50][51-100][101-150][151-200][201-221]，
+	// 而非 …[201-250 越界][221 单集被拒]）。
+	var groups [][2]int // [start, end) 切片下标
+	for i := 0; i < len(jobs); i += chunk {
+		groups = append(groups, [2]int{i, min(i+chunk, len(jobs))})
+	}
+	if n := len(groups); n > 1 && groups[n-1][1]-groups[n-1][0] < 2 {
+		last := groups[n-1]
+		groups[n-2][1] = last[1] // 尾组并入上一组
+		groups = groups[:n-1]
+	}
+	var queued []map[string]any
+	for gi, g := range groups {
+		group := jobs[g[0]:g[1]]
+		ids := make([]string, 0, len(group))
+		for _, gj := range group {
+			ids = append(ids, gj.id)
+		}
+		r2, err := s.b.call("MergeStart", strArg("selected"), objArg(dm), strListArg(ids))
+		if err != nil {
+			return "", fmt.Errorf("第 %d-%d 集（组 %d/%d）合并入队失败：%w",
+				group[0].ep, group[len(group)-1].ep, gi+1, len(groups), err)
+		}
+		queued = append(queued, mustMap(parseResult(r2)))
+	}
+	return pretty(map[string]any{
+		"title":    getS(dm, "title"),
+		"dramaId":  dramaID,
+		"chunks":   queued,
+		"totalEp":  len(jobs),
+		"chunkSize": chunk,
+		"next":     "用 zgj_wait_merges（dramaId 过滤）等全部块完成，再 zgj_outputs 拿成品路径；" +
+			"重发同区段合并=覆盖同名成品（幂等），扩区段会产生新名字，旧成品用 zgj_cleanup 清",
+	})
 }
 
 func (s *server) toolWaitMerges(p map[string]any) (string, error) {
-	timeout := time.Duration(intOr(p, "timeoutSec", 600)) * time.Second
-	if timeout > 55*time.Minute {
-		timeout = 55 * time.Minute
+	// ② 增量等待：默认 45s（mcphub 阻塞 ~60s 掐线），上限 120s 硬限；
+	// 超时回 timedOut+快照，调用方循环再调。
+	timeout := time.Duration(intOr(p, "timeoutSec", 45)) * time.Second
+	if timeout > 120*time.Second {
+		timeout = 120 * time.Second
 	}
 	dramaID := strOf(p, "dramaId")
 	deadline := time.Now().Add(timeout)
@@ -643,14 +894,14 @@ func (s *server) toolWaitMerges(p map[string]any) (string, error) {
 			}
 		}
 		if targets == 0 {
-			out, _ := compactList(m)
+			out, _ := compactList(m, dramaID)
 			return pretty(map[string]any{
 				"timedOut": false, "list": jsonRaw(out),
 				"next":     "合并完成，用 zgj_outputs 拿成品 host 路径交接给上传侧",
 			})
 		}
 		if time.Now().After(deadline) {
-			out, _ := compactList(m)
+			out, _ := compactList(m, dramaID)
 			return pretty(map[string]any{
 				"timedOut": true, "activeMerges": targets, "list": jsonRaw(out),
 				"next": "仍有合并进行中，可再次调用 zgj_wait_merges 继续等",
@@ -667,14 +918,28 @@ func (s *server) toolOutputs(p map[string]any) (string, error) {
 		return "", err
 	}
 	m := mustMap(parseResult(raw))
+	// ② 过滤：dramaId（按剧）+ jobIds（按合并条目 id 精确）。
+	dramaID := strOf(p, "dramaId")
+	jobIDSet := strSetOf(p, "jobIds")
 	out := map[string]any{}
 	var merges []map[string]any
+	seenOut := map[string]bool{} // 同 output 路径去重（历史累积的同名条目只回一次）
 	for _, x := range mustList(m["merges"]) {
 		mm := mustMap(x)
 		if getS(mm, "state") != "done" || getS(mm, "output") == "" {
 			continue
 		}
+		if dramaID != "" && getS(mm, "dramaId") != dramaID {
+			continue
+		}
+		if jobIDSet != nil && !jobIDSet[getS(mm, "id")] {
+			continue
+		}
 		cpath := getS(mm, "output")
+		if seenOut[cpath] {
+			continue
+		}
+		seenOut[cpath] = true
 		merges = append(merges, map[string]any{
 			"title":         getS(mm, "title"),
 			"fileUrl":       s.cfg.toFileURL(cpath), // 主交接形态
@@ -696,6 +961,9 @@ func (s *server) toolOutputs(p map[string]any) (string, error) {
 			if getS(jm, "state") != "completed" {
 				continue
 			}
+			if dramaID != "" && jobDramaIDOf(jm) != dramaID {
+				continue
+			}
 			cpath := dir + "/" + getS(jm, "id") + "/media.mp4"
 			d := mustMap(jm["drama"])
 			eps = append(eps, map[string]any{
@@ -709,8 +977,10 @@ func (s *server) toolOutputs(p map[string]any) (string, error) {
 		}
 		out["episodes"] = eps
 	}
-	out["auth"] = "fileUrl 需带 zgj_session cookie：先 POST " + s.cfg.baseURL + "/login {user,pass} 拿 cookie，再 GET fileUrl（支持 Range）。"
-	out["note"] = "推荐走 fileUrl（容器内 root 出流，跨属主边界可靠）；hostPath 仅供 root/sudo 上下文直读（host 挂载 " + s.cfg.hostData + "）。"
+	// ① m05712 禁令：不要求调用方自己 POST /login 拿 cookie——推荐 zgj_publish
+	// 直接推 115（凭证 MCP 层内部解决），或 zgj_publish 无 openlist 时回签名 URL。
+	out["auth"] = "fileUrl 需容器 session cookie——调用方不要自己登录：用 zgj_publish 推送（115 通道凭证在 MCP 层内部），或调一次 zgj_publish 拿一次性签名 URL（无需登录、Range 支持）。"
+	out["note"] = "推荐 zgj_publish（115 直推）；fileUrl 仅供容器同网络/有 cookie 的场景（容器 root 出流，跨属主可靠）；hostPath 仅供 root/sudo 上下文直读（host 挂载 " + s.cfg.hostData + "）。"
 	return pretty(out)
 }
 
@@ -736,7 +1006,416 @@ func (s *server) toolCancel(p map[string]any) (string, error) {
 	return pretty(parseResult(raw))
 }
 
+// ---------------------------------------------------------------- ① zgj_publish
+
+// toolPublish 把合并成品推送到 openlist（115 网盘）。
+//
+// 无人值守口径（m05712 ①）：调用方不碰容器 cookie、不碰 115 凭证——
+//   - files 缺省 = 该剧最新合并成品（DownloadList merges 里 state=done+output 非空，
+//     同剧多块取集数最大/最新一块）
+//   - 有 openlist 配置：流式 PUT 到 /api/fs/put（10GB 级不落本地第二份），
+//     回读 size 校验；115 存储 token 死时返回明确的重授权指引（不静默）
+//   - 无 openlist 配置：兜底 FileSign 一次性签名 URL（Range 支持），
+//     host 按 ZGJ_WEB_URL 重写为对外可达
+func (s *server) toolPublish(p map[string]any) (string, error) {
+	dramaID := strOf(p, "dramaId")
+	targetDir := strings.Trim(strOf(p, "targetDir"), "/")
+	if targetDir == "" {
+		targetDir = "zgj"
+	}
+	tpl := strOf(p, "fileNameTemplate")
+	del := false
+	if v, ok := p["deleteLocalAfterSuccess"].(bool); ok {
+		del = v
+	}
+	// 选文件：显式 files[] 优先；缺省=该剧最新合并成品。
+	var cands []map[string]any
+	if fl, ok := p["files"].([]any); ok && len(fl) > 0 {
+		for _, f := range fl {
+			if fs, ok := f.(string); ok && fs != "" {
+				cands = append(cands, map[string]any{"output": fs, "title": filepath.Base(fs)})
+			}
+		}
+	} else {
+		if dramaID == "" {
+			return "", errors.New("dramaId 必填（或显式传 files 数组）")
+		}
+		d, err := s.normDrama(dramaID)
+		if err != nil {
+			return "", err
+		}
+		dramaID = getS(d, "id")
+		dramaTitle := getS(d, "title")
+		raw, err := s.b.call("DownloadList")
+		if err != nil {
+			return "", err
+		}
+		m := mustMap(parseResult(raw))
+		type outInfo struct {
+			path  string
+			title string
+			first int
+			last  int
+		}
+		var infos []outInfo
+		reOut := regexp.MustCompile(`全(\d{3,})-(\d{3,})集\.`)
+		for _, x := range mustList(m["merges"]) {
+			mm := mustMap(x)
+			if getS(mm, "state") != "done" || getS(mm, "output") == "" || getS(mm, "dramaId") != dramaID {
+				continue
+			}
+			info := outInfo{path: getS(mm, "output"), title: getS(mm, "title")}
+			// 集数区间优先从 merges entry 的 episodes 字段取（1 基连续集号），
+			// 回落解析文件名。host 侧 root 属主 0700 数据树读不到 mtime——
+			// 排序不依赖 mtime（切块按集号升序，last 最大=最新一块）。
+			eps := mustIntList(mm["episodes"])
+			if len(eps) > 0 {
+				info.first, info.last = eps[0], eps[len(eps)-1]
+			} else if mm2 := reOut.FindStringSubmatch(filepath.Base(info.path)); mm2 != nil {
+				fmt.Sscanf(mm2[1], "%d", &info.first)
+				fmt.Sscanf(mm2[2], "%d", &info.last)
+			}
+			infos = append(infos, info)
+		}
+		if len(infos) == 0 {
+			return "", fmt.Errorf("《%s》没有已完成的合并成品（先 zgj_merge + zgj_wait_merges）", dramaTitle)
+		}
+		// 最新一块=集数最大（同剧切块时最后一块集号最大）。
+		sort.Slice(infos, func(i, j int) bool {
+			if infos[i].last != infos[j].last {
+				return infos[i].last > infos[j].last
+			}
+			return infos[i].first > infos[j].first
+		})
+		for _, info := range infos {
+			cands = append(cands, map[string]any{"output": info.path, "title": info.title})
+		}
+	}
+	if len(cands) == 0 {
+		return "", errors.New("files 为空")
+	}
+	// 缺省语义=最新一块（cands 已按集号降序，取第一个）；显式 files 时全推。
+	explicit := len(mustList(p["files"])) > 0
+	var published []map[string]any
+	failures := []string{}
+	for i, c := range cands {
+		if i > 0 && !explicit {
+			break
+		}
+		src := getS(c, "output")
+		name := publishFileName(tpl, c, src)
+		target := "/" + targetDir + "/" + name
+		res, err := s.pushOneFile(src, name, target, del)
+		if err != nil {
+			msg := err.Error()
+			// 115 存储 token 死=唯一需要人工的一次性操作，给明确指引（不静默）。
+			if strings.Contains(msg, "refresh_token") || strings.Contains(msg, "40140137") {
+				msg += "；指引：到 " + s.cfg.olBase + " 登录 → 存储 → 115 重新授权一次（token 型凭证，无法程序化续期）"
+			}
+			failures = append(failures, name+": "+msg)
+			continue
+		}
+		published = append(published, res)
+	}
+	channel := "openlist"
+	if s.olClient() == nil {
+		channel = "signedUrl（openlist 未配置，返回一次性签名 URL 供上游自传）"
+	}
+	out := map[string]any{
+		"channel": channel,
+		"files":   published,
+	}
+	if len(failures) > 0 {
+		out["failures"] = failures
+	}
+	if len(published) == 0 {
+		return "", fmt.Errorf("推送全部失败：%s；channel 降级指引见 errors 字段", strings.Join(failures, " | "))
+	}
+	return pretty(out)
+}
+
+// pushOneFile 单文件：openlist 流式上传（配置齐时）或 FileSign 签名 URL 兜底。
+func (s *server) pushOneFile(src, name, target string, del bool) (map[string]any, error) {
+	ol := s.olClient()
+	if ol != nil {
+		// 流式：先 FileSign 拿一次性签名 URL（MCP 无容器 cookie，/file 要登录会 401；
+		// /file-signed 无鉴权+单次有效，正好一次取流），容器 root 进程出流，
+		// 边读边 PUT 给 openlist——本地不落第二份。
+		olc := ol
+		signRaw, err := s.b.call("FileSign", strArg(src), intArg(600))
+		if err != nil {
+			return nil, fmt.Errorf("FileSign 失败（%s）：%w", src, err)
+		}
+		sm := mustMap(parseResult(signRaw))
+		tok := getS(sm, "token")
+		// 取流走 ZGJ_WEB_URL（对外可达产，MCP 与容器同机；/file-signed 无鉴权）。
+		fileURL := rewriteHost("/file-signed?token="+tok, s.cfg.baseURL)
+		httpc := &http.Client{}
+		r, err := httpc.Get(fileURL)
+		if err != nil {
+			return nil, fmt.Errorf("取本地流出错（%s）：%w", fileURL, err)
+		}
+		size := r.ContentLength
+		if size <= 0 {
+			r.Body.Close()
+			return nil, fmt.Errorf("取本地流拿不到文件大小（Content-Length=%d）", size)
+		}
+		// 先建目标目录（逐级，幂等）。
+		dir, _ := splitOL(target)
+		if err := olc.mkdirAll(dir); err != nil {
+			r.Body.Close()
+			return nil, fmt.Errorf("openlist 建目录失败：%w", err)
+		}
+		if err := olc.put(target, size, "", r.Body); err != nil {
+			return nil, err
+		}
+		st, err := olc.statFile(target)
+		if err != nil {
+			return nil, err
+		}
+		if st.Size != size {
+			return nil, fmt.Errorf("openlist 回读 size=%d 与源 %d 不一致（上传可能不完整）", st.Size, size)
+		}
+		res := map[string]any{
+			"local":   s.cfg.toFileURL(src),
+			"remote":  target,
+			"size":    size,
+			"sha1":    st.Sha1,
+			"deleted": false,
+		}
+		if del {
+			if raw, err := s.b.call("FileDelete", strArg(src)); err == nil {
+				res["deleted"] = true
+				_ = parseResult(raw)
+			} else {
+				res["deleteError"] = err.Error()
+			}
+		}
+		return res, nil
+	}
+	// 兜底：FileSign 一次性签名 URL（调用方/上游 agent 自己取流上传到 115）。
+	raw, err := s.b.call("FileSign", strArg(src), intArg(3600))
+	if err != nil {
+		return nil, err
+	}
+	sm := mustMap(parseResult(raw))
+	tok := getS(sm, "token")
+	ext := filepath.Ext(src)
+	// 签名 URL 给**外部**调用方（mcphub/云侧）用 → ZGJ_PUBLIC_URL（对外基地址）；
+	// 缺省回落 baseURL（127.0.0.1 时调用方需自行改写 host）。
+	signedBase := s.cfg.publicURL
+	if signedBase == "" {
+		signedBase = s.cfg.baseURL
+	}
+	res := map[string]any{
+		"local":           s.cfg.toFileURL(src),
+		"containerPath":   getS(sm, "path"),
+		"signedUrl":       rewriteHost("/file-signed?token="+tok, signedBase),
+		"ttlSec":          sm["ttlSec"],
+		"once":            true,
+		"targetName":      name,
+		"suggestedTarget": target,
+		"note": "未配置 openlist（ZGJ_OL_BASE/USER/PASS）：签名 URL 单次有效+Range 支持，由调用方自行 PUT 到 115。" + ext,
+	}
+	return res, nil
+}
+
+func (s *server) olClient() *olClient {
+	cfg := olConfig{
+		base: strings.TrimRight(s.cfg.olBase, "/"),
+		user: s.cfg.olUser,
+		pass: s.cfg.olPass,
+	}
+	if !cfg.enabled() {
+		return nil
+	}
+	return newOLClient(cfg)
+}
+
+// rewriteHost 把容器内路径（如 /file-signed?token=…）拼到 ZGJ_WEB_URL 的
+// 对外 host 上（mcphub/公网视角可达；ZGJ_WEB_URL 本身就是对外可达产）。
+func rewriteHost(path, base string) string {
+	bu, err := url.Parse(base)
+	if err != nil || bu.Host == "" {
+		return path
+	}
+	return bu.Scheme + "://" + bu.Host + path
+}
+
+// publishFileName 套 fileNameTemplate（缺省「{剧名} 合并版 {E起}-{E止}{ext}」）。
+// 占位符：{title} {E起} {E止} {ext}；模板缺区间信息时退回源文件名。
+func publishFileName(tpl string, c map[string]any, src string) string {
+	srcBase := filepath.Base(src)
+	ext := filepath.Ext(srcBase)
+	title, _ := c["title"].(string)
+	if title == "" {
+		title = strings.TrimSuffix(srcBase, ext)
+	}
+	// 从源文件名抽集数区间
+	reOut := regexp.MustCompile(`全(\d{3,})-(\d{3,})集\.`)
+	first, last := 0, 0
+	if mm := reOut.FindStringSubmatch(srcBase); mm != nil {
+		fmt.Sscanf(mm[1], "%d", &first)
+		fmt.Sscanf(mm[2], "%d", &last)
+	}
+	if tpl == "" {
+		if first > 0 && last > 0 {
+			return title + " 合并版 " + fmt.Sprintf("%03d", first) + "-" + fmt.Sprintf("%03d", last) + ext
+		}
+		return srcBase
+	}
+	out := tpl
+	out = strings.ReplaceAll(out, "{title}", title)
+	out = strings.ReplaceAll(out, "{E起}", fmt.Sprintf("%03d", first))
+	out = strings.ReplaceAll(out, "{E止}", fmt.Sprintf("%03d", last))
+	out = strings.ReplaceAll(out, "{ext}", strings.TrimPrefix(ext, "."))
+	if first == 0 && last == 0 {
+		out = strings.ReplaceAll(out, "-000", ext) // 无区间信息：去掉残留占位
+		out = strings.ReplaceAll(out, "000", "")
+	}
+	if out == "" {
+		return srcBase
+	}
+	return out
+}
+
+// ---------------------------------------------------------------- ④ zgjan_cleanup
+
+// toolCleanup 按剧清理：清分集缓存（DownloadRemoveBatch）/ 旧合并成品
+// （DownloadPurgeOutputs 区间包含规则）。
+func (s *server) toolCleanup(p map[string]any) (string, error) {
+	dramaID := strOf(p, "dramaId")
+	if dramaID == "" {
+		return "", errors.New("dramaId 必填（如 hongguo:7675932141238111256）")
+	}
+	doEpisodes := boolOf(p, "episodes", true) // 缺省连分集缓存一起清
+	doOutputs := boolOf(p, "outputs", true)    // 缺省连旧成品一起清
+	out := map[string]any{"dramaId": dramaID}
+	if doEpisodes {
+		raw, err := s.b.call("DownloadList")
+		if err != nil {
+			return "", err
+		}
+		m := mustMap(parseResult(raw))
+		var ids []string
+		for _, j := range mustList(m["jobs"]) {
+			jm := mustMap(j)
+			if jobDramaIDOf(jm) == dramaID && getS(jm, "state") == "completed" {
+				ids = append(ids, getS(jm, "id"))
+			}
+		}
+		if len(ids) == 0 {
+			out["episodesRemoved"] = 0
+		} else {
+			raw2, err := s.b.call("DownloadRemoveBatch", strListArg(ids))
+			if err != nil {
+				return "", fmt.Errorf("分集缓存删除失败：%w", err)
+			}
+			out["episodes"] = parseResult(raw2)
+		}
+	}
+	if doOutputs {
+		raw, err := s.b.call("DownloadPurgeOutputs", strArg(""))
+		if err != nil {
+			return "", fmt.Errorf("旧成品清理失败（115 侧 refresh_token 死不影响本地清理）：%w", err)
+		}
+		out["purge"] = parseResult(raw)
+	}
+	return pretty(out)
+}
+
+// ---------------------------------------------------------------- 限流重试 zgj_retry
+
+// toolRetry 把 failed 的下载任务恢复重试（failed=resume，core 语义）。
+// 无人值守下源限流是常态（hongguo 403「N 秒后重试」），限流窗口过后调一次即可。
+func (s *server) toolRetry(p map[string]any) (string, error) {
+	dramaID := strOf(p, "dramaId")
+	var only []string
+	if ids, ok := p["jobIds"].([]any); ok {
+		for _, v := range ids {
+			if s, ok := v.(string); ok && s != "" {
+				only = append(only, s)
+			}
+		}
+	}
+	if dramaID == "" && len(only) == 0 {
+		return "", errors.New("dramaId 或 jobIds 至少一个（缺省会重推所有 failed 任务）")
+	}
+	raw, err := s.b.call("DownloadList")
+	if err != nil {
+		return "", err
+	}
+	m := mustMap(parseResult(raw))
+	var retried []string
+	for _, j := range mustList(m["jobs"]) {
+		jm := mustMap(j)
+		if getS(jm, "state") != "failed" {
+			continue
+		}
+		id := getS(jm, "id")
+		if dramaID != "" && jobDramaIDOf(jm) != dramaID {
+			continue
+		}
+		if len(only) > 0 && !containsStr(only, id) {
+			continue
+		}
+		if _, err := s.b.call("DownloadRetry", strArg(id)); err != nil {
+			return "", fmt.Errorf("重试 %s（第 %v 集）失败：%w", id, jm["index"], err)
+		}
+		retried = append(retried, id)
+	}
+	return pretty(map[string]any{
+		"retried": retried,
+		"count":   len(retried),
+		"note":    "已 resume。等 20-60s 限流窗口后再调 zgj_wait_downloads（timeoutSec≤45）看进度。",
+	})
+}
+
 // ---------------------------------------------------------------- 参数小工具
+
+func mustIntList(v any) []int {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	var out []int
+	for _, x := range arr {
+		if f, ok := x.(float64); ok {
+			out = append(out, int(f))
+		}
+	}
+	return out
+}
+
+// strSetOf 取字符串数组参数为集合（② jobIds 精确过滤用）；空/缺省返回 nil。
+func strSetOf(p map[string]any, k string) map[string]bool {
+	set := map[string]bool{}
+	for _, v := range mustList(p[k]) {
+		if s, ok := v.(string); ok && s != "" {
+			set[s] = true
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
+func boolOf(p map[string]any, k string, d bool) bool {
+	if v, ok := p[k].(bool); ok {
+		return v
+	}
+	return d
+}
+
+func containsStr(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
 
 func strOf(p map[string]any, k string) string {
 	if v, ok := p[k].(string); ok {
@@ -784,6 +1463,56 @@ func dramaOf(p map[string]any) (drama, error) {
 	return d, nil
 }
 
+// dramaRef 接受「drama 对象」或「id 字符串」（如 hongguo:7675932141238111256）。
+// 为什么支持 id-only：mcphub 转发链路上 AI agent 经常只记住剧 id 就丢掉完整
+// drama 对象；id 足够 core 定位（splitProviderDramaID→source+sourceID，
+// title 由 Detail 抓取回填），服务端自查比要求调用方原样回传可靠。
+// 空标题守卫：Detail 若回填不出 title（源异常/剧下线），拒绝继续——
+// 否则合并成品名会变成「 全001-050集.mkv」（空《》），下游网盘里无法辨认。
+func (s *server) dramaRef(p map[string]any, key string) (drama, error) {
+	v := p[key]
+	if id, ok := v.(string); ok && strings.Contains(id, ":") {
+		d := map[string]any{"id": id}
+		raw, err := s.b.call("Detail", objArg(d))
+		if err != nil {
+			return nil, fmt.Errorf("按 id 查详情失败（%s）：%w", id, err)
+		}
+		m := mustMap(parseResult(raw))
+		full := mustMap(m["drama"])
+		if full == nil {
+			full = m
+		}
+		title := getS(full, "title")
+		if title == "" {
+			return nil, fmt.Errorf("drama %s 详情里查不到标题（源异常或剧已下线），拒绝继续", id)
+		}
+		return full, nil
+	}
+	d, ok := v.(map[string]any)
+	if !ok || getS(d, "id") == "" {
+		return nil, fmt.Errorf("%s 必填：drama 对象（含 id）或 id 字符串（如 hongguo:7675932141238111256）", key)
+	}
+	return d, nil
+}
+
+// dramaRefByID 按已知 id 自查完整 drama（chunk 合并/输出命名等内部复用）。
+func (s *server) dramaRefByID(id string) (drama, error) {
+	d := map[string]any{"id": id}
+	raw, err := s.b.call("Detail", objArg(d))
+	if err != nil {
+		return nil, fmt.Errorf("按 id 查详情失败（%s）：%w", id, err)
+	}
+	m := mustMap(parseResult(raw))
+	full := mustMap(m["drama"])
+	if full == nil {
+		full = m
+	}
+	if getS(full, "title") == "" {
+		return nil, fmt.Errorf("drama %s 详情里查不到标题", id)
+	}
+	return full, nil
+}
+
 func dramaList(p map[string]any, k string) []drama {
 	var out []drama
 	for _, v := range mustList(p[k]) {
@@ -792,6 +1521,36 @@ func dramaList(p map[string]any, k string) []drama {
 		}
 	}
 	return out
+}
+
+// dramaRefs ③：dramas 元素可为对象或 id 字符串（原样保留，归一由调用方做）。
+func dramaRefs(p map[string]any, k string) []any {
+	var out []any
+	for _, v := range mustList(p[k]) {
+		switch x := v.(type) {
+		case map[string]any:
+			if getS(x, "id") != "" {
+				out = append(out, x)
+			}
+		case string:
+			if strings.Contains(x, ":") {
+				out = append(out, x)
+			}
+		}
+	}
+	return out
+}
+
+// normDrama 把「对象或 id 字符串」归一成完整 drama 对象（id 走 Detail 自查）。
+func (s *server) normDrama(v any) (drama, error) {
+	if id, ok := v.(string); ok && strings.Contains(id, ":") {
+		return s.dramaRefByID(id)
+	}
+	d, ok := v.(map[string]any)
+	if !ok || getS(d, "id") == "" {
+		return nil, errors.New("drama 需为对象（含 id）或 id 字符串（如 hongguo:7675932141238111256）")
+	}
+	return d, nil
 }
 
 func pretty(v any) (string, error) {
@@ -806,6 +1565,47 @@ func jsonRaw(s string) any {
 		return s
 	}
 	return v
+}
+
+// ---------------------------------------------------------------- 大列表摘要（mcphub 截断防护）
+
+// 为什么必须有摘要：mcphub 网关对工具返回值会截断/压缩（>250KB 或超长），
+// 阻塞调用 ~60s 被掐。《逆江湖》222 话的 jobs 全量 ~222 条 × 每条约 200 字节
+// ≈ 45KB 勉强，但加上 merges 明细与 episodes 就超。规则：
+//   - 默认只回 total + id 清单（string，极小）+ 前 N 条完整项 + 「full=true 取全量」提示；
+//   - id 清单让调用方能用 jobIds 精过滤，不用全量扫。
+const summaryLimit = 5
+
+type listSummary struct {
+	total   int
+	ids     []string
+	hits    []map[string]any // 过滤后前 summaryLimit 条
+	extra   map[string]any   // 附加统计（stateCounts 等）
+	fullMsg string           // 「full=true 取全量」提示文案
+}
+
+func (s *listSummary) render() map[string]any {
+	out := map[string]any{
+		"total": s.total,
+		"ids":   s.ids,
+		"head":  s.hits,
+	}
+	if s.extra != nil {
+		for k, v := range s.extra {
+			out[k] = v
+		}
+	}
+	out["full"] = s.fullMsg
+	return out
+}
+
+// stateCounts 给一组 state 字符串计数（{completed: 220, downloading: 2}）。
+func stateCounts(states []string) map[string]int {
+	c := map[string]int{}
+	for _, st := range states {
+		c[st]++
+	}
+	return c
 }
 
 // ---------------------------------------------------------------- server + 工具表
@@ -885,6 +1685,30 @@ func (s *server) tools() []toolDef {
 				"kind": map[string]any{"type": "string", "enum": []string{"download", "merge"}},
 				"id":   map[string]any{"type": "string"},
 			}, "kind", "id")},
+		{Name: "zgj_publish",
+			Description: "把合并成品推送到 115 网盘（openlist 通道，凭证在 MCP 层内部解决）。files 缺省=该剧最新合并成品。" +
+				"配置了 openlist 时流式直传并回读校验，返回远端路径清单；未配置时返回一次性签名 URL（Range 支持）供上游自行上传。" +
+				"115 存储 token 失效时会返回重授权指引（需人工到 alist 站点重新授权一次）。",
+			InputSchema: schema(map[string]any{
+				"dramaId":  map[string]any{"type": "string", "description": "剧 id（如 hongguo:7675932141238111256）；files 缺省时用它找最新合并成品"},
+				"files":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "显式要发布的容器内文件路径数组（缺省=最新合并成品）"},
+				"targetDir": map[string]any{"type": "string", "description": "115 上的目标目录（缺省 zgj）"},
+				"fileNameTemplate": map[string]any{"type": "string", "description": "命名模板，占位符 {title} {E起} {E止} {ext}；缺省「{title} 合并版 {E起}-{E止}.{ext}」"},
+				"deleteLocalAfterSuccess": map[string]any{"type": "boolean", "description": "推送成功后删本地文件（缺省 false）"},
+			})},
+		{Name: "zgj_cleanup",
+			Description: "按剧清理：completed 分集缓存（DownloadRemoveBatch 口径）+「合并」目录下被更大区段覆盖的旧成品（区间包含规则）。",
+			InputSchema: schema(map[string]any{
+				"dramaId":  map[string]any{"type": "string"},
+				"episodes": map[string]any{"type": "boolean", "description": "是否清分集缓存（缺省 true）"},
+				"outputs":  map[string]any{"type": "boolean", "description": "是否清旧合并成品（缺省 true）"},
+			}, "dramaId")},
+		{Name: "zgj_retry",
+			Description: "把 failed 的下载任务恢复重试（源限流 403 是常态：等 20-60s 后调一次，再 zgj_wait_downloads 看进度）。",
+			InputSchema: schema(map[string]any{
+				"dramaId": map[string]any{"type": "string"},
+				"jobIds":  map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			})},
 	}
 }
 
@@ -914,7 +1738,7 @@ func (s *server) callTool(name string, pjson []byte) (string, bool) {
 	case "zgj_download":
 		out, err = s.toolDownload(p)
 	case "zgj_downloads":
-		out, err = s.toolDownloads()
+		out, err = s.toolDownloads(p)
 	case "zgj_wait_downloads":
 		out, err = s.toolWaitDownloads(p)
 	case "zgj_merge":
@@ -925,6 +1749,12 @@ func (s *server) callTool(name string, pjson []byte) (string, bool) {
 		out, err = s.toolOutputs(p)
 	case "zgj_cancel":
 		out, err = s.toolCancel(p)
+	case "zgj_publish":
+		out, err = s.toolPublish(p)
+	case "zgj_cleanup":
+		out, err = s.toolCleanup(p)
+	case "zgj_retry":
+		out, err = s.toolRetry(p)
 	default:
 		return "未知工具: "+name, true
 	}

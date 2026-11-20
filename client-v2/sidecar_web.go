@@ -423,6 +423,8 @@ func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuth
 	mux.HandleFunc("/video/seg", newVideoSegHandler(store))
 	// P2 本地成片：下载根白名单 + http.ServeFile 原生 Range
 	mux.HandleFunc("/file", newLocalFileHandler(store, rt))
+	// 一次性签名 URL（外部上传器用，不要求登录；token 单次有效+TTL）。
+	mux.HandleFunc("/file-signed", newFileSignedHandler(rt))
 	// 静态前端（hash 路由，/ 回退 index.html）。
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {

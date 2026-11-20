@@ -1,8 +1,10 @@
 # zgj-mcp —— 真果鉴 v3 容器 MCP server（AI 接入面）
 
 让 AI（DSH / Claude / Codex 等任何 MCP 客户端）驱动 115 上跑的 `zgj-v3` 容器完成
-**搜剧 → 看分集 → 下载 → 等完成 → 合并 → 等完成 → 拿成品交接地址** 全链。
-上传侧（另一个 MCP 或脚本）消费 `zgj_outputs` 给的地址；本 server 不碰上传。
+**搜剧 → 看分集 → 下载 → 等完成 → 分块合并 → 等完成 → 自动推送 115 网盘** 全程无人值守。
+上传通道（115）由本 server 内部经 openlist 网关（`ZGJ_OL_*`）解决，调用方**不需要**
+自己拿 cookie/登录、也不需要自己 POST 文件——`zgj_publish` 一次搞定。
+`zgj_outputs` 仍是人工/脚本交接面（fileUrl + hostPath）。
 
 ## 架构
 
@@ -43,8 +45,11 @@ CGO_ENABLED=0 go build -o build/bin/zgj-mcp ./mcp
 | `ZGJ_MCP_POLL_MS` | `3000` | wait 类工具轮询间隔 |
 | `ZGJ_MCP_LISTEN` | —（空=stdio 模式） | 非空即启用 HTTP 模式并监听该地址，如 `0.0.0.0:9330` |
 | `ZGJ_MCP_TOKEN` | —（HTTP 模式必填） | Bearer 鉴权令牌；缺失时 HTTP 模式启动即 fatal |
+| `ZGJ_OL_BASE` | — | openlist（115 推送通道）地址，如 `https://alist.prlrr.com`；**三个 OL 变量齐备才启用直推**，否则 `zgj_publish` 回一次性签名 URL 供上游自传 |
+| `ZGJ_OL_USER` / `ZGJ_OL_PASS` | — | openlist 登录账号（`POST /api/auth/login`，token 48h 自动续期） |
+| `ZGJ_PUBLIC_URL` | 回落 `ZGJ_WEB_URL` | 对外可达的容器基地址（签名 URL 兜底给外部调用方时用；`127.0.0.1` 时调用方需自行改 host） |
 
-## 工具（11 个，命名空间 `mcp__zgj__*`）
+## 工具（14 个，命名空间 `mcp__zgj__*`）
 
 | 工具 | 作用 |
 |---|---|
@@ -52,27 +57,47 @@ CGO_ENABLED=0 go build -o build/bin/zgj-mcp ./mcp
 | `zgj_search` | 关键词搜剧，返回 drama 对象列表（**原样透传未裁剪**，可直接喂下一步） |
 | `zgj_rankings` | 榜单找剧（默认 hongguo-hot） |
 | `zgj_detail` | 查一部剧的分集列表（集号 1 基） |
-| `zgj_download` | 下载指定集（episodes=集号数组，quality 默认 360） |
-| `zgj_downloads` | 下载/合并任务快照（不等待） |
-| `zgj_wait_downloads` | 阻塞等所有下载任务到终态（默认 10min，超时返回可续等） |
-| `zgj_merge` | 合并已完成分集成整剧（1 部=按季；多部=批量按季） |
-| `zgj_wait_merges` | 阻塞等合并到终态（可按 dramaId 过滤） |
-| `zgj_outputs` | **交接面**：成品 fileUrl（主）+ hostPath（辅）+ 字节数 |
+| `zgj_download` | 下载指定集（episodes=集号数组，quality 默认 360；drama 接受完整对象**或 id-only 字符串**如 `hongguo:7675932141238111256`，服务端自查标题/分集，空标题拒绝入队） |
+| `zgj_downloads` | 下载/合并任务快照（不等待）。**默认摘要**：total + stateCounts + id 清单 + 前 5 条（防网关截断）；`full:true` 全量；`dramaId`/`jobIds` 精过滤 |
+| `zgj_wait_downloads` | 增量等待（**默认 45s**、上限 120s 硬限——mcphub 阻塞 ~60s 掐线）。`dramaId`/`jobIds` 过滤；超时回 `timedOut:true` + 同口径快照，调用方循环再调 |
+| `zgj_merge` | 合并已完成分集。单部=按季；`chunkSize`（如 50）=**分块合并**，每块一个成品（超长剧整部 mkv >10GB 难传难播）。drama 同样接受 id-only |
+| `zgj_wait_merges` | 增量等待合并（默认 45s/上限 120s），`dramaId` 过滤 |
+| `zgj_outputs` | **交接面**：成品 fileUrl（主）+ hostPath（辅）+ 字节数。`dramaId`/`jobIds` 过滤 + 同路径去重；`includeEpisodes:true` 附分集成品 |
 | `zgj_cancel` | 取消下载/合并任务 |
+| `zgj_publish` | **推送 115（无人值守终点）**：`files` 缺省=该剧最新合并成品，`targetDir`+`fileNameTemplate`（默认「{title} 合并版 {E起}-{E止}.{ext}」，`{ext}` 不带点）+ `deleteLocalAfterSuccess`。openlist 齐备=server 内部流式直推（115 root 出流→PUT openlist→回读 size 校验），**全程无需调用方登录**；否则回一次性签名 URL（单次有效+Range+sha1+bytes）。115 重授权失效时返回带指引的死信错误 |
+| `zgj_cleanup` | 按剧清理：`episodes:true` 删分集缓存（DownloadRemoveBatch）；缺省=清旧合并成品（同剧被新区段**严格包含**的旧区间文件，幂等覆盖产生的累积垃圾） |
+| `zgj_retry` | 复活 failed 下载（per-job `DownloadRetry`；限流类失败等窗口后重试，**禁止 blanket**） |
 
-## 推荐链路（server instructions 里也写了）
+## 推荐链路（无人值守，server instructions 里也写了）
 
 ```
-zgj_search "穿越八零"          → items[0] = drama 对象
-zgj_detail  {drama}           → 分集号
-zgj_download {drama, episodes:[1,2,3]}
-zgj_wait_downloads
-zgj_merge {dramas:[drama]}
-zgj_wait_merges
-zgj_outputs                   → merged[].fileUrl 交给上传侧
+zgj_search "逆江湖"              → items[0] = drama 对象（或直接用 id-only 字符串）
+zgj_detail  {drama}             → 分集号
+zgj_download {drama, episodes:[1..N], quality:1080}
+zgj_wait_downloads {dramaId, timeoutSec:45}   → 循环调直到 timedOut=false
+zgj_merge      {dramas:[dramaId], chunkSize:50}
+zgj_wait_merges {dramaId, timeoutSec:45}      → 循环调
+zgj_publish    {dramaId, targetDir:"115/逆江湖之苍生为局"}
+              → 115 文件清单（remote/size/sha1），推送完 zgj_cleanup 清分集缓存
 ```
 
-## 交接契约（给上传侧）
+**质量自查**：`quality` 请求值未必存在——源没有该档位时核心取最高流，
+`zgj_downloads` 的 `actualQuality` 才是真实流画质（2026-11-20 实锤：hongguo
+《逆江湖》请求 1080 → actual 360，成品 ffprobe 360p，job/记录/成品三处一致，
+=源限制非透传 bug）。
+
+## 推送通道（zgj_publish）
+
+- **直推（openlist 齐备）**：server 内部 `FileSign` 一次性签名 URL → 容器 root 取流
+  → `PUT /api/fs/put` 流式上传（4h 超时、不落盘）→ `fs/list` 回读 size 校验。
+  调用方拿不到也不需要任何凭据。
+- **兜底（未配 openlist）**：回 `signedUrl`（`/file-signed?token=`，单次有效、
+  TTL≤1h、Range 支持、基址取 `ZGJ_PUBLIC_URL`）+ 目标名 + bytes，由上游 agent 自传。
+- **115 重授权失效**（openlist `/115` 挂 refresh_token）：直推返回 isError 死信 +
+  「到 https://alist.prlrr.com 登录 → 存储 → 115 重新授权」指引（token 型凭证无法
+  程序化续期）。工作存储（/local、/Onedrive-*、/又拍云…）不受影响，可先推过去。
+
+## 交接契约（给上传侧，zgj_outputs）
 
 `zgj_outputs` 对每个成品给三种形态，**推荐用 fileUrl**：
 
@@ -85,7 +110,7 @@ zgj_outputs                   → merged[].fileUrl 交给上传侧
 - `hostPath`（辅）：host 挂载点下的真实路径，仅 root/sudo 上下文可直读。
 - `containerPath`：容器内路径（调试/排障用）。
 
-上传侧示例（Node ≥18 内置 fetch）：
+上传侧示例（Node ≥18 内置 fetch，仅在不用 `zgj_publish` 直推时）：
 
 ```js
 const jar = await fetch('http://127.0.0.1:9320/login', {method:'POST',
@@ -112,9 +137,11 @@ EnvironmentFile=`client-v2/mcp/.env`，0600），mcphub（224）作为上游挂�
 - 下游通路：`https://mcphub.prlrr.com/mcp`（ops-client key，现值在 224
   `client_key.once`），工具以 **`zgj-zgj_*`**（网关 `<serverName>-<tool>` 前缀）出现；
   DSH 侧经现有 `mcp-mcphub` 条目即见，无需单独注册。
-- 写面暴露登记：`zgj_download / zgj_merge / zgj_cancel` 经公网网关透出，
-  受容器下载管线自身约束（集数上限 500、磁盘检查、白名单端点）；如需收敛，
-  在 mcphub 条目加 `tools` 覆写（`enabled:false`）或改用限权 key/组端点。
+- 写面暴露登记：`zgj_download / zgj_merge / zgj_cancel / zgj_publish / zgj_cleanup`
+  经公网网关透出。download/merge/cancel 受容器下载管线自身约束（集数上限 500、
+  磁盘检查、白名单端点）；**publish/cleanup 是 115 网盘写面**（openlist 直推+
+  本地删除），openlist 凭据只在 server 内部（`ZGJ_OL_*` 0600），调用方拿不到；
+  如需收敛，在 mcphub 条目加 `tools` 覆写（`enabled:false`）或改用限权 key/组端点。
 
 ### 方式 B：stdio 直连（任意 MCP 客户端）
 
@@ -126,10 +153,41 @@ EnvironmentFile=`client-v2/mcp/.env`，0600），mcphub（224）作为上游挂�
 - **HTTP 模式鉴权**：`Authorization: Bearer <ZGJ_MCP_TOKEN>`，恒定时间比较；缺失/不符=401。
   `/healthz` 是唯一免鉴权端点（仅探活，不返回敏感信息）。token 只存 `.env`（0600，gitignore）。
 - 凭据=容器 Web 面同一套（内存 session，容器重启失效）；server 本身不落盘任何状态。
-- 本 server **只暴露 11 个受控工具**（不转发任意桥方法）——写面只有
-  Download*/Merge*/Cancel 这一族，全部受容器下载管线自身的约束（集数上限 500、
-  磁盘检查、白名单端点）。
-- wait 类工具有超时上限（下载 28min / 合并 55min），不会无限挂起 MCP 调用。
+- 本 server **只暴露 14 个受控工具**（不转发任意桥方法）——写面=Download*/Merge*/
+  Cancel/Purge/Cleanup 一族 + openlist 直推，全部受容器下载管线自身约束（集数上限
+  500、磁盘检查、白名单端点）+ openlist 凭据内部隔离。
+- wait 类工具有超时上限（**下载/合并默认 45s、上限 120s** 硬限——mcphub 阻塞 ~60s
+  掐线），不会无限挂起 MCP 调用。
+- 大列表默认摘要（total + stateCounts + id 清单 + 前 5 条），全量 `full:true`——
+  防 mcphub 网关对 >250KB 响应截断/压缩。
+
+## 验收记录（2026-11-20 无人值守 115 推送链，m05712 七项）
+
+- **14 工具全链实网**：`tools/list`=14；③ id-only（`dramas:["hongguo:7675932141238111256"]`
+  直接入队）；② 过滤+增量（`zgj_downloads {dramaId}` 只回本剧、`zgj_wait_downloads
+  {timeoutSec:8}` 实测 9.1s 回 `timedOut:true`+快照、`zgj_wait_merges {dramaId}` 快照
+  不再混入别的剧、`zgj_outputs {dramaId}` 过滤+同路径去重）；⑤ chunkSize（5 集
+  chunk=2 → 两块 [1,2][3,4,5]，**尾组 <2 集并入上一组**——核心 runMerge 要求每组
+  ≥2 连续集，首版尾组单集被拒是真 bug，已修）；⑦ 摘要形态（head 5 条+total+
+  stateCounts+ids）。
+- **① publish 全链**：→ `/local/zgj-pub-test/pub-test.mp4` channel=openlist
+  size=12464168 与源一致 + openlist 独立登录回读落盘确认；→ `/115` 死信 isError +
+  「refresh_token 已失效…到 alist.prlrr.com 重授权」指引（**115 重授权是唯一外部
+  阻塞**，224 openlist x_storages id=24 的 refresh_token 死，token 型无法程序化续期）。
+- **④ 幂等+清理**：同区段重合并=覆盖同名成品（moveFile 同盘 rename）；
+  `zgj_cleanup` 实弹删被新区段严格包含的旧文件（「逆江湖 全003-004」被 003-005 包含
+  → 删，保留 001-002/003-005），穿越八零旧成品（001-003 被 001-004 包含）同样清掉。
+- **⑥ 质量三处一致**：请求 1080 → job.actualQuality=360 → 容器 ffprobe 成品 360p →
+  job 记录 360。结论=hongguo 源只给 360p（nativePlaybackChoices 未命中取最高流），
+  非透传 bug。源限流（hongguoduanju.com 403「N 秒后重试」）→ downloadConcurrency=1
+  + `zgj_retry` 复活 failed。
+- **openlist API 真坑（源码 /tmp/olx v4.2.9 实锤）**：① Authorization 头要**裸 token**
+  （无 `Bearer ` 前缀——v4 中间件拿整头当内存缓存 key，带前缀必 401「token is
+  invalidated」假象）；② 上传=`PUT /api/fs/put`（File-Path/X-File-Size 头+原始字节流，
+  不是 multipart `/api/fs/upload`——不存在的路由落 SPA HTML 200）；③ 删除=
+  `POST /api/fs/remove {dir,names}`（不是 paths）；④ mkdir 非递归逐级建。
+- 部署坑：`cp build/bin/zgj-mcp` 报 Text file busy（服务在跑）→ `systemctl --user
+  stop`→cp→start；115 的 /tmp 反复被清（脚本/二进制丢了需重 build）。
 
 ## 验收记录（2026-11-20 HTTP 模式 + mcphub 接入）
 

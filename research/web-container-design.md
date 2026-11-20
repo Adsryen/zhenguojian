@@ -407,3 +407,77 @@ json-file 无轮转，长跑无限增长）；docker/README.md 新增「日志�
 - **hongguo 封面 HEIC 转码全失败**：ffmpeg 按扩展名（.img→猜 MOV）而非内容
   探测。影响=发现页海报全首字占位（桌面版同样现象）。正确修法=core 侧
   transcodeCover 前做 magic 探测/强制 -f heic，属 v1 共享面，另开任务。
+
+## 11. 无人值守 115 推送链（2026-11-20，用户 m05712，MCP 工具面扩展）
+
+调用方=mcphub（阿里云侧）转发的 AI agent；约束=**工具返回值会被网关截断
+（>250KB 或压缩）、阻塞调用 ~60s 被掐**；**禁止要求调用方自己 POST /login 拿
+cookie 传文件**。七项需求 → 三新工具 + 既有工具改造：
+
+### 11.1 形态定案（侦察结论）
+
+- **115 通道=224 openlist 网关**（`https://alist.prlrr.com`，容器 openlist:latest，
+  172.20.1.14:15245）。仓库内零 115/WebDAV/upyun 能力（全仓 grep 实锤）→ 走项目外
+  已有能力。115 挂载 x_storages id=24 driver="115 Open"（token 型
+  access+refresh 凭证）。
+- **openlist API 真坑**（源码 /tmp/olx v4.2.9 实锤，非文档可得）：
+  ① `Authorization` 头要**裸 token**（无 `Bearer ` 前缀——v4 中间件
+  `validTokenCache.Set(tokenString,true)` 存裸 JWT、`IsTokenInvalidated(tokenString)`
+  全等比对，带前缀必 401「token is invalidated」假象）；
+  ② 上传=`PUT /api/fs/put`（头 `File-Path`[URL-escaped 全路径]+`X-File-Size`+
+  `X-File-Sha1`[可选]+`Overwrite`[缺省 true]，body=原始字节流）——
+  `POST /api/fs/upload` 不存在，落 SPA HTML 200 非报错（验路由要对照源码）；
+  ③ 删除=`POST /api/fs/remove {dir,names,follow_seed}`（不是 paths）；
+  ④ `POST /api/fs/mkdir {path}` 非递归逐级建（message 含 "exist" 不视为错）。
+- **外部阻塞（登记）**：/115 的 refresh_token 已失效（openlist 回
+  `code: 40140137, message: refresh_token 已失效，请停止重试并重新授权`），
+  token 型凭证无法程序化续期 → 需用户到 alist.prlrr.com 重授权。工作存储
+  （/local、/Onedrive-*、/又拍云…）不受影响。
+
+### 11.2 落地
+
+- **client-v2/sidecar_filesign.go**（`//go:build zgj_sidecar`，反射自动进 WS 表）：
+  - `FileSign(path, ttlSec)` → 一次性签名 URL（`/file-signed?token=`，webFileSigns
+    单例、单次有效、TTL 上限 3600s、同 checkLocalPlayable 白名单+ServeFile 原生 Range）。
+  - `FileDelete(path)` → 文件级删除（拒目录，同白名单）。
+  - `DownloadPurgeOutputs(root)` → 清旧合并成品：`mergeOutputRe`
+    `^(.+) 全(\d{3,})-(\d{3,})集\.mkv$`，同剧名新区段**严格包含**旧区段才删（幂等覆盖
+    产生的累积垃圾，误伤安全）。
+- **client-v2/mcp/openlist.go**：`olClient`（ensure 预续期 48h、mkdirAll、put 流式
+  4h 超时不落盘、remove、statFile 回读 size 校验）。
+- **main.go 三新工具（14 工具）**：
+  - `zgj_publish`：`files` 缺省=该剧最新合并成品；openlist 齐备=server 内部
+    FileSign URL→GET 取流→PUT 直推→statFile 校验（调用方零凭据）；未配=回
+    signedUrl（基址 `ZGJ_PUBLIC_URL`，回落 `ZGJ_WEB_URL`）+bytes+目标名；115 死信带
+    重授权指引。
+  - `zgj_cleanup`：`episodes:true`→DownloadRemoveBatch；缺省→DownloadPurgeOutputs。
+  - `zgj_retry`：failed per-job DownloadRetry（限流复活，禁 blanket）。
+- **既有工具改造**：② `zgj_downloads/wait_downloads/wait_merges/outputs` 全支持
+  `dramaId`/`jobIds` 过滤（compactList 加 dramaID 参，快照不再混剧）；wait 默认
+  45s、上限 120s 硬限（原 10min/28min 超 mcphub 掐线窗）；③ drama 接受 id-only
+  字符串（`dramaRef`/`dramaRefByID`，Detail 自查标题，空标题拒绝进合并）；⑤
+  `zgj_merge chunkSize`（按 N 集切 jobIDs 多次调 selected mode——**尾组 <2 集并入
+  上一组**，核心 runMerge 要求每组 ≥2 连续集）；⑦ 大列表默认摘要（total+
+  stateCounts+ids+前 5 条，`full:true` 全量）。
+- **⑥ 质量实锤**：请求 1080 → job.actualQuality=360 → ffprobe 成品 360p → 三处一致
+  =hongguo 源只给 360p（nativePlaybackChoices@app_playback_routes.go:22 未命中取
+  最高流），**非透传 bug**；job 的 `actualQuality` 字段即真实流画质（原「job 全显示
+  360」=源限制）。
+- 源限流（hongguoduanju.com 403「N 秒后重试」）：downloadConcurrency=1 +
+  `zgj_retry` 复活；failed 不自动重试（core auto-resume 只管 paused）。
+
+### 11.3 实网验收（2026-11-20）
+
+- 14 工具在；publish→/local size 一致+openlist 独立登录回读落盘；/115 死信指引；
+  cleanup 实弹（删「逆江湖 全003-004」被 003-005 包含、「穿越八零 全001-003」被
+  001-004 包含）；wait timeoutSec=8→timedOut:true 9.1s；chunk=2 尾组合并；
+  outputs 过滤+去重；摘要形态。
+- 待 115 重授权后：《逆江湖之苍生为局》222 话全链真验收（1080 请求→源给 360→
+  每 50 集合并→publish 115→115 文件清单）。
+
+### 11.4 部署口径
+
+- 二进制替换坑：`cp build/bin/zgj-mcp` 报 Text file busy（服务在跑）→
+  `systemctl --user stop zgj-mcp`→cp→start。
+- 115 的 /tmp 反复被清：一次性脚本/二进制丢了需重 build
+  （`cd client-v2 && CGO_ENABLED=0 go build -o /tmp/zgj-mcp-check ./mcp`）。
