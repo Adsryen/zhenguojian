@@ -264,3 +264,59 @@ zgj_wait_downloads / zgj_merge / zgj_wait_merges / zgj_outputs / zgj_cancel。
 toolCallTimeoutMs=3600000 覆盖 55min 合并等待，failOnStartupError=false）。重启 DSH
 会话后工具以 `mcp__zgj__*` 出现。其他 MCP 客户端（Claude/Codex）同构：stdio + command + env。
 详见 `client-v2/mcp/README.md`。
+
+## 9. MCP 对外服务化 + mcphub 接入（2026-11-20）
+
+用户决策（m04674/m04678）：zgj-mcp 支持 0.0.0.0 对外提供服务（请求头鉴权）；**不注册
+DSH**（撤销 8.5 的 mcp-zgj stdio 条目），改按 session-d9bdb630 的途径挂到 224 的
+mcphub 网关，DSH 侧经现有 `mcp-mcphub` 条目间接调用。
+
+### 9.1 形态：HTTP 模式（streamable-http，无状态单端点）
+
+- `ZGJ_MCP_LISTEN` 非空即启用（现网 `0.0.0.0:9330`）；`ZGJ_MCP_TOKEN`（48 位 hex）
+  必填，缺失启动即 fatal。鉴权=`Authorization: Bearer`，**恒定时间比较**
+  （crypto/subtle），缺失/不符=401。
+- `POST /mcp` 无状态：响应跟随 Accept（json→JSON；含 event-stream→SSE 单事件
+  `event: message`）；通知→202；GET→405（Allow: POST, OPTIONS）；body 上限 8MB。
+  **不设 WriteTimeout**（wait 类工具最长 55min，网关侧 timeout 自管）。
+- `GET /healthz` 免鉴权探活（仅 `{ok,mode:http}`，无敏感信息）。
+- 协议核心抽成 `dispatch(line) map[string]any`，stdio/HTTP 共用同一行为。
+- 常驻：systemd **user** 服务 `zgj-mcp.service`（EnvironmentFile=
+  `client-v2/mcp/.env`，0600 且 gitignore，Restart=always），绑定 `*:9330`。
+
+### 9.2 mcphub 接入（224，照 session-d9bdb630 先例）
+
+- 条目 `mcpServers.zgj`={type:streamable-http, url:`http://192.168.0.115:9330/mcp`,
+  headers.Authorization=Bearer（与 .env 同值）}；`systemConfig.network.allowedCidrs`
+  追加 `192.168.0.115/32`（wg 隧道可达，**容器内**实测 healthz 200——224 宿主机能到
+  不等于容器能到，这一层必须从容器内探）。`docker restart mcphub` 生效。
+- 下游通路：`https://mcphub.prlrr.com/mcp`（ops-client key），工具名带网关前缀
+  **`zgj-zgj_*`**；DSH 侧经现有 mcp-mcphub 条目即见（`mcp__mcphub__zgj-zgj_*`）。
+- 写面经公网透出登记：zgj_download/zgj_merge/zgj_cancel 受容器下载管线自身约束；
+  收敛手段=mcphub 条目 `tools` 覆写 / 限权 key / 组端点（未启用，留痕即可）。
+
+### 9.3 关键决策与教训
+
+1. **网关 401 定位**：mcphub 报「Version negotiation failed: HTTP 401」且响应无 body，
+   而本服务 401 带 body——先怀疑是网关自己的闸；从 mcphub 容器内 node 直连证明网络
+   通、401 确实是本服务发的→加**临时请求头日志**（auth_present/auth_len）拿到
+   `auth_len=51`，对照真值 55 位（Bearer+7+48）→根因=224 settings 里的 token 被截成
+   44 位。教训：跨机传输的凭据落地后要**按长度/hash 回读核对**，不能只信「写进去了」。
+2. **mcphub 网关 streamable-http 是有状态的**：先 initialize 取响应头
+   `mcp-session-id` → 发 `notifications/initialized` → 后续请求带该头，否则
+   tools/list 400「No valid session ID」（本服务自身无状态，这是网关层要求）。
+3. **224 的 mcphub ops-client key 已被轮换**（mcphub_0913…→mcphub_1a677…，
+   现值 sha256 与 bearerKeys[0].tokenHash 吻合，明文在 `client_key.once`）→
+   profile mcp-mcphub 条目已刷成现值（备份 `cordis.patch.yml.bak-mcphubkey-*`）。
+   现网 key 以 224 侧为准，profile 是快照会过期。
+4. **构建路径**：go 模块根在 `client-v2/`（仓库根无 go.mod）→
+   `cd client-v2 && CGO_ENABLED=0 go build -o build/bin/zgj-mcp ./mcp`。
+
+### 9.4 实网验收（2026-11-20）
+
+- 本机鉴权矩阵：healthz 200 / 无 token 401 / 错 token 401 / GET 405 / 通知 202 /
+  带 token initialize+tools=11+sources 15 真源 / SSE 形态正确 / 缺 token env fatal。
+- mcphub 上游：`Successfully connected client for server: zgj` +
+  `Successfully listed 11 tools for server: zgj`。
+- 公网网关：initialize（serverInfo mcphub 1.2.4）→ tools/list 含 11 个
+  `zgj-zgj_*` → 实调 `zgj-zgj_sources`（15 源）/`zgj-zgj_search "穿越"`（15 条）全绿。

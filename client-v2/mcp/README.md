@@ -12,7 +12,12 @@ AI (MCP client)                本 server (stdio JSON-RPC)              zgj-v3 �
                                    登录 /login 拿 cookie              （与 Web 前端同一面）
 ```
 
-- **传输**：stdio JSON-RPC 2.0（MCP 协议，newline-delimited）。stdout 只发协议帧，日志走 stderr。
+- **两种传输**（同一协议核心 `dispatch()`，行为一致）：
+  - **stdio**：JSON-RPC 2.0 newline-delimited。stdout 只发协议帧，日志走 stderr。
+  - **HTTP（streamable-http）**：`ZGJ_MCP_LISTEN` 非空即启用（现网 `0.0.0.0:9330`），
+    `Authorization: Bearer <ZGJ_MCP_TOKEN>` 恒定时间鉴权（缺失/不符=401）。
+    `POST /mcp` 无状态单端点：响应跟随 `Accept`（json→JSON；含 event-stream→SSE 单事件）；
+    通知=202；GET=405；`GET /healthz` 探活（无需 token）；不设 WriteTimeout（wait 最长 55min）。
 - **后端**：容器 sidecar 的 `/rpc` WebSocket（与浏览器前端同一桥面、同一鉴权、同一 89 方法），
   参数编码与 sidecar 反射解码侧严格对齐（string 形参=JSON 字符串，文档型参数双重编码，
   int/bool=字面量——P3 已执行级验证过 89/89）。
@@ -21,11 +26,11 @@ AI (MCP client)                本 server (stdio JSON-RPC)              zgj-v3 �
 ## 构建
 
 ```bash
-cd /home/ryen/Git/zhenguojian
-CGO_ENABLED=0 go build -o client-v2/build/bin/zgj-mcp ./client-v2/mcp
+cd /home/ryen/Git/zhenguojian/client-v2    # 模块根在 client-v2/（仓库根无 go.mod）
+CGO_ENABLED=0 go build -o build/bin/zgj-mcp ./mcp
 ```
 
-（`client-v2/build/bin/` 已 gitignore；产物 9.3MB 纯静态，无 cgo 依赖。）
+（`client-v2/build/bin/` 已 gitignore；产物 ~9.9MB 纯静态，无 cgo 依赖。）
 
 ## 环境变量
 
@@ -36,6 +41,8 @@ CGO_ENABLED=0 go build -o client-v2/build/bin/zgj-mcp ./client-v2/mcp
 | `ZGJ_WEB_PASS` | —（必填） | 登录密码（= 容器 `.env` 的 ZGJ_WEB_PASS） |
 | `ZGJ_DATA_HOST_DIR` | `/home/ryen/Git/zhenguojian/client-v2/data` | 容器 `/data` 在 host 的挂载点（hostPath 换算用） |
 | `ZGJ_MCP_POLL_MS` | `3000` | wait 类工具轮询间隔 |
+| `ZGJ_MCP_LISTEN` | —（空=stdio 模式） | 非空即启用 HTTP 模式并监听该地址，如 `0.0.0.0:9330` |
+| `ZGJ_MCP_TOKEN` | —（HTTP 模式必填） | Bearer 鉴权令牌；缺失时 HTTP 模式启动即 fatal |
 
 ## 工具（11 个，命名空间 `mcp__zgj__*`）
 
@@ -90,34 +97,60 @@ const file = await fetch(fileUrl, {headers:{cookie:'zgj_session='+jar}})
   .then(r => r.arrayBuffer()); // 19MB 整包，或带 Range 分片
 ```
 
-## 在 DSH 里注册（本机已完成）
+## 接入方式
 
-profile `cordis.patch.yml` 的 insert 段加一条 stdio 条目：
+### 方式 A：挂到 mcphub 网关（现网已接入，2026-11-20）
 
-```yaml
-    - id: mcp-zgj
-      name: "@deepseek-ai/dsh-mcp-client"
-      config:
-        serverName: zgj
-        transport: stdio
-        command: /home/ryen/Git/zhenguojian/client-v2/build/bin/zgj-mcp
-        env:
-          ZGJ_WEB_URL: http://127.0.0.1:9320
-          ZGJ_WEB_USER: ryen
-          ZGJ_WEB_PASS: zgj-web-115
-        failOnStartupError: false
-```
+zgj-mcp 以 HTTP 模式常驻 115（systemd user 服务 `zgj-mcp.service`，
+EnvironmentFile=`client-v2/mcp/.env`，0600），mcphub（224）作为上游挂载：
 
-重启 DSH 会话后工具以 `mcp__zgj__*` 出现。其他 MCP 客户端（Claude/Codex）同理，
-stdio + command 指向上面这个二进制、注入同一组 env 即可。
+- 条目（`/opt/mcphub/data/mcp_settings.json` 的 `mcpServers.zgj`）：
+  `streamable-http` + `http://192.168.0.115:9330/mcp` + `Authorization: Bearer <token>`
+  （token 与 `.env` 的 `ZGJ_MCP_TOKEN` 同一值，48 位 hex）。
+- SSRF 闸：`systemConfig.network.allowedCidrs` 已追加 `192.168.0.115/32`
+  （wg 隧道可达，容器内实测 healthz 200）。
+- 下游通路：`https://mcphub.prlrr.com/mcp`（ops-client key，现值在 224
+  `client_key.once`），工具以 **`zgj-zgj_*`**（网关 `<serverName>-<tool>` 前缀）出现；
+  DSH 侧经现有 `mcp-mcphub` 条目即见，无需单独注册。
+- 写面暴露登记：`zgj_download / zgj_merge / zgj_cancel` 经公网网关透出，
+  受容器下载管线自身约束（集数上限 500、磁盘检查、白名单端点）；如需收敛，
+  在 mcphub 条目加 `tools` 覆写（`enabled:false`）或改用限权 key/组端点。
+
+### 方式 B：stdio 直连（任意 MCP 客户端）
+
+`command` 指向上面构建的二进制，注入 stdio 那组 env（无需 LISTEN/TOKEN）。
+工具以 `zgj_*` 原名出现。
 
 ## 安全边界
 
+- **HTTP 模式鉴权**：`Authorization: Bearer <ZGJ_MCP_TOKEN>`，恒定时间比较；缺失/不符=401。
+  `/healthz` 是唯一免鉴权端点（仅探活，不返回敏感信息）。token 只存 `.env`（0600，gitignore）。
 - 凭据=容器 Web 面同一套（内存 session，容器重启失效）；server 本身不落盘任何状态。
 - 本 server **只暴露 11 个受控工具**（不转发任意桥方法）——写面只有
   Download*/Merge*/Cancel 这一族，全部受容器下载管线自身的约束（集数上限 500、
   磁盘检查、白名单端点）。
 - wait 类工具有超时上限（下载 28min / 合并 55min），不会无限挂起 MCP 调用。
+
+## 验收记录（2026-11-20 HTTP 模式 + mcphub 接入）
+
+- **本机 HTTP 鉴权矩阵**：`/healthz` 200 `{ok,mode:http}`；`POST /mcp` 无 token→401、
+  错 token→401、GET→405（Allow: POST, OPTIONS）、通知→202；带 token initialize
+  （协议回声 2024-11-05）/tools/list=11/zgj_sources 真数据 15 源；Accept 含 SSE→
+  `event: message` 单事件；HTTP 模式缺 `ZGJ_MCP_TOKEN` env→启动即 fatal。
+- **mcphub 上游连上**：`Successfully connected client for server: zgj` +
+  `Successfully listed 11 tools for server: zgj`。
+- **公网网关全链**：`https://mcphub.prlrr.com/mcp`（ops-client key）→ initialize
+  （serverInfo mcphub 1.2.4）→ tools/list 含 11 个 `zgj-zgj_*` → 实调
+  `zgj-zgj_sources`（15 源）/`zgj-zgj_search "穿越"`（15 条真数据）全绿。
+- **排障留痕（两真 bug）**：①网关 401「version negotiation failed」——根因是
+  224 `mcp_settings.json` 里的 zgj Bearer 被截成 44 位（真值 48 位），加临时
+  请求头日志（`auth_len=51`）定位后按 48 位重填即连上，日志随后移除；
+  ②公网 `tools/list` 400「No valid session ID」——mcphub 网关 streamable-http
+  有状态，须先 `initialize` 取 `mcp-session-id` 头、发 `notifications/initialized`，
+  后续请求带该头。
+- **现网漂移（已修）**：profile `mcp-mcphub` 的 Bearer key 被 224 轮换
+  （mcphub_0913…→mcphub_1a677…，与 `client_key.once` 的 sha256 吻合），
+  已把 profile 刷成现值（备份 `cordis.patch.yml.bak-mcphubkey-*`）。
 
 ## 验收记录（2026-11-19 实网）
 

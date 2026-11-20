@@ -38,3 +38,4 @@ client-v2/electron/out/
 client-v2/electron/staging/
 .env
 client-v2/data
+client-v2/mcp/.env

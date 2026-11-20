@@ -23,11 +23,14 @@
 //   ZGJ_WEB_PASS       登录密码（必填）
 //   ZGJ_DATA_HOST_DIR  容器 /data 在 host 上的挂载点（默认 /home/ryen/Git/zhenguojian/client-v2/data）
 //   ZGJ_MCP_POLL_MS    wait 类工具轮询间隔（默认 3000）
+//   ZGJ_MCP_LISTEN     非空=HTTP 模式（streamable-http，如 0.0.0.0:9330）；空=stdio 模式
+//   ZGJ_MCP_TOKEN      HTTP 模式的 Bearer 请求头鉴权 token（HTTP 模式必填）
 package main
 
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,6 +56,8 @@ type config struct {
 	pass      string
 	hostData  string // 容器 /data → host 前缀
 	pollEvery time.Duration
+	listen    string // 非空=HTTP(streamable-http)模式监听地址，如 0.0.0.0:9330
+	token     string // HTTP 模式的 Bearer 鉴权 token
 }
 
 func loadConfig() *config {
@@ -62,6 +67,8 @@ func loadConfig() *config {
 		pass:      os.Getenv("ZGJ_WEB_PASS"),
 		hostData:  envOr("ZGJ_DATA_HOST_DIR", "/home/ryen/Git/zhenguojian/client-v2/data"),
 		pollEvery: 3000 * time.Millisecond,
+		listen:    os.Getenv("ZGJ_MCP_LISTEN"),
+		token:     os.Getenv("ZGJ_MCP_TOKEN"),
 	}
 	if ms := os.Getenv("ZGJ_MCP_POLL_MS"); ms != "" {
 		if n, err := strconv.Atoi(ms); err == nil && n >= 500 {
@@ -83,6 +90,9 @@ func envOr(k, d string) string {
 func (c *config) check() error {
 	if c.user == "" || c.pass == "" {
 		return errors.New("缺少凭据：请设置 ZGJ_WEB_USER / ZGJ_WEB_PASS")
+	}
+	if c.listen != "" && c.token == "" {
+		return errors.New("HTTP 模式必须设置 ZGJ_MCP_TOKEN（Bearer 鉴权 token）")
 	}
 	return nil
 }
@@ -299,24 +309,28 @@ type rpcMsg struct {
 	Params  json.RawMessage `json:"params"`
 }
 
+func rpcOK(id json.RawMessage, result any) map[string]any {
+	return map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
+}
+
+func rpcErr(id json.RawMessage, code int, msg string) map[string]any {
+	return map[string]any{
+		"jsonrpc": "2.0", "id": id,
+		"error": map[string]any{"code": code, "message": msg},
+	}
+}
+
+// srvWriteEnvelope stdio 模式下写一条 JSON-RPC 信封（nil=通知，不写）。
 var outMu sync.Mutex
 
-func writeOut(v any) {
-	b, _ := json.Marshal(v)
+func srvWriteEnvelope(env map[string]any) {
+	if env == nil {
+		return
+	}
+	b, _ := json.Marshal(env)
 	outMu.Lock()
 	_, _ = os.Stdout.Write(append(b, '\n'))
 	outMu.Unlock()
-}
-
-func respond(id json.RawMessage, result any) {
-	writeOut(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
-}
-
-func respondErr(id json.RawMessage, code int, msg string) {
-	writeOut(map[string]any{
-		"jsonrpc": "2.0", "id": id,
-		"error": map[string]any{"code": code, "message": msg},
-	})
 }
 
 type toolDef struct {
@@ -932,20 +946,85 @@ func main() {
 		log.Fatal(err)
 	}
 	srv := &server{cfg: cfg, b: newBridge(cfg)}
-	log.Printf("zgj-mcp 启动：base=%s user=%s hostData=%s", cfg.baseURL, cfg.user, cfg.hostData)
+	log.Printf("zgj-mcp 启动：base=%s user=%s hostData=%s mode=%s",
+		cfg.baseURL, cfg.user, cfg.hostData, modeName(cfg))
 
 	// 启动即预登录一次（快速暴露凭据/容器问题到 stderr，不阻塞协议）。
 	if err := srv.b.ensure(); err != nil {
 		log.Printf("预登录失败（首次工具调用会再试）：%v", err)
 	}
 
+	if cfg.listen != "" {
+		srv.runHTTP()
+		return
+	}
+	srv.runStdio()
+}
+
+func modeName(cfg *config) string {
+	if cfg.listen != "" {
+		return "http(" + cfg.listen + ")"
+	}
+	return "stdio"
+}
+
+// dispatch 处理一条 JSON-RPC 帧，返回应答信封（通知返回 nil）。
+func (s *server) dispatch(line []byte) map[string]any {
+	var msg rpcMsg
+	if err := json.Unmarshal(line, &msg); err != nil {
+		return rpcErr(json.RawMessage("null"), -32700, "parse error: "+err.Error())
+	}
+	id := msg.ID
+	if len(id) == 0 || string(id) == "null" {
+		return nil // 通知（notifications/initialized 等）：不应答
+	}
+	switch msg.Method {
+	case "initialize":
+		pv := "2024-11-05"
+		var init struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if json.Unmarshal(msg.Params, &init) == nil && versionRe.MatchString(init.ProtocolVersion) {
+			pv = init.ProtocolVersion // 回声客户端版本，SDK 自动协商兜底
+		}
+		return rpcOK(id, map[string]any{
+			"protocolVersion": pv,
+			"capabilities":    map[string]any{"tools": map[string]any{}},
+			"serverInfo":      map[string]any{"name": "zgj-v3-mcp", "version": "1.1.0"},
+			"instructions": "真果鉴 v3 容器（115）AI 接入面。推荐链路：zgj_search 找剧 → zgj_detail 看分集 → zgj_download 下集 → zgj_wait_downloads → zgj_merge 合并 → zgj_wait_merges → zgj_outputs 拿 fileUrl/hostPath 交接上传侧。",
+		})
+	case "tools/list":
+		return rpcOK(id, map[string]any{"tools": s.tools()})
+	case "tools/call":
+		var call struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		if err := json.Unmarshal(msg.Params, &call); err != nil {
+			return rpcErr(id, -32602, "invalid params: "+err.Error())
+		}
+		out, isErr := s.callTool(call.Name, call.Arguments)
+		return rpcOK(id, map[string]any{
+			"content": []map[string]any{{"type": "text", "text": out}},
+			"isError": isErr,
+		})
+	case "ping":
+		return rpcOK(id, map[string]any{})
+	default:
+		return rpcErr(id, -32601, "method not found: "+msg.Method)
+	}
+}
+
+// ---------------------------------------------------------------- stdio 模式
+
+func (s *server) runStdio() {
 	in := bufio.NewReader(os.Stdin)
 	for {
 		line, err := in.ReadBytes('\n')
 		if len(line) > 0 {
 			line = bytes.TrimSpace(line)
 			if len(line) > 0 {
-				srv.handle(line)
+				srvWriteEnvelope(s.dispatch(line))
 			}
 		}
 		if err != nil {
@@ -959,50 +1038,77 @@ func main() {
 	log.Printf("zgj-mcp 退出（stdin EOF）")
 }
 
-func (s *server) handle(line []byte) {
-	var msg rpcMsg
-	if err := json.Unmarshal(line, &msg); err != nil {
-		respondErr(json.RawMessage("null"), -32700, "parse error: "+err.Error())
+// ---------------------------------------------------------------- HTTP 模式（streamable-http，供 mcphub 等网关）
+
+// 无状态单端点：每个 POST /mcp 自带完整请求，不保存会话状态（与 magnet 先例
+// 「无状态 streamable HTTP」同形态）。响应形态跟随 Accept 头：
+//   - 含 application/json → 直接 JSON 应答
+//   - 含 text/event-stream → SSE 单事件应答
+// 鉴权=Authorization: Bearer <ZGJ_MCP_TOKEN>，恒定时间比较，缺失/不符=401。
+// GET /mcp 返回 405（本实现不开 GET SSE 流）；GET /healthz 供探活（不需 token）。
+
+func (s *server) runHTTP() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"mode":"http"}`)
+	})
+	mux.HandleFunc("/mcp", s.handleMCP)
+	log.Printf("zgj-mcp HTTP 监听 %s/mcp（Bearer 鉴权已启用）", s.cfg.listen)
+	srv := &http.Server{
+		Addr:              s.cfg.listen,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	// wait 类工具最长 55min：不设 WriteTimeout（网关侧 timeout 自管）。
+	err := srv.ListenAndServe()
+	log.Printf("zgj-mcp HTTP 退出：%v", err)
+}
+
+func (s *server) handleMCP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		w.Header().Set("Allow", "POST, OPTIONS")
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	id := msg.ID
-	if len(id) == 0 || string(id) == "null" {
-		return // 通知（notifications/initialized 等）：不应答
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", "POST, OPTIONS")
+		http.Error(w, "method not allowed: use POST", http.StatusMethodNotAllowed)
+		return
 	}
-	switch msg.Method {
-	case "initialize":
-		pv := "2024-11-05"
-		var init struct {
-			ProtocolVersion string `json:"protocolVersion"`
-		}
-		if json.Unmarshal(msg.Params, &init) == nil && versionRe.MatchString(init.ProtocolVersion) {
-			pv = init.ProtocolVersion // 回声客户端版本，SDK 自动协商兜底
-		}
-		respond(id, map[string]any{
-			"protocolVersion": pv,
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "zgj-v3-mcp", "version": "1.0.0"},
-			"instructions": "真果鉴 v3 容器（115）AI 接入面。推荐链路：zgj_search 找剧 → zgj_detail 看分集 → zgj_download 下集 → zgj_wait_downloads → zgj_merge 合并 → zgj_wait_merges → zgj_outputs 拿 host 路径交接上传侧。",
-		})
-	case "tools/list":
-		respond(id, map[string]any{"tools": s.tools()})
-	case "tools/call":
-		var call struct {
-			Name      string          `json:"name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}
-		if err := json.Unmarshal(msg.Params, &call); err != nil {
-			respondErr(id, -32602, "invalid params: "+err.Error())
-			return
-		}
-		out, isErr := s.callTool(call.Name, call.Arguments)
-		respond(id, map[string]any{
-			"content": []map[string]any{{"type": "text", "text": out}},
-			"isError": isErr,
-		})
-	case "ping":
-		respond(id, map[string]any{})
-	default:
-		respondErr(id, -32601, "method not found: "+msg.Method)
+	// Bearer 鉴权（恒定时间比较）。
+	if !s.tokenOK(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		http.Error(w, "read error", http.StatusBadRequest)
+		return
+	}
+	env := s.dispatch(body)
+	accept := r.Header.Get("Accept")
+	wantsSSE := strings.Contains(accept, "text/event-stream")
+	if env == nil {
+		// 通知：202 无应答
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+	b, _ := json.Marshal(env)
+	if wantsSSE {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		fmt.Fprintf(w, "event: message\ndata: %s\n\n", b)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(append(b, '\n'))
+}
+
+func (s *server) tokenOK(r *http.Request) bool {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") || s.cfg.token == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(auth, "Bearer ")), []byte(s.cfg.token)) == 1
 }
