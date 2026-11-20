@@ -16,6 +16,7 @@ import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { CreatorEntry, CreatorProfileInfo, CreatorTabGroup, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
 import { detailRoute } from '@/services/dramaRef'
+import { friendlyError } from '@/services/errors'
 import { t, tf } from '@/services/i18n'
 import PosterGrid from '@/components/PosterGrid.vue'
 
@@ -76,7 +77,7 @@ async function loadProfile() {
     }
   } catch (e: any) {
     profile.value = null
-    profileError.value = e?.message ?? String(e)
+    profileError.value = friendlyError(e)
   } finally {
     profileLoading.value = false
   }
@@ -160,7 +161,7 @@ async function loadWorks(reset: boolean) {
     if (nextCursor) worksCursor.value = nextCursor
   } catch (e: any) {
     if (seq !== requestSeq) return
-    worksError.value = e?.message ?? String(e)
+    worksError.value = friendlyError(e)
     worksHasMore.value = false
   } finally {
     if (seq === requestSeq) {
@@ -205,12 +206,15 @@ async function retry() {
 /* ---------- 复制 ID ---------- */
 
 const toast = ref('')
+const toastKind = ref<'info' | 'error'>('info')
 let toastTimer: number | undefined
 
-function showToast(msg: string) {
+function showToast(msg: string, kind: 'info' | 'error' = 'info') {
   toast.value = msg
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   window.clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 2200)
+  toastTimer = window.setTimeout(() => (toast.value = ''), kind === 'error' ? 5200 : 2200)
 }
 
 async function copyId() {
@@ -236,7 +240,7 @@ async function copyId() {
         showToast(t('creator.copied'))
         return
       } catch (e: any) {
-        showToast(tf('creator.copyFailed', { msg: e?.message ?? e }))
+        showToast(tf('creator.copyFailed', { msg: friendlyError(e) }), 'error')
         return
       }
     }
@@ -367,7 +371,7 @@ watch(() => route.query.u, () => void boot())
       </div>
     </template>
 
-    <div v-if="toast" class="toast">{{ toast }}</div>
+    <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">{{ toast }}</div>
   </div>
 </template>
 
@@ -546,5 +550,8 @@ watch(() => route.query.u, () => void boot())
   padding: 8px 14px;
   font-size: 13px;
   z-index: 60;
+}
+.toast.error {
+  border-color: var(--danger);
 }
 </style>

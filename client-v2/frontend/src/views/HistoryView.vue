@@ -8,6 +8,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { MOCK_MODE } from '@/services/api'
+import { friendlyError } from '@/services/errors'
 import { t, tf } from '@/services/i18n'
 import type { HistoryRow } from '@/services/types'
 import { playerRoute } from '@/services/dramaRef'
@@ -30,10 +31,13 @@ const seeded = ref(false)
 const toast = ref('')
 let toastTimer: number | undefined
 
-function showToast(msg: string) {
+const toastKind = ref<'info' | 'error'>('info')
+function showToast(msg: string, kind: 'info' | 'error' = 'info') {
   toast.value = msg
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
+  toastTimer = window.setTimeout(() => (toast.value = ''), kind === 'error' ? 5200 : 3200)
 }
 
 const rows = computed(() => [...watch.history].sort((a, b) => b.updated - a.updated))
@@ -87,7 +91,7 @@ async function removeRow(r: HistoryRow) {
     await watch.removeHistory(r.drama.id)
     showToast(tf('history.deleted', { t: title }))
   } catch (e: any) {
-    showToast(e?.message ?? t('history.deleteFail'))
+    showToast(friendlyError(e) || t('history.deleteFail'), 'error')
   }
 }
 
@@ -97,7 +101,7 @@ async function onClear() {
     seeded.value = false
     showToast(t('history.cleared'))
   } catch (e: any) {
-    showToast(e?.message ?? t('history.clearFail'))
+    showToast(friendlyError(e) || t('history.clearFail'), 'error')
   }
 }
 
@@ -173,7 +177,7 @@ function posText(r: HistoryRow): string {
     </p>
   </div>
 
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">{{ toast }}</div>
 </template>
 
 <style scoped>
@@ -304,5 +308,8 @@ function posText(r: HistoryRow): string {
   font-size: 13px;
   box-shadow: 0 6px 24px var(--guo-shadow);
   z-index: 60;
+}
+.toast.error {
+  border: 1px solid var(--danger);
 }
 </style>

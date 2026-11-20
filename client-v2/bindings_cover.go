@@ -60,25 +60,31 @@ const (
 func (a *App) Cover(dramaJSON string, force bool) (string, error) {
 	drama, err := unmarshalObject(dramaJSON)
 	if err != nil {
+		zgjLogf("cover 失败：drama 对象解析错误: %v", err)
 		return "", err
 	}
+	dramaID, _ := drama["id"].(string)
 	data, err := native.Cover(drama, force)
 	if err != nil {
+		zgjLogf("cover 失败：drama=%s force=%v 核心: %v", dramaID, force, err)
 		return "", err
 	}
 	src, _ := data["path"].(string)
 	if src == "" {
+		zgjLogf("cover 失败：drama=%s 核心未返回封面文件路径", dramaID)
 		return "", errors.New("核心未返回封面文件路径")
 	}
 	heic, _ := data["heic"].(bool)
 	display := src
 	if heic {
 		if display, err = transcodeCover(src); err != nil {
+			zgjLogf("cover 失败：drama=%s HEIC 转码: %v", dramaID, err)
 			return "", err
 		}
 	}
 	mime, body, err := readCoverImage(display)
 	if err != nil {
+		zgjLogf("cover 失败：drama=%s 读取/编码: %v", dramaID, err)
 		return "", err
 	}
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(body), nil

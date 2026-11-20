@@ -18,6 +18,7 @@
    - M 静音=音量 0 ↔ 恢复（桥无 mpv mute 属性，用 setVolume 近似，见返报差异）。 */
 import { defineStore } from 'pinia'
 import { api, MOCK_MODE } from '@/services/api'
+import { friendlyError } from '@/services/errors'
 import { t, tf } from '@/services/i18n'
 import {
   ApiError,
@@ -300,7 +301,9 @@ export const usePlayerStore = defineStore('player', {
              现在兜到 String(err) 与 code/name，宁可难看也不留空白。 */
           const raw = String(e?.message ?? err ?? '')
           const detail = raw.trim() || e?.code || e?.name || (typeof err === 'object' ? JSON.stringify(err) : '')
-          this.error = detail ? tf('player.playFailedMsg', { m: detail }) : t('player.playFailed')
+          // v3 可观测性：detail 槽走统一映射（「WS 连接已断开」→ 友好话术）；
+          // 未知错误 friendlyError 原文透出，信息量不丢。
+          this.error = detail ? tf('player.playFailedMsg', { m: friendlyError(new Error(detail)) }) : t('player.playFailed')
         }
       } finally {
         this.loading = false
@@ -403,7 +406,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await this.openEpisode(this.drama, this.episodeIndex + 1, 0)
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? t('player.nextOpenFailed')
+        this.error = friendlyError(e) || t('player.nextOpenFailed')
       } finally {
         this.loading = false
       }
@@ -417,7 +420,7 @@ export const usePlayerStore = defineStore('player', {
       try {
         await this.openEpisode(this.drama, this.episodeIndex - 1, 0)
       } catch (e) {
-        this.error = (e as ApiError)?.message ?? t('player.prevOpenFailed')
+        this.error = friendlyError(e) || t('player.prevOpenFailed')
       } finally {
         this.loading = false
       }
@@ -537,7 +540,11 @@ export const usePlayerStore = defineStore('player', {
       })
       el.addEventListener('error', () => {
         if (this.webVideo !== el || !this.webMediaUrl) return // 空 src 初始态不报错
-        this.error = t('player.playFailed')
+        // v3 可观测性：带 MediaError 码（1=src 不支持 2=网络 3=解码 4=源无效），
+        // 映射到 err.play_failed 话术；码本身进 error 条供排查（docker logs 侧
+        // 访问日志另有 /video/seg 或 /file 的 4xx/5xx 行）。
+        const code = el.error ? `（码 ${el.error.code}）` : ''
+        this.error = friendlyError(new Error('MEDIA_ERR' + code)) || t('player.playFailed')
       })
     },
 

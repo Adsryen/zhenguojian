@@ -10,6 +10,8 @@ import { useAppStore } from '@/stores/app'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import { ApiError, type Drama } from '@/services/types'
 import { detailRoute } from '@/services/dramaRef'
+import { webBridgeEnabled } from '@/services/wsBridge'
+import { friendlyError } from '@/services/errors'
 import { t, tf } from '@/services/i18n'
 import { coverDiagnosticText, coverDiagnostics, onCoverDiagnostics, type CoverDiagnostics } from '@/services/covers'
 import SourceSwitch from '@/components/SourceSwitch.vue'
@@ -39,7 +41,11 @@ const warning = ref('')
 const chips = ref<Chip[]>([])
 const activeChip = ref('')
 const toast = ref('')
+const toastKind = ref<'info' | 'error'>('info')
 let toastTimer: number | undefined
+/** v3 web 容器形态（P1 同判据）：「复制诊断」是桌面 IPC 排查面，web 下开发者
+    直接 docker logs，按钮与「发回」措辞无意义 → 警示条改纯提示 + error toast。 */
+const isWebMode = webBridgeEnabled()
 let requestSeq = 0
 
 /* ---- 封面失败警示条（covers.ts 诊断驱动；修「全部首字占位但看不到报错」） ---- */
@@ -49,17 +55,26 @@ const coverBanner = ref('')
 const coverFailCount = ref(0)
 /** 本页会话内关闭后不再弹（组件卸载重挂视为新会话） */
 let coverBannerDismissed = false
+/** web 形态的失败 toast 每会话只出一次（listener 每次失败都回调，不能刷屏） */
+let coverToastShown = false
 let unsubCoverDiag: (() => void) | undefined
 
 function applyCoverDiag(d: CoverDiagnostics) {
   coverFailCount.value = d.failCount
-  if (coverBannerDismissed) return
   if (d.failCount < COVER_FAIL_THRESHOLD) {
     coverBanner.value = ''
     return
   }
   // 缺 ffmpeg 只要出现过就优先引导（可操作），否则泛化报错
-  coverBanner.value = (d.kindCounts['missing-ffmpeg'] ?? 0) > 0 ? 'missing-ffmpeg' : 'error'
+  const kind = (d.kindCounts['missing-ffmpeg'] ?? 0) > 0 ? 'missing-ffmpeg' : 'error'
+  // web 形态：首次到阈值出一次 error toast（带最近原因，用户不点按钮也知道为什么
+  // 海报是首字）；桌面形态保持原行为（无 toast，靠「复制诊断」按钮）。
+  if (isWebMode && kind === 'error' && d.lastMessage && !coverToastShown) {
+    coverToastShown = true
+    showToast(tf('covers.toast.failed', { n: d.failCount }) + ' ' + tf('covers.banner.partialReason', { r: friendlyError(new Error(d.lastMessage), false) }), 'error')
+  }
+  if (coverBannerDismissed) return
+  coverBanner.value = kind
 }
 
 async function copyCoverDiagnostics() {
@@ -232,19 +247,22 @@ async function loadMore() {
     hasMore.value = !!res.hasMore && emptyPages.value < 2
   } catch (e: any) {
     if (seq !== requestSeq) return
-    // 翻页失败：停 auto-load，保留已加载内容 + toast
+    // 翻页失败：停 auto-load，保留已加载内容 + toast（友好话术；原文进 console）
     loadingMore.value = false
-    showToast(tf('discover.loadFailedMsg', { m: e?.message ?? e }))
+    showToast(tf('discover.loadFailedMsg', { m: friendlyError(e) }), 'error')
+    console.error('[discover] 翻页失败原文:', e)
     hasMore.value = false
     return
   }
   loadingMore.value = false
 }
 
-function showToast(msg: string) {
+function showToast(msg: string, kind: 'info' | 'error' = 'info') {
   toast.value = msg
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
+  toastTimer = window.setTimeout(() => (toast.value = ''), kind === 'error' ? 5200 : 3200)
 }
 
 function pickChip(c: Chip) {
@@ -305,9 +323,13 @@ onBeforeUnmount(() => {
     <span class="cover-banner-text">{{
       coverBanner === 'missing-ffmpeg'
         ? t('covers.banner.missingFfmpeg')
-        : tf('covers.banner.partialN', { n: coverFailCount })
+        : isWebMode
+          ? tf('covers.banner.partialWeb', { n: coverFailCount })
+          : tf('covers.banner.partialN', { n: coverFailCount })
     }}</span>
-    <button v-if="coverBanner === 'error'" class="btn banner-copy" data-testid="cover-banner-copy" @click="copyCoverDiagnostics">
+    <!-- 「复制诊断」是桌面 IPC 排查面：web 容器形态开发者直接 docker logs，
+         按钮留着只会让用户点了也发不出去（用户 m04808 反馈）→ web 形态隐藏 -->
+    <button v-if="coverBanner === 'error' && !isWebMode" class="btn banner-copy" data-testid="cover-banner-copy" @click="copyCoverDiagnostics">
       {{ t('covers.banner.copy') }}
     </button>
     <button class="btn banner-close" :aria-label="t('covers.banner.dismiss')" data-testid="cover-banner-close" @click="dismissCoverBanner">
@@ -350,7 +372,7 @@ onBeforeUnmount(() => {
     />
   </div>
 
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">{{ toast }}</div>
 </template>
 
 <style scoped>
@@ -402,5 +424,10 @@ onBeforeUnmount(() => {
   font-size: 13px;
   box-shadow: 0 6px 24px var(--guo-shadow);
   z-index: 60;
+}
+/* 错误变体（v3 可观测性）：与全局 --danger 同色相，边框强调「这是出错不是提示」。
+   注意：禁 background 颜色是卡片 schema 规则，scoped CSS 里用既有设计令牌无碍。 */
+.toast.error {
+  border: 1px solid var(--danger);
 }
 </style>

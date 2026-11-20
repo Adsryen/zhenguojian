@@ -39,15 +39,34 @@ docker compose -f client-v2/docker/docker-compose.yml up -d --build
 - 容器内出站直连（无代理 ENV）；源站可达性与桌面版同源
 - 局域网其他设备直接访问同 URL 即可（同一登录态各自独立）
 
+## 日志与排查（docker logs）
+
+sidecar 的运行期诊断**全部走 stderr**（容器 = `docker logs zgj-v3`），统一带
+`[zgj <时间戳>]` 前缀，单行、可直接 `grep`。日志由 `zgj_errlog.go` 的 `zgjLogf`
+集中输出，分五类（`/health` 已静默，不会刷爆）：
+
+| 行 | 含义 | 何时看 |
+|---|---|---|
+| `http GET /video/seg?url=… 206 42ms ua=…` | 访问日志（含 status+耗时） | 复现某端点行为、看谁在调 |
+| `video/seg 错误：GET → 502 target=…` | 视频代理错误（上游挂了/越界） | 视频转圈/seek 失败 |
+| `rpc 失败 PlayerState（12ms）: …` | Go 侧 RPC 原始错误 | 前端 toast 只露一句，根因在这 |
+| `rpc 慢调用 DownloadStart 3.2s result=120B` | 成功但 >3s 的调用 | 「转圈不动」类问题 |
+| `cover 失败：drama=… 核心: …` / `login 失败：user=…` | 封面/登录失败根因 | 海报全首字、登录 401 |
+
+> 设计取舍：桌面形态（`zgj` 进程）没有控制台，这些行不可见但无害；
+> stdio sidecar 里 stdout 已被改道，诊断仍走 stderr，协议独占原始 fd 不受影响。
+> 日志轮转由 compose 的 `logging.max-size/max-file` 控制（10MiB×5）。
+
 ## 验收与排障
 
 | 现象 | 查法 |
 |---|---|
 | 进不去（502/拒绝连接） | `docker ps`（容器在跑吗）→ `docker logs zgj-v3`（sidecar 崩没崩） |
 | 登录页转圈 | 容器健康检查：`curl http://127.0.0.1:9320/health` 应回 `{"ok":true,"mode":"web"}` |
-| 剧卡/榜单空白 | 数据面源站问题（桌面版同源），`docker logs` 看 core 抓取报错 |
-| 视频黑屏但页面在 | F12 Network 看 `/video/seg` 是否 206；Console 有无 MSE/hls.js 报错 |
+| 剧卡/榜单空白 | 数据面源站问题（桌面版同源），`docker logs` grep `rpc 失败` / `core` |
+| 视频黑屏但页面在 | F12 Network 看 `/video/seg` 是否 206；`docker logs` grep `video/seg 错误` |
 | 本地成片打不开 | 文件必须在 `data/appdata/downloads/` 之下（越界 403 是安全设计，不是 bug） |
+| 海报全首字（封面挂了） | 页面有 toast 提示；根因 `docker logs` grep `cover 失败`（缺 ffmpeg 会单独标 missing-ffmpeg） |
 | 弹幕没有 | hongguo 源上游抽样稀疏是常态（桌面版同数据）；看 F12 里 `DanmakuAll` 返回 |
 
 CI 门禁：[v3-docker-image](../../.github/workflows/v3-docker-image.yml) 在 push 到

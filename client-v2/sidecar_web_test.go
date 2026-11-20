@@ -410,3 +410,54 @@ func TestWebEndpoints(t *testing.T) {
 		t.Fatal("WS 往返未收齐 Ping/__methods")
 	}
 }
+
+// TestAccessLog —— v3 可观测性：访问日志纪律（/health 静默、其余端点单行
+// 带 status+耗时、query 截断）。换掉 zgjLogWriter 断言行内容。
+func TestAccessLog(t *testing.T) {
+	static := t.TempDir()
+	if err := os.WriteFile(static+"/index.html", []byte("<html>ok</html>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	srv := newWebTestApp(t, "ryen", "s3cret", static)
+
+	var buf bytes.Buffer
+	orig := zgjLogWriter
+	zgjLogWriter = &lockedWriter{w: &buf}
+	defer func() { zgjLogWriter = orig }()
+
+	// /health 静默（compose 健康检查每 30s 一次，全记会刷爆日志）
+	if resp, err := http.Get(srv.URL + "/health"); err != nil || resp.StatusCode != 200 {
+		t.Fatalf("/health: %v %v", err, resp.StatusCode)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("/health 必须静默，却写了: %q", buf.String())
+	}
+
+	// 登录失败：401 行 + login 失败诊断行
+	resp, _ := http.Post(srv.URL+"/login", "application/json",
+		strings.NewReader(`{"user":"ryen","pass":"wrong"}`))
+	if resp.StatusCode != 401 {
+		t.Fatalf("错口令应 401")
+	}
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var sawHttp401, sawLoginFail bool
+	for _, l := range lines {
+		if strings.Contains(l, "POST /login 401") {
+			sawHttp401 = true
+		}
+		if strings.Contains(l, "login 失败") {
+			sawLoginFail = true
+		}
+	}
+	if !sawHttp401 || !sawLoginFail {
+		t.Fatalf("应有访问 401 行与 login 失败行: %q", lines)
+	}
+
+	// /whoami 401（未登录）也进访问日志
+	if resp, _ := http.Get(srv.URL + "/whoami"); resp.StatusCode != 401 {
+		t.Fatalf("/whoami 未登录应 401")
+	}
+	if !strings.Contains(buf.String(), "GET /whoami 401") {
+		t.Fatalf("缺 /whoami 401 访问行: %q", buf.String())
+	}
+}

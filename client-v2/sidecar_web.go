@@ -20,10 +20,12 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -66,14 +68,23 @@ func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
 			return
 		}
 		target := strings.TrimSpace(r.URL.Query().Get("url"))
+		// 错误诊断行（v3 可观测性）：代理是「容器内 loopback 流 → 浏览器」的桥，
+		// 上游流服务器挂了/目标越界是用户侧「视频转圈/seek 失败」的头号根因。
+		// 访问日志只记 status，这里补 target 原文（defer 覆盖下面所有错误出口）。
+		sw := &statusCaptureWriter{ResponseWriter: w, status: 200}
+		defer func() {
+			if sw.status >= 400 {
+				zgjLogf("video/seg 错误：%s → %d target=%s", r.Method, sw.status, target)
+			}
+		}()
 		if !segLoopbackHostRe.MatchString(target) {
-			http.Error(w, "forbidden target (loopback only)", http.StatusForbidden)
+			http.Error(sw, "forbidden target (loopback only)", http.StatusForbidden)
 			return
 		}
 		// 构造上游请求，透传方法 + Range/If-Range（视频 seek/缓冲都靠它）。
 		up, err := http.NewRequestWithContext(r.Context(), r.Method, target, nil)
 		if err != nil {
-			http.Error(w, "bad upstream", http.StatusBadGateway)
+			http.Error(sw, "bad upstream", http.StatusBadGateway)
 			return
 		}
 		for _, name := range []string{"Range", "If-Range", "Accept"} {
@@ -83,7 +94,7 @@ func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
 		}
 		resp, err := client.Do(up)
 		if err != nil {
-			http.Error(w, "upstream fetch failed", http.StatusBadGateway)
+			http.Error(sw, "upstream fetch failed", http.StatusBadGateway)
 			return
 		}
 		defer resp.Body.Close()
@@ -100,16 +111,16 @@ func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
 		// 还退化成 Go 按字节嗅探（首块 ftyp→mp4、中段→octet-stream，纯巧合）。
 		if isPlaylist {
 			if ct != "" {
-				w.Header().Set("Content-Type", ct)
+				sw.Header().Set("Content-Type", ct)
 			}
 		} else {
 			for _, name := range []string{"Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"} {
 				if v := resp.Header.Get(name); v != "" {
-					w.Header().Set(name, v)
+					sw.Header().Set(name, v)
 				}
 			}
 		}
-		w.WriteHeader(resp.StatusCode)
+		sw.WriteHeader(resp.StatusCode)
 		if isPlaylist {
 			body, rerr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 			if rerr != nil {
@@ -117,11 +128,11 @@ func newVideoSegHandler(auth *webAuthStore) http.HandlerFunc {
 			}
 			rewritten := segStreamURLRe.ReplaceAllStringFunc(string(body),
 				func(m string) string { return "/video/seg?url=" + url.QueryEscape(m) })
-			_, _ = io.WriteString(w, rewritten)
+			_, _ = io.WriteString(sw, rewritten)
 			return
 		}
 		// 媒体字节：流式回灌（不整体入内存，mp4 可能几百 MB）。
-		_, _ = io.Copy(w, resp.Body)
+		_, _ = io.Copy(sw, resp.Body)
 	}
 }
 
@@ -337,7 +348,8 @@ func (h *wsHub) serve(auth *webAuthStore, rt *sidecarRuntime, w http.ResponseWri
 
 // buildWebMux 构建 web 模式的 HTTP 路由表（抽函数是为了 httptest 可注入）。
 // 鉴权中间件：除 /health、/login、静态外，/rpc 在握手时查 cookie。
-func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuthStore, staticDir string) *http.ServeMux {
+// 出口=accessLogger 包一层的 Handler（访问日志，见其注释）。
+func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuthStore, staticDir string) http.Handler {
 	mux := http.NewServeMux()
 	// 无鉴权存活探针（编排/健康检查用，不泄密）。
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -362,9 +374,12 @@ func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuth
 		uOK := subtle.ConstantTimeCompare([]byte(body.User), []byte(auth.User)) == 1
 		pOK := subtle.ConstantTimeCompare([]byte(body.Pass), []byte(auth.Pass)) == 1
 		if !uOK || !pOK {
+			// 登录失败留痕（不记口令原文，只记尝试的用户名与来源）。
+			zgjLogf("login 失败：user=%s remote=%s", body.User, r.RemoteAddr)
 			http.Error(w, "bad credentials", http.StatusUnauthorized)
 			return
 		}
+		zgjLogf("login 成功：user=%s remote=%s", auth.User, r.RemoteAddr)
 		tok, err := store.add()
 		if err != nil {
 			http.Error(w, "internal", http.StatusInternalServerError)
@@ -416,7 +431,68 @@ func buildWebMux(auth webAuthEnv, rt *sidecarRuntime, hub *wsHub, store *webAuth
 		}
 		http.StripPrefix("/", http.FileServer(http.Dir(staticDir))).ServeHTTP(w, r)
 	})
-	return mux
+	return accessLogger(mux)
+}
+
+// ── 访问日志（v3 可观测性）─────────────────────────────────────────────────
+//
+// v3 容器形态下排查主通道=docker logs（sidecar stderr）。HTTP 面此前只有
+// 启动/监听行，运行期「谁在什么时候调了什么、什么状态、多久」全是盲区
+// （用户报「封面挂了」时只能靠前端 F12 猜）。这里补一层薄访问日志：
+//
+//	[zgj …] http GET /video/seg?url=… 206 42ms ua=…
+//
+// 纪律：
+//   - /health 静默——compose 健康检查每 30s 一次，全记会让诊断行永远滚出屏幕；
+//   - URL query 截 160 字符（/video/seg 的 url= 上游地址是 loopback 流地址，
+//     有定位价值但不是秘密；截断防长串刷屏）；
+//   - 单行（zgjLogf 内部压换行+截 800 字节）。
+type statusCaptureWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCaptureWriter) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack/Flush 必须显式转发：嵌入的是 http.ResponseWriter 接口，方法集里
+// 没有 Hijack——gorilla websocket 的 Upgrade 要求 ResponseWriter 实现
+// http.Hijacker，包一层就静默丢接口 → WS 握手 500（TestWebEndpoints 抓到的）。
+func (w *statusCaptureWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, errors.New("statusCaptureWriter: 底层 ResponseWriter 不支持 Hijack")
+}
+
+func (w *statusCaptureWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func accessLogger(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/health" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		sw := &statusCaptureWriter{ResponseWriter: w, status: 200}
+		start := time.Now()
+		next.ServeHTTP(sw, r)
+		q := r.URL.RawQuery
+		if len(q) > 160 {
+			q = q[:160] + "…"
+		}
+		path := r.URL.Path
+		if q != "" {
+			path += "?" + q
+		}
+		zgjLogf("http %s %s %d %s ua=%s", r.Method, path, sw.status,
+			time.Since(start).Round(time.Millisecond), r.UserAgent())
+	})
 }
 
 // runWebSidecar 是 web 模式服务主体：起 HTTP mux + WS hub，阻塞直到进程退出。

@@ -12,6 +12,7 @@ import { useRouter } from 'vue-router'
 import { api, MOCK_MODE } from '@/services/api'
 import type { Chapter, Drama, DownloadEntry, DownloadJobRow, MergeEntryRow } from '@/services/types'
 import { chapterEpisode, playerRoute } from '@/services/dramaRef'
+import { friendlyError } from '@/services/errors'
 import { t, tf } from '@/services/i18n'
 import { STAT_GROUPS, statMatch, useDownloadsStore, type StatKey } from '@/stores/downloads'
 import { useAppStore } from '@/stores/app'
@@ -26,16 +27,19 @@ const tab = ref<Tab>('queue')
 const toast = ref('')
 let toastTimer: number | undefined
 
-function showToast(msg: string) {
+const toastKind = ref<'info' | 'error'>('info')
+function showToast(msg: string, kind: 'info' | 'error' = 'info') {
   toast.value = msg
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
+  toastTimer = window.setTimeout(() => (toast.value = ''), kind === 'error' ? 5200 : 3200)
 }
 
 watch(
   () => store.lastError,
   (err) => {
-    if (err) showToast(err)
+    if (err) showToast(friendlyError(err), 'error')
   }
 )
 
@@ -214,7 +218,7 @@ async function onMergeMulti() {
       multi_none: t('downloads.mergeMultiNone'),
       multi_running: t('downloads.mergeMultiAllRunning')
     }
-    showToast(map[e?.code] ?? (e?.message ?? t('downloads.mergeFail')))
+    showToast(map[e?.code] ?? friendlyError(e) ?? t('downloads.mergeFail'), 'error')
   } finally {
     mergingMulti.value = false
   }
@@ -326,7 +330,7 @@ async function openJobFolder(job: DownloadJobRow) {
     // 演示环境（MOCK_MODE）：真实 exe 才开 explorer；mock 落 __zgjOpenPath 钩子可断言
     await api.openDownloadPath(`${dir}/${job.folder}`)
   } catch (e) {
-    showToast(tf('downloads.toastOpenFail', { e: (e as Error)?.message ?? String(e) }))
+    showToast(tf('downloads.toastOpenFail', { e: friendlyError(e) }), 'error')
   }
 }
 function openPathTitle(job: DownloadJobRow): string {
@@ -395,7 +399,7 @@ async function openArchiveGroup(g: { name: string; openPath: string }) {
   try {
     await api.openDownloadPath(`${dir}/${g.openPath}`)
   } catch (e) {
-    showToast(tf('downloads.toastOpenFail', { e: (e as Error)?.message ?? String(e) }))
+    showToast(tf('downloads.toastOpenFail', { e: friendlyError(e) }), 'error')
   }
 }
 
@@ -499,7 +503,7 @@ async function onSearch() {
     searchResults.value = res?.items ?? []
     if (!searchResults.value.length) showToast(t('downloads.toastNoResult'))
   } catch (e) {
-    showToast(tf('downloads.toastSearchFailed', { m: (e as Error).message }))
+    showToast(tf('downloads.toastSearchFailed', { m: friendlyError(e) }), 'error')
   } finally {
     searching.value = false
   }
@@ -516,7 +520,7 @@ async function onPick(d: Drama) {
     chapters.value = list
     if (!list.length) chapterErr.value = t('downloads.toastNoChapters')
   } catch (e) {
-    chapterErr.value = tf('downloads.toastChapterFail', { m: (e as Error).message })
+    chapterErr.value = tf('downloads.toastChapterFail', { m: friendlyError(e) })
   }
 }
 
@@ -554,7 +558,7 @@ async function onEnqueue() {
     tab.value = 'queue'
     await store.refresh()
   } catch (e) {
-    showToast(tf('downloads.toastEnqueueFail', { m: (e as Error).message }))
+    showToast(tf('downloads.toastEnqueueFail', { m: friendlyError(e) }), 'error')
   } finally {
     enqueuing.value = false
   }
@@ -972,7 +976,7 @@ async function onEnqueue() {
     {{ t('downloads.footnote') }} {{ MOCK_MODE ? t('downloads.footnoteMock') : t('downloads.footnoteReal') }}
   </p>
 
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">{{ toast }}</div>
 </template>
 
 <style scoped>
@@ -1380,5 +1384,8 @@ async function onEnqueue() {
   font-size: 13px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
   z-index: 30;
+}
+.toast.error {
+  border-color: var(--danger);
 }
 </style>

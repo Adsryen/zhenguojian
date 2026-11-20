@@ -19,3 +19,11 @@ services:
       ZHENGUO_DATA: /data/appdata
     volumes:
       - ../../client-v2/data:/data
+    # docker logs 可观测性（2026-11-20）：sidecar 诊断行全部走 stderr（[zgj …]
+    # 前缀，见 sidecar 侧 zgj_errlog.go）。默认 json-file 无轮转，长跑会无限增长；
+    # 10MiB×5 约可覆盖数周（访问日志已对 /health 静默，量级可控）。
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

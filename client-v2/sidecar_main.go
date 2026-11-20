@@ -38,6 +38,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"time"
 	"sync"
 
 	"zhenguojian/client-v2/internal/native"
@@ -286,7 +287,18 @@ func (rt *sidecarRuntime) handleProtoRequest(req protoRequest, respond func(id *
 		defer rt.group.Done()
 		rt.slots <- struct{}{}
 		defer func() { <-rt.slots }()
+		// RPC 诊断日志（v3 可观测性）：前端 toast 只露一句用户话术，Go 侧的
+		// 原始错误进 docker logs 供排查。策略——失败全记、成功慢记（>3s，
+		// 下载/合并等长任务的前端侧表现就是「转圈不动」）、普通成功不记
+		// （PlayerState 500ms 轮询这类高频快调用不能刷屏）。
+		start := time.Now()
 		res, err := pm.call(rt.appRef, args)
+		elapsed := time.Since(start).Round(time.Millisecond)
+		if err != nil {
+			zgjLogf("rpc 失败 %s（%s）: %v", pm.name, elapsed, err)
+		} else if elapsed > 3*time.Second {
+			zgjLogf("rpc 慢调用 %s %s result=%dB", pm.name, elapsed, len(res))
+		}
 		respond(id, res, err)
 	}(req.ID, pm, req.Args)
 	return false

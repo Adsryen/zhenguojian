@@ -220,6 +220,11 @@ const zh: Record<string, string> = {
     '海报转码组件 ffmpeg 未找到：请下载 zhenGuoJian-v2-runtime.zip 解压到程序目录，使 runtime\\ffmpeg\\ffmpeg.exe 就位；或设置 ZHENGUO_FFMPEG 指向 ffmpeg.exe',
   'covers.banner.partial': '部分封面加载失败（F12 查看原因）',
   'covers.banner.partialN': '部分封面加载失败 {n} 次：点「复制诊断」发回即可定位',
+  /* web 形态（v3 容器，2026-11-20）：「复制诊断」是桌面 IPC 排查面，容器里开发者
+     直接 docker logs 即可定位——按钮与「发回」措辞在 web 形态去掉，改纯提示。 */
+  'covers.banner.partialWeb': '部分封面加载失败（{n} 次）',
+  'covers.banner.partialReason': '最近原因：{r}',
+  'covers.toast.failed': '封面加载失败 {n} 次，海报显示为占位',
   'covers.banner.copy': '复制诊断',
   'covers.banner.copied': '诊断信息已复制，粘贴发给开发者即可',
   'covers.banner.dismiss': '关闭提示',
@@ -560,6 +565,21 @@ const zh: Record<string, string> = {
   'common.back': '返回',
   'common.copyFail': '复制失败：{m}',
   'common.copyNoClipboard': '复制失败：剪贴板不可用',
+  /* ---- 错误映射（v3 可观测性：toast/错误面板统一走 errors.ts friendlyError）---- */
+  'err.ws_down': '与服务器的连接已断开，请刷新页面重试',
+  'err.ws_unready': '服务器连接尚未就绪，请稍后再试',
+  'err.timeout': '请求超时，请重试',
+  'err.unauthorized': '登录已过期，请重新登录',
+  'err.bridge_missing': '无法连接服务，请刷新页面重试',
+  'err.local_missing': '本地文件已不存在（可能被清理），请重新下载',
+  'err.outside_root': '无法访问该文件（不在允许的目录内）',
+  'err.source_blocked': '该站源被限流，请稍后再试',
+  'err.discovery_unavailable': '该站源暂不可用',
+  'err.network': '网络异常，请检查连接后重试',
+  'err.not_found': '资源不存在或已下线',
+  'err.server': '服务器内部错误，请重试',
+  'err.generic': '操作失败，请重试',
+  'err.play_failed': '视频无法播放（格式或网络问题），请重试或换画质',
   // ── v2-6-parity：DetailView 头部/动作行 chrome + v1 对齐的复制简介 ──
   'detail.play': '播放',
   'detail.playEpisode': '播放第 {n} 集',
@@ -928,6 +948,9 @@ const en: Record<string, string> = {
     'Poster transcoder ffmpeg not found: download zhenGuoJian-v2-runtime.zip and extract it into the app directory so runtime/ffmpeg/ffmpeg.exe is in place, or set ZHENGUO_FFMPEG to your ffmpeg.exe',
   'covers.banner.partial': 'Some covers failed to load (press F12 for details)',
   'covers.banner.partialN': 'Some covers failed to load ({n} times): press "Copy diagnostics" and send it back',
+  'covers.banner.partialWeb': 'Some covers failed to load ({n} times)',
+  'covers.banner.partialReason': 'Last reason: {r}',
+  'covers.toast.failed': 'Cover loading failed {n} times - posters show placeholders',
   'covers.banner.copy': 'Copy diagnostics',
   'covers.banner.copied': 'Diagnostics copied - paste it to the developer',
   'covers.banner.dismiss': 'Dismiss',
@@ -1248,6 +1271,20 @@ const en: Record<string, string> = {
   'common.back': 'Back',
   'common.copyFail': 'Copy failed: {m}',
   'common.copyNoClipboard': 'Copy failed: clipboard unavailable',
+  /* ---- error mapping (errors.ts friendlyError) ---- */
+  'err.ws_down': 'Lost connection to the server - refresh the page to retry',
+  'err.ws_unready': 'Still connecting to the server - try again in a moment',
+  'err.timeout': 'Request timed out - please retry',
+  'err.unauthorized': 'Your session expired - please sign in again',
+  'err.bridge_missing': "Can't reach the service - refresh the page to retry",
+  'err.local_missing': 'This local file no longer exists - please re-download',
+  'err.outside_root': 'This file is not accessible (outside the allowed directory)',
+  'err.source_blocked': 'This source is rate-limiting - try again later',
+  'err.discovery_unavailable': 'This source is temporarily unavailable',
+  'err.network': 'Network error - check your connection and retry',
+  'err.not_found': 'This item does not exist or was removed',
+  'err.server': 'Internal server error - please retry',
+  'err.generic': 'Something went wrong - please retry',
   // ── v2-6-parity: DetailView head/action chrome + v1-parity copy summary ──
   'detail.play': 'Play',
   'detail.playEpisode': 'Play ep {n}',
@@ -1444,8 +1481,11 @@ export function tf(key: string, params: Record<string, string | number>): string
   return tpl.replace(/\{(\w+)\}/g, (raw, name: string) => (name in params ? String(params[name]) : raw))
 }
 
-// 首屏把 lang 属性同步到当前 locale（主题走 main.ts 的 applyTheme 一行）
-document.documentElement.setAttribute('lang', locale.value === 'en' ? 'en' : 'zh-CN')
+// 首屏把 lang 属性同步到当前 locale（主题走 main.ts 的 applyTheme 一行）。
+// typeof 守卫：该模块被纯 node 单测 import（errors.ts 链），node 环境无 document。
+if (typeof document !== 'undefined') {
+  document.documentElement.setAttribute('lang', locale.value === 'en' ? 'en' : 'zh-CN')
+}
 
 /* ────────────────────────────── v2-D 状态文案助手 ──────────────────────────────
    核心 releaseStatus 是英文枚举（ongoing/finished）；v1 展示层本地化为

@@ -16,6 +16,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { api, DEGRADED, MOCK_MODE } from '@/services/api'
 import type { Chapter, CreatorsResult, CreatorEntry, DetailResult, DownloadEntry, Drama } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { friendlyError } from '@/services/errors'
 import { releaseStatusKey, t, tf } from '@/services/i18n'
 import { savePoster } from '@/services/coverSave'
 import { anyModalOpen, clearEscLedger, escSawOverlay } from '@/services/overlays'
@@ -80,14 +81,17 @@ const anchorPos = ref(0)
 const downloading = ref(false)
 const descExpanded = ref(false)
 
-function showToast(msg: string, link = '') {
+const toastKind = ref<'info' | 'error'>('info')
+function showToast(msg: string, link = '', kind: 'info' | 'error' = 'info') {
   toast.value = msg
   toastLink.value = link
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   clearTimeout(toastTimer)
   toastTimer = window.setTimeout(() => {
     toast.value = ''
     toastLink.value = ''
-  }, link ? 6000 : 3600) // 带跳转按钮时给足点击时间
+  }, kind === 'error' ? 5200 : link ? 6000 : 3600) // 带跳转按钮时给足点击时间
 }
 function goSeason(d: Drama) {
   router.push(detailRoute(d))
@@ -132,7 +136,7 @@ async function loadDetail() {
     detail.value = await api.detail(d)
   } catch (e: any) {
     detail.value = null
-    error.value = e?.message ?? String(e)
+    error.value = friendlyError(e)
   } finally {
     loading.value = false
     await Promise.all([watchStore.ensureLoaded(), watchStore.loadSeen()])
@@ -275,7 +279,8 @@ async function downloadCurrent() {
     toastQueued(added)
   } catch (e: any) {
     // 核心中文错误透出（磁盘剩余不足/下载集数无效/服务未初始化等）
-    showToast(downloadViaLocal() ? tf('detail.resolveFail', { m: e?.message ?? e }) : L.dlFail(e?.message ?? e))
+    showToast(downloadViaLocal() ? tf('detail.resolveFail', { m: friendlyError(e) }) : L.dlFail(friendlyError(e)), '', 'error')
+    console.error('[detail] 下载失败原文:', e)
   } finally {
     downloading.value = false
   }
@@ -309,7 +314,8 @@ async function downloadAll() {
     const entries: DownloadEntry[] = chapters.value.map((ch, i) => ({ chapter: ch, index: chapterEpisode(ch, i) }))
     toastQueued(await enqueueChunks(entries))
   } catch (e: any) {
-    showToast(L.dlFail(e?.message ?? e))
+    showToast(L.dlFail(friendlyError(e)), '', 'error')
+    console.error('[detail] 全部下载失败原文:', e)
   } finally {
     downloading.value = false
   }
@@ -330,7 +336,7 @@ async function onFollow() {
     const on = await watchStore.toggleFollow(d)
     showToast(tf(on ? 'detail.followDone' : 'detail.unfollowDone', { t: displayName() }))
   } catch (e: any) {
-    showToast(e?.message ?? t('detail.followFail'))
+    showToast(friendlyError(e) || t('detail.followFail'), '', 'error')
   }
 }
 
@@ -344,7 +350,7 @@ async function onReserve() {
     showToast(on ? tf('detail.reserveDone', { t: displayName() }) : t('detail.reserveCancelled'))
   } catch (e: any) {
     // 失败读 store 的统一出口（watch.err* 整句），不再各写一套
-    showToast(e?.message ?? t('detail.reserveFail'))
+    showToast(friendlyError(e) || t('detail.reserveFail'), '', 'error')
   }
 }
 
@@ -356,7 +362,7 @@ async function onWatchedMark() {
     const on = await watchStore.toggleSeen(d.id)
     showToast(on ? t('detail.seenOn') : t('detail.seenOff'))
   } catch (e: any) {
-    showToast(e?.message ?? t('reserve.markSeenFail'))
+    showToast(friendlyError(e) || t('reserve.markSeenFail'), '', 'error')
   }
 }
 
@@ -670,7 +676,7 @@ watch(
       </div>
     </template>
 
-    <div v-if="toast" class="toast">
+    <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">
       {{ toast }}
       <button v-if="toastLink" class="toast-action" @click="goToastLink">{{ L.dlToastGo }}</button>
     </div>
@@ -961,6 +967,9 @@ watch(
   max-width: 78%;
   box-shadow: 0 6px 24px var(--guo-shadow);
   z-index: 60;
+}
+.toast.error {
+  border: 1px solid var(--danger);
 }
 /* v2-I：真实入队成功 toast 内的跳转按钮（→ /downloads） */
 .toast-action {

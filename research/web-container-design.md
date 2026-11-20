@@ -320,3 +320,90 @@ mcphub 网关，DSH 侧经现有 `mcp-mcphub` 条目间接调用。
   `Successfully listed 11 tools for server: zgj`。
 - 公网网关：initialize（serverInfo mcphub 1.2.4）→ tools/list 含 11 个
   `zgj-zgj_*` → 实调 `zgj-zgj_sources`（15 源）/`zgj-zgj_search "穿越"`（15 条）全绿。
+
+## 10. 可观测性：docker logs + 前端 toast（2026-11-20，用户 m04808）
+
+用户反馈：容器化后「部分封面加载失败 80 次：点『复制诊断』发回即可定位」这类
+**桌面 IPC 排查面在 web 形态失效**（开发者可以直接 docker logs），要求去掉、
+完善页面报错 toast、补 docker 日志。三块交付：
+
+### 10.1 后端日志面（sidecar stderr = docker logs 主通道）
+
+`zgj_errlog.go` 的 `zgjLogf` 统一出口（无 build tag，桌面/sidecar 两形态通用；
+桌面无控制台不可见但无害，stdio 形态 stdout 已改道、协议独占原始 fd 不受影响）。
+纪律：`[zgj <时间戳>]` 前缀、单行（换行压空格）、800 字节截断、写失败吞掉。
+五类行（`/health` 静默防健康检查刷屏）：
+
+| 行 | 位置 | 触发 |
+|---|---|---|
+| `http <M> <path> <status> <ms> ua=…` | sidecar_web.go `accessLogger` | 所有非 /health 端点（query 截 160） |
+| `video/seg 错误：<M> → <status> target=…` | newVideoSegHandler defer | 代理 ≥400（上游挂/越界） |
+| `rpc 失败 <name>（<ms>）: <err>` | sidecar_main.go | 任意 RPC 错误（原文=前端 toast 根因） |
+| `rpc 慢调用 <name> <ms> result=<B>` | 同上 | 成功但 >3s |
+| `cover 失败：drama=… <kind>: …` / `login 成功/失败：user=…` | bindings_cover.go / buildWebMux | 封面五处错误出口 / 登录 |
+
+⚠ 实现踩坑：`statusCaptureWriter{http.ResponseWriter; status int}` 嵌接口会丢
+`Hijacker` 方法集 → gorilla WS Upgrade 静默 500（TestWebEndpoints 抓到）；
+**必须显式转发 Hijack/Flush**。
+
+测试：`TestZgjLogfFormat`（格式/压平/截断）、`TestAccessLog`（/health 静默、
+login 401 行、login 失败行、whoami 401 行）。
+
+### 10.2 前端 toast 错误面（errors.ts）
+
+`src/services/errors.ts` = 错误 → 用户话术的唯一映射：`ApiError.code` 优先
+（bridge_missing/local_missing/outside_root/source_blocked/discovery_unavailable）
+→ 消息指纹（WS 断连/未就绪/超时/401/fetch failed/404/500/MEDIA_ERR）
+→ 未知错误**原文透出**（不吞，排查证据保留），调用方把原文进 console。
+`friendlyError(e, withReason=true): string` + `hasErrorMessage(e)`。
+i18n 加 13 个 `err.*` 键 + `covers.banner.partialWeb/partialReason` +
+`covers.toast.failed`（zh+en）。
+
+六视图（Discover/Detail/Downloads/History/Reserve/Creator）+ player store 接入：
+`showToast(msg, kind='info'|'error')`，error 变体=5200ms+`console.error`+
+`toast.error` 边框（--danger）；所有 `catch(e){ showToast(e?.message) }` 改
+`friendlyError(e)`。i18n.ts 顶层 `document.documentElement` 加
+`typeof document !== 'undefined'` 守卫（纯 node 单测 import 链会炸）。
+
+### 10.3 去「复制诊断」（web 形态）
+
+DiscoverView：`isWebMode = webBridgeEnabled()` → 警示条文案
+`partialWeb`（纯提示）替代 `partialN`（「发回即可定位」），「复制诊断」按钮
+`v-if="coverBanner === 'error' && !isWebMode"`（data-testid=cover-banner-copy
+桌面保留零变化）；web+kind=error+有 lastMessage 时**每会话首次**到阈值出
+error toast（`coverToastShown` once 守卫，listener 每次失败都回调不能刷屏）。
+PlayerView embed 调试条 web 天然不显示（onMounted isWebMode 早退不 attach →
+embedHost 恒空），无需改。
+
+### 10.4 compose 日志轮转 + README
+
+docker-compose.yml 加 `logging: json-file max-size=10m max-file=5`（默认
+json-file 无轮转，长跑无限增长）；docker/README.md 新增「日志与排查」段
+（五类行表 + grep 查法）+ 排障表补 `cover 失败` 行。
+
+### 10.5 实网验收（2026-11-20，容器重建后）
+
+- 访问日志：`http GET /rpc 200 47ms` / `http POST /login 401 0s` 落 docker logs；
+  `/health` 全程无行（静默生效）。
+- rpc 失败：0 参 `DataPath` 送 1 参 → `rpc 失败 DataPath（0s）: DataPath: 需要 0 个参数，收到 1`。
+- login：`login 成功/失败：user=ryen remote=…`（不记口令）。
+- **cover 失败实锤根因**（正是这功能要抓的）：hongguo 海报是 HEIC 内容存
+  `.img` 扩展名 → ffmpeg 按容器猜 MOV → `moov atom not found ... Invalid data`。
+  36 次全同类。→ 前端 web toast 实弹：`封面加载失败 5 次，海报显示为占位
+  最近原因：资源不存在或已下线`（class toast error），警示条=web 纯提示文案、
+  无「复制诊断」按钮。
+- 构建：go vet+目标测试绿、vue-tsc 0err、vitest 58/58、桌面 cgo 构建
+  `v2overlay production devtools` 编译绿（zgj_errlog 桌面无害实锤）。
+
+### 10.6 遗留（不修，登记）
+
+- **TestLocalFileEndpoint 套件内偶发 403/404（预存 bug，非本次引入）**：
+  core 引擎是进程全局单例（guoapp-src/native/core/app_runtime.go:192/385，
+  第一次 initialize 的目录赢），`ResetInitForTest` 只重置 Go 包装层
+  sync.Once 不重置 nativeState.engine → 前一个测试的 initialize 目录串扰。
+  单独跑 5/5 PASS、套件跑 3/3 FAIL、干净树（01185f6 stash 验证）同败。
+  修=动 v1 共享 core，风险/收益不匹配；CI 跑 `v2overlay production devtools`
+  不含 zgj_sidecar → sidecar 套件 CI 不跑，生产无影响。
+- **hongguo 封面 HEIC 转码全失败**：ffmpeg 按扩展名（.img→猜 MOV）而非内容
+  探测。影响=发现页海报全首字占位（桌面版同样现象）。正确修法=core 侧
+  transcodeCover 前做 magic 探测/强制 -f heic，属 v1 共享面，另开任务。

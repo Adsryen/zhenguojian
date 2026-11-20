@@ -20,6 +20,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import type { Drama, HistoryRow, WatchRow } from '@/services/types'
 import { resolveCover } from '@/services/covers'
+import { friendlyError } from '@/services/errors'
 import { releaseStatusText, t, tf } from '@/services/i18n'
 import { detailRoute, playerRoute } from '@/services/dramaRef'
 import { formatTime } from '@/services/local'
@@ -35,10 +36,13 @@ const appStore = useAppStore()
 const toast = ref('')
 let toastTimer: number | undefined
 
-function showToast(msg: string) {
+const toastKind = ref<'info' | 'error'>('info')
+function showToast(msg: string, kind: 'info' | 'error' = 'info') {
   toast.value = msg
+  toastKind.value = kind
+  if (kind === 'error') console.error('[toast]', msg)
   clearTimeout(toastTimer)
-  toastTimer = window.setTimeout(() => (toast.value = ''), 3200)
+  toastTimer = window.setTimeout(() => (toast.value = ''), kind === 'error' ? 5200 : 3200)
 }
 
 /* ---------------- ① 日历旧路径 redirect ---------------- */
@@ -128,7 +132,7 @@ async function onMarkSeen(row: WatchRow) {
   try {
     await watchStore.toggleSeen(row.id)
   } catch (e: any) {
-    showToast(e?.message ?? t('reserve.markSeenFail'))
+    showToast(friendlyError(e) || t('reserve.markSeenFail'), 'error')
   }
 }
 
@@ -136,7 +140,7 @@ async function unfollow(row: WatchRow) {
   try {
     await watchStore.toggleFollow(row.drama)
   } catch (e: any) {
-    showToast(e?.message ?? t('reserve.unfollowFail'))
+    showToast(friendlyError(e) || t('reserve.unfollowFail'), 'error')
   }
 }
 
@@ -245,7 +249,7 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
     </div>
   </template>
 
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="toast" class="toast" :class="{ error: toastKind === 'error' }" role="status">{{ toast }}</div>
 </template>
 
 <style scoped>
@@ -378,5 +382,8 @@ watch(follows, (list) => ensureCovers(list.map((r) => r.drama)), { immediate: tr
   font-size: 13px;
   box-shadow: 0 6px 24px var(--guo-shadow);
   z-index: 60;
+}
+.toast.error {
+  border: 1px solid var(--danger);
 }
 </style>
